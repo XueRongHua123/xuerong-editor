@@ -126,3 +126,11 @@ Left sidebar → "National Spirits" → "🧠 National Spirit Editor":
 - AI：雪绒悬浮窗，支持 OpenAI/DeepSeek/Claude/Gemini/Ollama；结果可复制或插入编辑器原文
 - 校验：花括号检测与一键修复、模组 replace_path 冲突、事件 namespace、缺失本地化
 - 备份：文件级备份历史与恢复
+
+## v0.51 Command palette & shortcuts
+
+- Ctrl+K (or the Command button at the right end of the toolbar) opens the command palette: one input searches commands, focus trees, focuses, ideas, equipment, technologies and events;
+- Arrow keys to move, Enter to run, Esc to close; with an empty input it groups frequent commands, the current tree's focuses and content entries;
+- Shortcuts: Ctrl+S save all, Ctrl+Z / Ctrl+Y undo and redo, F fit to screen, H or Shift+? opens the shortcut sheet;
+- In edit mode Delete removes the selected focus (the diff confirmation still appears); Esc closes the focus panel or leaves link mode;
+- The sidebar search is now a result list of every matching focus (current tree first); click one to jump there and center it.

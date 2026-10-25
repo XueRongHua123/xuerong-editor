@@ -289,14 +289,150 @@
   #aiBubble img{pointer-events:none}
   body.fs-large{zoom:1.06}
   body.fs-small{zoom:.94}
+  /* ---------- v0.49 设计系统：编辑台 ---------- */
+  :root{
+    --bg:#141716;--panel:#1b1f1d;--panel2:#232826;--input:#171b19;
+    --line:#2e3431;--line2:#3f4742;--text:#e6e0d3;--muted:#969187;
+    --accent:#d0ad72;--accent-2:#8fa06a;--dot:#202623;
+    --r-sm:8px;--r-md:10px;--r-lg:16px;
+    --shadow:0 18px 50px rgba(0,0,0,.42);
+  }
+  body.theme-paper{
+    --bg:#f3f1ea;--panel:#fbfaf6;--panel2:#f0ede4;--input:#ffffff;
+    --line:#ded8cc;--line2:#c9c1b2;--text:#2b2924;--muted:#6f6a60;
+    --accent:#8a6a2f;--accent-2:#2f6f5e;--dot:#e7e2d7;
+    --shadow:0 18px 50px rgba(60,50,30,.12);
+  }
+  html,body{font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;font-size:13px;letter-spacing:.1px}
+  #side{width:288px;min-width:260px;padding:0!important;background:var(--panel)!important;border-right:1px solid var(--line)!important}
+  .side-brand{display:flex;align-items:center;gap:10px;padding:16px 14px 12px;border-bottom:1px solid var(--line)}
+  .brand-mark{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
+    background:linear-gradient(145deg,rgba(208,173,114,.22),rgba(208,173,114,.05));
+    border:1px solid rgba(208,173,114,.45);color:var(--accent);font-weight:700;font-size:16px}
+  .brand-text b{display:block;font-size:14px;color:var(--text);letter-spacing:.5px}
+  .brand-text span{display:block;font-size:9.5px;color:var(--muted);letter-spacing:1.6px;margin-top:2px}
+  #side details{border-bottom:1px solid var(--line);padding:6px 10px 8px}
+  #side summary{display:flex;align-items:center;justify-content:space-between;padding:8px 4px;margin:0!important;
+    font-size:11px!important;letter-spacing:1.4px;color:var(--muted)!important;text-transform:uppercase}
+  #side summary::after{content:"›";font-size:15px;color:var(--muted);transform:rotate(90deg);transition:transform .18s}
+  #side details:not([open]) summary::after{transform:rotate(0)}
+  #side input#search{margin:2px 0 8px;height:32px}
+  .tabbtn{display:flex;align-items:center;gap:8px;background:transparent!important;border:1px solid transparent!important;
+    color:var(--muted)!important;padding:8px 10px!important;margin:2px 0!important;border-radius:var(--r-sm)!important;
+    font-size:12.5px;cursor:pointer;transition:background .16s,color .16s,border-color .16s}
+  .tabbtn:hover{background:var(--panel2)!important;color:var(--text)!important;border-color:var(--line)!important}
+  #treeList div{padding:7px 10px!important;border-radius:var(--r-sm)!important;margin:2px 0!important;
+    color:var(--muted);font-size:12px;border-left:2px solid transparent!important}
+  #treeList div:hover{background:var(--panel2)!important;color:var(--text)!important}
+  #treeList div.on{background:var(--panel2)!important;color:var(--text)!important;border-left-color:var(--accent)!important}
+  .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding:10px 14px!important;
+    background:var(--panel)!important;border-bottom:1px solid var(--line)!important;box-shadow:0 1px 0 rgba(0,0,0,.18)}
+  .btn{height:30px;padding:0 10px!important;border-radius:var(--r-sm)!important;background:transparent!important;
+    border:1px solid transparent!important;color:var(--muted)!important;font-size:12px;cursor:pointer;
+    display:inline-flex;align-items:center;gap:5px;transition:background .16s,color .16s,border-color .16s}
+  .btn:hover{background:var(--panel2)!important;color:var(--text)!important;border-color:var(--line)!important}
+  .btn.on,.btn.primary{background:var(--accent)!important;color:#171a18!important;border-color:var(--accent)!important;font-weight:600}
+  .btn.on:hover,.btn.primary:hover{filter:brightness(1.06)}
+  #fit,#zoomIn,#zoomOut{min-width:32px;width:32px;padding:0!important;justify-content:center}
+  #fit{width:auto!important;min-width:82px;padding:0 12px!important;white-space:nowrap}
+  #saveAll{color:var(--accent)!important;border-color:color-mix(in srgb,var(--accent) 45%,transparent)!important}
+  #saveAll:hover{background:color-mix(in srgb,var(--accent) 14%,transparent)!important;color:var(--accent)!important}
+  .tb-sep{width:1px;height:18px;background:var(--line);margin:6px 5px;flex:0 0 1px}
+  #svg{background:radial-gradient(circle at 1px 1px,var(--dot) 1px,transparent 0) 0 0/22px 22px,var(--bg)!important}
+  #svg text{font-family:"Segoe UI","Microsoft YaHei",sans-serif}
+  .node rect{fill:var(--panel)!important;stroke:var(--line2)!important;stroke-width:1!important;rx:7px;
+    filter:drop-shadow(0 2px 6px rgba(0,0,0,.16))}
+  .node:hover rect{stroke:var(--accent-2)!important}
+  .node.sel rect{stroke:var(--accent)!important;stroke-width:1.8!important;fill:var(--panel2)!important}
+  .node text{fill:var(--text)!important;font-size:10.5px!important}
+  .node text.ncost{fill:var(--accent)!important;font-size:8.5px!important;letter-spacing:.4px}
+  .tb-break{flex-basis:100%;height:0}
+  .edge{stroke:var(--line2)!important}
+  #panel{width:356px!important;top:64px!important;padding:14px 14px 18px!important;
+    background:color-mix(in srgb,var(--panel) 94%,transparent)!important;border:1px solid var(--line)!important;
+    border-radius:var(--r-lg)!important;box-shadow:var(--shadow)!important;backdrop-filter:blur(10px)}
+  #panel>div:first-child{font-size:16px!important;font-weight:600;color:var(--text)!important;letter-spacing:.3px;
+    padding-bottom:8px;border-bottom:1px solid var(--line);margin-bottom:8px!important}
+  #panel .v{color:var(--text)}
+  #panel details{border:1px solid var(--line);background:var(--panel2);border-radius:8px;padding:8px 10px;margin:8px 0}
+  #panel details summary{font-size:11px!important;letter-spacing:.4px;color:var(--muted)!important;cursor:pointer}
+  #panel .fxgrid{grid-template-columns:repeat(2,1fr)!important;gap:8px}
+  .panel-head{border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:8px}
+  input,textarea,select{height:32px;padding:0 10px!important;border-radius:var(--r-sm)!important;
+    background:var(--input)!important;border:1px solid var(--line)!important;font-size:12.5px;outline:none;transition:border-color .16s}
+  textarea{height:auto;padding:8px 10px!important;line-height:1.55}
+  input:focus,textarea:focus,select:focus{border-color:var(--accent)!important;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 16%,transparent)}
+  .k{font-size:11px!important;letter-spacing:.6px;color:var(--muted)!important;margin:9px 0 4px!important}
+  div[id$="Modal"]{border-radius:var(--r-lg)!important;box-shadow:var(--shadow)!important;background:var(--panel)!important;
+    padding:16px!important;border:1px solid var(--line)!important}
+  div[id$="Modal"]>div:first-child{border-bottom:1px solid var(--line);padding-bottom:10px!important;margin-bottom:12px!important}
+  div[id$="Modal"]>div:first-child b{font-size:13px!important;letter-spacing:.8px;color:var(--accent)!important}
+  #ideaList,#equipList,#techList,#eventList{background:var(--input)!important;border:1px solid var(--line)!important;border-radius:10px!important;padding:6px!important;overflow-x:hidden!important}
+  #ideaList div,#equipList div,#techList div,#eventList div{padding:8px 10px!important;border-radius:8px!important;
+    margin:2px 0!important;color:var(--muted)!important;font-size:12px!important;border-left:2px solid transparent}
+  #ideaList div:hover,#equipList div:hover,#techList div:hover,#eventList div:hover{background:var(--panel2)!important;color:var(--text)!important}
+  #ideaList div.on,#equipList div.on,#techList div.on,#eventList div.on{background:var(--panel2)!important;color:var(--text)!important;border-left-color:var(--accent)!important}
+  #status{font-size:11.5px;color:var(--muted)}
+  .diff-body{font-family:Consolas,"Cascadia Mono",monospace!important;font-size:12px!important;line-height:1.6}
+  .welcome-card{border-radius:22px!important;box-shadow:var(--shadow)!important;border:1px solid var(--line)!important;
+    background:var(--panel)!important;overflow:hidden}
+  .welcome-body{padding:30px 34px!important;gap:12px!important}
+  .welcome-body h1{font-size:26px!important;letter-spacing:.5px}
+  .welcome-credits{border-top:1px solid var(--line)!important}
+  .welcome-art{border-right:1px solid var(--line)}
+  #aiBubble{box-shadow:0 8px 30px rgba(0,0,0,.35)!important;border:1px solid var(--line)!important}
+  *{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:var(--line2);border-radius:6px;border:2px solid var(--panel)}
+  ::selection{background:color-mix(in srgb,var(--accent) 35%,transparent)}
+  /* ---------- v0.51 指挥台：命令面板 / 搜索命中 / 快捷键 ---------- */
+  #keysModal{position:fixed;inset:0;z-index:94;background:rgba(10,12,13,.8);display:none;align-items:center;justify-content:center}
+  #keysModal.show{display:flex}
+  #cmdPalette{position:fixed;inset:0;z-index:120;background:rgba(8,10,9,.5);display:none;align-items:flex-start;justify-content:center;padding-top:11vh}
+  #cmdPalette.show{display:flex}
+  .cp-card{width:min(700px,calc(100% - 60px));max-height:min(620px,74vh);display:flex;flex-direction:column;
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--shadow);overflow:hidden}
+  #cpInput{margin:0!important;height:48px!important;border:0!important;border-bottom:1px solid var(--line)!important;
+    border-radius:0!important;background:transparent!important;font-size:14px;padding:0 16px!important;color:var(--text)!important}
+  #cpInput:focus{box-shadow:none!important;border-color:var(--line)!important}
+  #cpList{overflow:auto;padding:6px;flex:1;min-height:60px}
+  .cp-group{padding:9px 10px 4px;font-size:10.5px;letter-spacing:1.2px;color:var(--muted);text-transform:uppercase}
+  .cp-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:var(--r-sm);cursor:pointer;
+    border-left:2px solid transparent;color:var(--text);font-size:12.5px}
+  .cp-item .cp-cat{font-size:9.5px;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:1px 5px;flex:0 0 auto}
+  .cp-item .cp-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cp-item .cp-hint{font-size:10.5px;color:var(--muted);flex:0 0 auto}
+  .cp-item.on{background:var(--panel2);border-left-color:var(--accent)}
+  .cp-item.on .cp-label{color:var(--accent)}
+  .cp-empty{padding:28px 12px;text-align:center;color:var(--muted);font-size:12px}
+  .cp-foot{display:flex;justify-content:space-between;gap:10px;padding:8px 14px;border-top:1px solid var(--line);font-size:10.5px;color:var(--muted)}
+  #searchHits{margin:2px 0 6px;max-height:230px;overflow:auto}
+  .sr-item{padding:6px 9px;border-radius:var(--r-sm);font-size:11.5px;color:var(--muted);cursor:pointer;
+    border-left:2px solid transparent;display:flex;gap:6px;align-items:baseline}
+  .sr-item:hover{background:var(--panel2);color:var(--text)}
+  .sr-item.on{background:var(--panel2);color:var(--text);border-left-color:var(--accent)}
+  .sr-item b{color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sr-item span{font-size:9.5px;color:var(--muted);flex:0 0 auto}
+  .sr-more{padding:4px 9px;font-size:10.5px;color:var(--muted)}
+  .km-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px;padding:2px 2px 10px}
+  .km-row{display:flex;justify-content:space-between;gap:10px;padding:7px 10px;border:1px solid var(--line);
+    border-radius:var(--r-sm);background:var(--panel2);font-size:12px;color:var(--text)}
+  .km-row kbd{font-family:Consolas,"Cascadia Mono",monospace;font-size:11px;color:var(--accent);background:var(--input);
+    border:1px solid var(--line);border-radius:5px;padding:1px 6px;white-space:nowrap}
+  #panel>div:first-child,#ideaTitle,#equipTitle,#techTitle,#eventTitle{color:var(--accent)!important}
 </style>
 </head>
 <body>
 <div id="app">
   <div id="side">
+    <div class="side-brand">
+      <div class="brand-mark">雪</div>
+      <div class="brand-text"><b>雪绒编辑器</b><span>HOI4 MOD STUDIO</span></div>
+    </div>
     <details open>
       <summary>国策树</summary>
       <input id="search" placeholder="搜索焦点 id / 名称...">
+      <div id="searchHits"></div>
       <div id="addModBtn" class="tabbtn" style="margin-bottom:6px">＋ 添加 mod</div>
     <div id="unloadModBtn" class="tabbtn" style="margin-bottom:6px">－ 卸载 mod</div>
     <div id="vanillaBtn" class="tabbtn" style="margin-bottom:6px">📖 加载原版参考（只读）</div>
@@ -335,6 +471,7 @@
       <button class="btn" id="fit">适应屏幕</button>
       <button class="btn" id="zoomIn">＋</button>
       <button class="btn" id="zoomOut">－</button>
+      <span class="tb-sep"></span>
       <button class="btn" id="editMode">✏️ 编辑模式</button>
       <button class="btn link" id="linkPre">🔗 加前置</button>
       <button class="btn link" id="linkMut">🔗 加互斥</button>
@@ -342,10 +479,12 @@
       <button class="btn" id="addTreeBtn">🌳 新建树</button>
       <button class="btn" id="copyTreeBtn">📋 复制树</button>
       <button class="btn" id="delTreeBtn">🗑 删除树</button>
+      <span class="tb-sep"></span>
       <button class="btn" id="saveAll">💾 保存全部</button>
       <button class="btn" id="exportBtn">📦 导出覆盖包</button>
       <button class="btn" id="undoBtn" title="撤销 (Ctrl+Z)">↶ 撤销</button>
       <button class="btn" id="redoBtn" title="重做 (Ctrl+Y)">↷ 重做</button>
+      <span class="tb-sep"></span>
       <button class="btn" id="treeSetBtn" title="编辑当前国策树的 country/default">⚙ 树设置</button>
       <button class="btn" id="sharedAddBtn" style="display:none">＋ 共享焦点</button>
       <button class="btn" id="sharedDelBtn" style="display:none">🗑 共享焦点</button>
@@ -372,11 +511,29 @@
         <option value="small">小</option>
       </select>
       <label class="btn"><input type="checkbox" id="showMutex"> 显示互斥</label>
+      <span class="tb-sep"></span>
+      <button class="btn" id="cmdBtn" title="命令面板 (Ctrl+K)：搜索命令、焦点、精神、装备、科技、事件">⌘ 命令</button>
     </div>
     <svg id="svg"><g id="viewport"></g></svg>
     <div class="panel" id="panel"></div>
     <div id="status"></div>
     <div id="batchBar" class="batchbar"></div>
+    <div id="cmdPalette">
+      <div class="cp-card">
+        <input id="cpInput" placeholder="搜索命令、焦点、国家精神、装备、科技、事件…" autocomplete="off" spellcheck="false">
+        <div id="cpList"></div>
+        <div class="cp-foot"><span>↑↓ 选择 · Enter 执行 · Esc 关闭</span><span id="cpCount"></span></div>
+      </div>
+    </div>
+    <div id="keysModal">
+      <div class="diff-card" style="width:min(760px,calc(100% - 70px))">
+        <div class="diff-head"><b>键盘快捷键</b><button class="btn" id="keysClose">关闭</button></div>
+        <div class="diff-body" style="font-family:inherit;font-size:12.5px;white-space:normal">
+          <div class="km-grid" id="keysGrid"></div>
+          <div class="k" style="margin:0">输入框里只响应 Ctrl 组合键，避免打字被打断；接线模式下 Esc 取消当前起点。</div>
+        </div>
+      </div>
+    </div>
     <div id="diffModal">
       <div class="diff-card">
         <div class="diff-head"><b>确认修改</b><button class="btn" id="diffClose">取消</button></div>
@@ -811,7 +968,7 @@ function showMutex(){ return document.getElementById('showMutex').checked; }
 function applyView(){ vp.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`); }
 function resetView(){ view = {x:0,y:0,k:1}; applyView(); }
 
-async function loadData(){ const r = await fetch('/api/data'); DATA = await r.json(); dirty.clear(); linkSrc = null; selId = null; renderAll(); applySavedSkin(); updateWelcome(); }
+async function loadData(){ const r = await fetch('/api/data'); DATA = await r.json(); dirty.clear(); linkSrc = null; selId = null; cpCache = null; renderAll(); applySavedSkin(); updateWelcome(); }
 function updateWelcome(){
   const w = document.getElementById('welcome'); if(!w) return;
   const empty = !(DATA && DATA.roots && DATA.roots.length);
@@ -2097,6 +2254,7 @@ function renderTree(){
       <text x="${tx}" y="15">${escapeHtml(f.id).slice(0,16)}</text>
       <text x="${tx}" y="30">${escapeHtml(f.name||f.id).slice(0,10)}</text>
       <text x="${tx}" y="46" fill="#7f95a8">${f.cost?('cost '+f.cost):''}</text>
+      ${f.cost ? `<text x="${NODE_W-9}" y="15" text-anchor="end" class="ncost">◆${escapeHtml(String(f.cost)).slice(0,4)}</text>` : ''}
     </g>`;
   });
   vp.innerHTML = html;
@@ -2858,12 +3016,7 @@ document.getElementById('aiInsert').onclick = ()=>{
   el.value = txt;
   status('已插入到编辑器原文');
 };
-document.getElementById('ideaEntry').onclick = ()=>{
-  document.getElementById('ideaModal').style.display = 'flex';
-  renderIdeaList('');
-  const first = ((DATA && DATA.ideas) || [])[0];
-  if(first) selectIdea(first);
-};
+document.getElementById('ideaEntry').onclick = ()=>openIdea();
 document.getElementById('ideaClose').onclick = ()=>{ document.getElementById('ideaModal').style.display = 'none'; };
 document.getElementById('ideaSearch').oninput = (e)=>renderIdeaList(e.target.value.trim().toLowerCase());
 document.getElementById('ideaSave').onclick = saveIdea;
@@ -2982,14 +3135,42 @@ document.getElementById('ipClose').onclick = ()=>{ document.getElementById('icon
 document.getElementById('ipSearch').addEventListener('input', e=>renderIcons(e.target.value.trim().toLowerCase()));
 document.addEventListener('keydown', e=>{
   const tag = (e.target && e.target.tagName) || '';
-  if(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  const inField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
   const k = (e.key || '').toLowerCase();
+  if((e.ctrlKey || e.metaKey) && k === 'k'){
+    e.preventDefault();
+    if(document.getElementById('cmdPalette').classList.contains('show')) closeCmd(); else openCmd();
+    return;
+  }
+  if((e.ctrlKey || e.metaKey) && k === 's'){
+    e.preventDefault();
+    saveAll();
+    return;
+  }
   if((e.ctrlKey || e.metaKey) && k === 'z'){
     e.preventDefault();
     doUndo(e.shiftKey);
-  } else if((e.ctrlKey || e.metaKey) && k === 'y'){
+    return;
+  }
+  if((e.ctrlKey || e.metaKey) && k === 'y'){
     e.preventDefault();
     doUndo(true);
+    return;
+  }
+  if(inField || e.ctrlKey || e.metaKey || e.altKey) return;
+  if(k === 'escape'){
+    if(document.getElementById('keysModal').classList.contains('show')){ closeKeys(); return; }
+    if(linkMode){ setLink(null); return; }
+    if(document.getElementById('panel').classList.contains('show')){ selId = null; renderTree(); showPanel(); }
+    return;
+  }
+  if(k === 'h' || (e.shiftKey && k === '?')){ e.preventDefault(); openKeys(); return; }
+  if(k === 'f'){ e.preventDefault(); fitView(); return; }
+  if(k === 'delete' || k === 'backspace'){
+    if(editMode && selId){
+      const f = curTree() && nodeById(curTree(), selId);
+      if(f){ e.preventDefault(); delNode(f); }
+    }
   }
 });
 document.getElementById('fpClose').onclick = ()=>{ document.getElementById('folderPick').classList.remove('show'); };
@@ -2997,12 +3178,292 @@ document.getElementById('fpOk').onclick = chooseFolder;
 document.getElementById('fpUp').onclick = ()=>{ fsGo(fpParent || ''); };
 document.getElementById('fpPath').addEventListener('keydown', e=>{ if(e.key === 'Enter') fsGo(e.target.value); });
 const search = document.getElementById('search');
-search.oninput = ()=>{
-  const q = search.value.trim().toLowerCase(); if(!q){ renderTree(); return; }
-  const t = curTree();
-  const hit = t.focuses.find(f=>f.id.toLowerCase().includes(q)||(f.name||'').toLowerCase().includes(q));
-  if(hit){ selId=hit.id; renderTree(); showPanel(); }
-};
+search.oninput = ()=>renderSearchHits(search.value);
+search.addEventListener('keydown', e=>{
+  if(e.key === 'Enter'){
+    e.preventDefault();
+    const first = document.querySelector('#searchHits .sr-item');
+    if(first) first.click();
+  } else if(e.key === 'ArrowDown'){
+    e.preventDefault();
+    const first = document.querySelector('#searchHits .sr-item');
+    if(first) first.classList.add('on');
+  } else if(e.key === 'Escape'){
+    search.value = ''; renderSearchHits('');
+  }
+});
+/* ---------- v0.51 指挥台 ---------- */
+const CP_CAT_ORDER = ['操作','国策树','焦点','国家精神','装备','科技','事件'];
+const CP_KEYS = [
+  ['Ctrl+K', '命令面板（搜命令 / 焦点 / 内容）'],
+  ['Ctrl+S', '保存全部改动'],
+  ['Ctrl+Z / Ctrl+Y', '撤销 / 重做'],
+  ['Ctrl+点击', '多选节点（批量改花费/图标）'],
+  ['F', '适应屏幕'],
+  ['Delete', '删除选中节点（编辑模式）'],
+  ['H 或 Shift+?', '打开这份快捷键表'],
+  ['滚轮 / 空白拖动', '缩放 / 平移画布'],
+  ['↑ ↓ / Enter / Esc', '命令面板内选择、执行、关闭']
+];
+let cpCache = null, cpItems = [], cpIdx = 0;
+
+function openIdea(){
+  document.getElementById('ideaModal').style.display = 'flex';
+  renderIdeaList('');
+  const first = ((DATA && DATA.ideas) || [])[0];
+  if(first) selectIdea(first);
+}
+function cpActions(){
+  return [
+    {cat:'操作', label:'适应屏幕', hint:'F', run:()=>fitView()},
+    {cat:'操作', label:'保存全部改动', hint:'Ctrl+S', run:()=>saveAll()},
+    {cat:'操作', label:'撤销', hint:'Ctrl+Z', run:()=>doUndo(false)},
+    {cat:'操作', label:'重做', hint:'Ctrl+Y', run:()=>doUndo(true)},
+    {cat:'操作', label:'切换编辑模式', run:()=>document.getElementById('editMode').click()},
+    {cat:'操作', label:'加前置连线', run:()=>document.getElementById('linkPre').click()},
+    {cat:'操作', label:'加互斥连线', run:()=>document.getElementById('linkMut').click()},
+    {cat:'操作', label:'新建焦点', run:()=>addNode()},
+    {cat:'操作', label:'自动布局当前树', run:()=>autoArrange()},
+    {cat:'操作', label:'新建国策树', run:()=>addTree()},
+    {cat:'操作', label:'复制当前树', run:()=>copyTree()},
+    {cat:'操作', label:'树设置（country / default）', run:()=>openTreeSet()},
+    {cat:'操作', label:'校验：本地化 / 前置 / 事件', run:()=>openReport()},
+    {cat:'操作', label:'本地化缺失检查', run:()=>openLocCheck()},
+    {cat:'操作', label:'查看 error.log', run:()=>openLog()},
+    {cat:'操作', label:'备份历史', run:()=>openBackups()},
+    {cat:'操作', label:'游戏内预览当前焦点', run:()=>openFocusPreview()},
+    {cat:'操作', label:'内容库（原版焦点/精神/装备/科技/事件）', run:()=>openContent()},
+    {cat:'操作', label:'国家精神编辑器', run:()=>openIdea()},
+    {cat:'操作', label:'装备编辑器', run:()=>openEquip()},
+    {cat:'操作', label:'科技编辑器', run:()=>openTech()},
+    {cat:'操作', label:'事件编辑器', run:()=>openEvents()},
+    {cat:'操作', label:'换雪绒皮肤', run:()=>openSkinPick()},
+    {cat:'操作', label:'键盘快捷键', hint:'H', run:()=>openKeys()},
+    {cat:'操作', label:'使用教程', run:()=>window.open('/help?lang=' + LANG, '_blank')}
+  ];
+}
+function cpBuild(){
+  const list = cpActions().map(a=>({cat:a.cat, label:a.label, hint:a.hint||'', run:a.run,
+    _s:(a.label + ' ' + (a.hint||'') + ' ' + a.cat).toLowerCase()}));
+  if(!DATA) return list;
+  const cur = curTree();
+  (DATA.trees || []).forEach(t=>{
+    const n = (t.focuses || []).length;
+    list.push({cat:'国策树', label:t.id + (cur && cur.id === t.id ? '（当前）' : ''), hint:n + ' 节点',
+      _s:(t.id + ' 国策树 focus tree').toLowerCase(),
+      run:()=>{
+        const i = DATA.trees.indexOf(t);
+        current = i; resetView(); renderAll();
+        status('已切换国策树：' + t.id);
+      }});
+    (t.focuses || []).slice(0, 3000).forEach(f=>{
+      const nm = f.name && f.name !== f.id ? f.name : '';
+      list.push({cat:'焦点', label:(nm ? nm + ' · ' : '') + f.id, hint:t.id, scope:t.id,
+        _s:(f.id + ' ' + (f.name||'') + ' ' + t.id + ' 焦点 focus').toLowerCase(),
+        run:()=>jumpFocus(t.id, f.id)});
+    });
+  });
+  (DATA.ideas || []).forEach(i=>{
+    list.push({cat:'国家精神', label:(i.name && i.name !== i.id ? i.name + ' · ' : '') + i.id, hint:'idea',
+      _s:(i.id + ' ' + (i.name||'') + ' 国家精神 spirit idea').toLowerCase(),
+      run:()=>{ openIdea(); selectIdea(i); }});
+  });
+  (DATA.equipment || []).forEach(e=>{
+    if(!e.id || /^\d+$/.test(String(e.id))) return;
+    list.push({cat:'装备', label:(e.name && e.name !== e.id ? e.name + ' · ' : '') + e.id, hint:'equip',
+      _s:(e.id + ' ' + (e.name||'') + ' 装备 equipment').toLowerCase(),
+      run:()=>{ openEquip(); selectEquip(e); }});
+  });
+  (DATA.techs || []).forEach(t=>{
+    list.push({cat:'科技', label:t.id + (t.name ? ' · ' + t.name : ''), hint:'tech',
+      _s:(t.id + ' ' + (t.name||'') + ' 科技 technology').toLowerCase(),
+      run:()=>{ openTech(); selectTech(t); }});
+  });
+  (DATA.events || []).forEach(ev=>{
+    list.push({cat:'事件', label:ev.id, hint:(ev.file || 'event'),
+      _s:(ev.id + ' 事件 event').toLowerCase(),
+      run:()=>{
+        openEvents();
+        const box = document.getElementById('eventSearch');
+        if(box){ box.value = ev.id; renderEventList(ev.id); }
+        selectEvent(ev);
+      }});
+  });
+  return list;
+}
+function cpScore(q, s){
+  if(!q) return 1;
+  const i = s.indexOf(q);
+  if(i >= 0) return 200 - Math.min(i, 120) + (s.startsWith(q) ? 40 : 0);
+  let si = 0, qi = 0, gaps = 0, last = -1;
+  while(si < s.length && qi < q.length){
+    if(s[si] === q[qi]){
+      if(last >= 0) gaps += si - last - 1;
+      last = si; qi++;
+    }
+    si++;
+  }
+  return qi === q.length ? Math.max(1, 90 - gaps) : 0;
+}
+function openCmd(){
+  if(!cpCache) cpCache = cpBuild();
+  const box = document.getElementById('cmdPalette');
+  const input = document.getElementById('cpInput');
+  box.classList.add('show');
+  input.value = '';
+  cpRender();
+  setTimeout(()=>{ try{ input.focus(); input.select(); }catch(e){} }, 30);
+}
+function closeCmd(){ document.getElementById('cmdPalette').classList.remove('show'); }
+function cpRender(){
+  const input = document.getElementById('cpInput');
+  const q = (input.value || '').trim().toLowerCase();
+  const all = cpCache || (cpCache = cpBuild());
+  const curId = (curTree() || {}).id;
+  const scored = [];
+  for(let i = 0; i < all.length; i++){
+    const it = all[i];
+    if(!q && it.cat === '焦点' && it.scope !== curId) continue;
+    const s = cpScore(q, it._s);
+    if(s > 0) scored.push([s, it]);
+  }
+  scored.sort((a, b)=> b[0] - a[0]);
+  const perCat = {}, picked = [];
+  const capFor = cat => q ? 12 : (cat === '操作' ? 40 : (cat === '国策树' ? 12 : 8));
+  for(let i = 0; i < scored.length && picked.length < 90; i++){
+    const it = scored[i][1];
+    perCat[it.cat] = (perCat[it.cat] || 0) + 1;
+    if(perCat[it.cat] > capFor(it.cat)) continue;
+    picked.push(it);
+  }
+  cpItems = picked; cpIdx = 0;
+  const list = document.getElementById('cpList');
+  if(!picked.length){
+    list.innerHTML = '<div class="cp-empty">没有匹配项。试试焦点 id、精神名、或命令关键词（保存 / 校验 / 备份）。</div>';
+    document.getElementById('cpCount').textContent = '0 项';
+    return;
+  }
+  const groups = {};
+  picked.forEach((it, idx)=>{
+    (groups[it.cat] = groups[it.cat] || []).push([idx, it]);
+  });
+  let html = '';
+  CP_CAT_ORDER.forEach(cat=>{
+    const rows = groups[cat]; if(!rows) return;
+    html += '<div class="cp-group">' + cat + ' · ' + rows.length + '</div>';
+    rows.forEach(([idx, it])=>{
+      html += '<div class="cp-item' + (idx === 0 ? ' on' : '') + '" data-i="' + idx + '">' +
+        '<span class="cp-cat">' + cat + '</span>' +
+        '<span class="cp-label">' + escapeHtml(it.label) + '</span>' +
+        (it.hint ? '<span class="cp-hint">' + escapeHtml(it.hint) + '</span>' : '') +
+        '</div>';
+    });
+  });
+  list.innerHTML = html;
+  document.getElementById('cpCount').textContent = picked.length + ' 项';
+  list.querySelectorAll('.cp-item').forEach(el=>{
+    el.addEventListener('click', ()=>cpRun(Number(el.dataset.i)));
+    el.addEventListener('mouseenter', ()=>{ cpIdx = Number(el.dataset.i); cpMark(); });
+  });
+  list.scrollTop = 0;
+}
+function cpMark(){
+  const list = document.getElementById('cpList'); if(!list) return;
+  list.querySelectorAll('.cp-item').forEach(el=>{
+    const on = Number(el.dataset.i) === cpIdx;
+    el.classList.toggle('on', on);
+    if(on) el.scrollIntoView({block:'nearest'});
+  });
+}
+function cpMove(step){
+  if(!cpItems.length) return;
+  cpIdx = (cpIdx + step + cpItems.length) % cpItems.length;
+  cpMark();
+}
+function cpRun(i){
+  const it = cpItems[i]; if(!it) return;
+  closeCmd();
+  setTimeout(()=>{
+    try { it.run(); } catch(e){ status('执行失败：' + (e && e.message || e), true); }
+  }, 20);
+}
+function jumpFocus(tid, fid){
+  const i = (DATA.trees || []).findIndex(t=>t.id === tid);
+  if(i < 0){ status('找不到国策树：' + tid, true); return; }
+  const switched = i !== current;
+  current = i; selId = fid;
+  renderAll();
+  centerOnFocus(fid);
+  showPanel();
+  status((switched ? '已切换到 ' + tid + '，' : '') + '已定位：' + fid);
+}
+function centerOnFocus(fid){
+  const t = curTree(); const f = t && nodeById(t, fid); if(!f) return;
+  const rect = svg.getBoundingClientRect();
+  const k = Math.max(view.k || 1, 0.85);
+  view.k = k;
+  view.x = rect.width / 2 - ((f.ax ?? f.x ?? 0) * SCALE + NODE_W / 2) * k;
+  view.y = rect.height / 2 - ((f.ay ?? f.y ?? 0) * SCALE + NODE_H / 2) * k;
+  applyView();
+}
+function renderSearchHits(q){
+  const box = document.getElementById('searchHits'); if(!box) return;
+  box.innerHTML = '';
+  q = (q || '').trim().toLowerCase();
+  if(!q){ return; }
+  const cur = curTree();
+  const hits = [];
+  const trees = (DATA && DATA.trees) || [];
+  trees.forEach(t=>{
+    (t.focuses || []).forEach(f=>{
+      if(hits.length >= 400) return;
+      if(String(f.id).toLowerCase().includes(q) || String(f.name || '').toLowerCase().includes(q)){
+        hits.push({tid:t.id, fid:f.id, name:f.name || '', here: !!(cur && cur.id === t.id)});
+      }
+    });
+  });
+  hits.sort((a, b)=> (b.here - a.here));
+  const shown = hits.slice(0, 24);
+  shown.forEach((h, idx)=>{
+    const row = document.createElement('div');
+    row.className = 'sr-item' + (idx === 0 ? ' on' : '');
+    row.innerHTML = '<b>' + escapeHtml(h.name && h.name !== h.fid ? h.name + ' · ' + h.fid : h.fid) + '</b>' +
+      '<span>' + escapeHtml(h.tid) + '</span>';
+    row.onclick = ()=>{ jumpFocus(h.tid, h.fid); };
+    box.appendChild(row);
+  });
+  if(hits.length > shown.length){
+    const more = document.createElement('div');
+    more.className = 'sr-more';
+    more.textContent = '另有 ' + (hits.length - shown.length) + ' 项，按 Ctrl+K 搜索全部';
+    box.appendChild(more);
+  }
+  if(!hits.length){
+    const none = document.createElement('div');
+    none.className = 'sr-more';
+    none.textContent = '没有命中的焦点';
+    box.appendChild(none);
+  }
+}
+function openKeys(){
+  const grid = document.getElementById('keysGrid');
+  grid.innerHTML = CP_KEYS.map(([k, d])=>
+    '<div class="km-row"><span>' + escapeHtml(d) + '</span><kbd>' + escapeHtml(k) + '</kbd></div>').join('');
+  document.getElementById('keysModal').classList.add('show');
+}
+function closeKeys(){ document.getElementById('keysModal').classList.remove('show'); }
+document.getElementById('cmdBtn').onclick = openCmd;
+document.getElementById('keysClose').onclick = closeKeys;
+document.getElementById('keysModal').addEventListener('click', e=>{ if(e.target.id === 'keysModal') closeKeys(); });
+document.getElementById('cmdPalette').addEventListener('click', e=>{ if(e.target.id === 'cmdPalette') closeCmd(); });
+document.getElementById('cpInput').addEventListener('input', cpRender);
+document.getElementById('cpInput').addEventListener('keydown', e=>{
+  if(e.key === 'ArrowDown'){ e.preventDefault(); cpMove(1); }
+  else if(e.key === 'ArrowUp'){ e.preventDefault(); cpMove(-1); }
+  else if(e.key === 'Enter'){ e.preventDefault(); cpRun(cpIdx); }
+  else if(e.key === 'Escape'){ e.preventDefault(); closeCmd(); }
+});
+
 function initMascot(){
   const box = document.getElementById('mascotFloat'); if(!box) return;
   const tipEl = document.getElementById('mascotTip');

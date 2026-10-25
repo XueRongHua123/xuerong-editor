@@ -310,6 +310,10 @@ HELP = {
         ("p", "撤销 / 重做：Ctrl+Z / Ctrl+Y；Ctrl+点击可多选节点，批量改花费、图标，或一键自动排版。"),
         ("p", "保存节点前会弹出 diff 预览；节点面板的「🖼 选择图标」打开图标库。"),
         ("p", "工具栏还有「⚙ 树设置」（country/default）、「🔎 本地化」缺失检查、「🧾 报错」查看 error.log；侧栏「🆕 新建模组」可直接生成基于原版的可用 mod。"),
+        ("h2", "命令面板与快捷键（v0.51）"),
+        ("p", "Ctrl+K，或点工具栏最右侧「⌘ 命令」，打开命令面板：一个输入框就能搜操作命令、国策树、焦点、国家精神、装备、科技和事件；↑↓ 选择，Enter 执行，Esc 关闭。"),
+        ("p", "快捷键：Ctrl+S 保存全部、Ctrl+Z / Ctrl+Y 撤销重做、F 适应屏幕、H 或 Shift+? 打开快捷键表；编辑模式下 Delete 删除选中节点；Esc 关闭弹窗或取消连线。"),
+        ("p", "左侧搜索框现在是结果列表：列出所有命中的焦点（当前树排前面），点一条就跳转并把该节点居中；不再只跳第一个。"),
     ],
     "en": [
         ("h1", "Focus Tree Editor - Guide"),
@@ -340,6 +344,10 @@ HELP = {
         ("p", "Undo / redo: Ctrl+Z / Ctrl+Y. Ctrl+click to multi-select nodes, then set cost/icon in bulk or auto-layout the tree."),
         ("p", "Saving a node shows a diff preview first; the 🖼 Choose Icon button opens the icon library."),
         ("p", "Toolbar also has ⚙ Tree Settings (country/default), 🔎 missing-localization check and 🧾 error.log viewer; 🆕 New Mod in the sidebar creates a ready vanilla-based mod."),
+        ("h2", "Command palette & shortcuts (v0.51)"),
+        ("p", "Press Ctrl+K, or click ⌘ Command at the right end of the toolbar: one input searches commands, focus trees, focuses, ideas, equipment, technologies and events. ↑↓ to move, Enter to run, Esc to close."),
+        ("p", "Shortcuts: Ctrl+S save all, Ctrl+Z / Ctrl+Y undo and redo, F fit to screen, H or Shift+? for the shortcut sheet; in edit mode Delete removes the selected focus; Esc closes a dialog or cancels link mode."),
+        ("p", "The sidebar search now shows a result list of every matching focus (current tree first); click one to jump there and center it."),
     ],
     "ja": [
         ("h1", "国家方針ツリーエディタ ガイド"),
@@ -370,6 +378,10 @@ HELP = {
         ("p", "元に戻す / やり直し：Ctrl+Z / Ctrl+Y。Ctrl+クリックで複数選択し、コストやアイコンの一括変更、自動整列ができます。"),
         ("p", "ノード保存時に diff プレビューが表示されます。🖼 アイコンを選択でアイコン一覧が開きます。"),
         ("p", "ツールバーには ⚙ ツリー設定（country/default）、🔎 ローカライズ不足チェック、🧾 error.log 表示もあります。サイドバーの 🆕 新しい mod でバニラベースの mod を作成できます。"),
+        ("h2", "コマンドパレットとショートカット（v0.51）"),
+        ("p", "Ctrl+K、またはツールバー右端の「⌘ コマンド」でコマンドパレットを開きます。1 つの入力欄で操作コマンド・国家方針ツリー・方針・国家精神・装備・技術・イベントを検索でき、↑↓ で選択、Enter で実行、Esc で閉じます。"),
+        ("p", "ショートカット：Ctrl+S すべて保存、Ctrl+Z / Ctrl+Y 元に戻す/やり直し、F 画面に合わせる、H または Shift+? でショートカット一覧；編集モードでは Delete で選択中の方針を削除、Esc でダイアログを閉じる／リンクモードを解除。"),
+        ("p", "サイドバーの検索は結果一覧に変わりました。該当する方針をすべて表示し（現在のツリーが先頭）、クリックするとその方針へ移動して中央に表示します。"),
     ],
 }
 
