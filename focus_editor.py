@@ -1693,7 +1693,7 @@ def unload_mod(root):
         return False, "没有找到这个 mod"
     reload_data()
     build_icons(ROOTS, GAME)
-    return True, "已卸载 mod"
+    return True, "已卸载：%s" % (os.path.basename(p.rstrip("/").rstrip("\\")) or p)
 
 def writable_root():
     for r in ROOTS:
@@ -2228,9 +2228,14 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             body = json.loads(raw.decode("utf-8"))
         except Exception:
-            body = json.loads(raw.decode("gbk", errors="replace"))
+            try:
+                body = json.loads(raw.decode("gbk", errors="replace"))
+            except Exception:
+                self._send({"ok": False, "msg": "请求体不是合法 JSON"}, 400)
+                return
         ro = body.get("root") or body.get("base") or ""
-        if ro and is_under_game(ro) and self.path not in ("/api/load_vanilla",):
+        # 只读保护针对"写文件"的接口；加载/卸载原版参考不改磁盘，必须放行
+        if ro and is_under_game(ro) and self.path not in ("/api/load_vanilla", "/api/unload_mod"):
             self._send({"ok": False, "msg": "原版目录只读：请先复制到自己的模组再修改"})
             return
         if self.path == "/api/save":

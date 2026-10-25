@@ -426,6 +426,17 @@
   .warn{color:var(--warn)!important}
   .ok{color:var(--ok)!important}
   .node text.nmeta{fill:var(--muted)!important;font-size:9.5px!important}
+  /* ---------- v0.53 卸载面板 ---------- */
+  #unloadModal{position:fixed;inset:0;z-index:95;background:rgba(10,12,13,.8);display:none;align-items:center;justify-content:center}
+  #unloadModal.show{display:flex}
+  .ul-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);
+    border-radius:var(--r-sm);background:var(--panel2);margin:6px 0}
+  .ul-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+  .ul-main b{font-size:12.5px;color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ul-main span{font-size:10.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ul-tag{font-size:10px;letter-spacing:.4px;padding:2px 7px;border-radius:20px;border:1px solid var(--line);color:var(--muted);white-space:nowrap;flex:0 0 auto}
+  .ul-tag.ro{border-color:color-mix(in srgb,var(--accent) 45%,transparent);color:var(--accent)}
+  .ul-empty{padding:18px 10px;color:var(--muted);font-size:12px;text-align:center}
   .btn{white-space:nowrap}
   #side summary{overflow:hidden}
   #side summary::after{flex:0 0 auto;margin-left:8px}
@@ -445,7 +456,7 @@
       <input id="search" placeholder="搜索焦点 id / 名称...">
       <div id="searchHits"></div>
       <div id="addModBtn" class="tabbtn" style="margin-bottom:6px">＋ 添加 mod</div>
-    <div id="unloadModBtn" class="tabbtn" style="margin-bottom:6px">－ 卸载 mod</div>
+    <div id="unloadModBtn" class="tabbtn" style="margin-bottom:6px">－ 卸载 mod / 原版</div>
     <div id="vanillaBtn" class="tabbtn" style="margin-bottom:6px">📖 加载原版参考（只读）</div>
       <div id="newModBtn" class="tabbtn" style="margin-bottom:6px">🆕 新建模组</div>
       <div id="treeList" style="max-height:300px;overflow:auto"></div>
@@ -534,6 +545,12 @@
         <input id="cpInput" placeholder="搜索命令、焦点、国家精神、装备、科技、事件…" autocomplete="off" spellcheck="false">
         <div id="cpList"></div>
         <div class="cp-foot"><span>↑↓ 选择 · Enter 执行 · Esc 关闭</span><span id="cpCount"></span></div>
+      </div>
+    </div>
+    <div id="unloadModal">
+      <div class="diff-card" style="width:min(700px,calc(100% - 70px))">
+        <div class="diff-head"><b>已加载的内容</b><button class="btn" id="unloadClose">关闭</button></div>
+        <div class="diff-body" id="unloadList" style="font-family:inherit;font-size:12.5px;white-space:normal;max-height:60vh"></div>
       </div>
     </div>
     <div id="keysModal">
@@ -979,7 +996,7 @@ function showMutex(){ return document.getElementById('showMutex').checked; }
 function applyView(){ vp.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`); }
 function resetView(){ view = {x:0,y:0,k:1}; applyView(); }
 
-async function loadData(){ const r = await fetch('/api/data'); DATA = await r.json(); dirty.clear(); linkSrc = null; selId = null; cpCache = null; renderAll(); applySavedSkin(); updateWelcome(); }
+async function loadData(){ const r = await fetch('/api/data'); DATA = await r.json(); dirty.clear(); linkSrc = null; selId = null; cpCache = null; if(!DATA.trees || current >= DATA.trees.length) current = 0; renderAll(); applySavedSkin(); updateWelcome(); }
 function updateWelcome(){
   const w = document.getElementById('welcome'); if(!w) return;
   const empty = !(DATA && DATA.roots && DATA.roots.length);
@@ -2073,21 +2090,39 @@ async function deleteShared(){
   status(j.msg || '', !j.ok);
   if(j.ok) await loadData();
 }
-async function unloadMod(){
+function openUnloadModal(){
+  const box = document.getElementById('unloadList');
   const roots = (DATA && DATA.roots) || [];
-  if(!roots.length){ status('还没有已加载的 mod'); return; }
-  const lines = roots.map((r, i)=>(i + 1) + '. ' + (r.name || r.path)).join('\n');
-  const pick = prompt('选择要卸载的 mod 编号（只从编辑器移除，不删文件）：\n' + lines, '1');
-  if(!pick) return;
-  const r = roots[parseInt(pick, 10) - 1];
-  if(!r){ status('编号无效'); return; }
-  if(!confirm('确定卸载 ' + (r.name || r.path) + ' ？')) return;
+  document.getElementById('unloadModal').classList.add('show');
+  if(!roots.length){
+    box.innerHTML = '<div class="ul-empty">还没有加载任何内容。用左侧「＋ 添加 mod」或「📖 加载原版参考」开始。</div>';
+    return;
+  }
+  box.innerHTML = roots.map((r, i)=>
+    '<div class="ul-row">' +
+      '<div class="ul-main"><b>' + escapeHtml(r.name || r.path) + '</b><span>' + escapeHtml(r.path || '') + '</span></div>' +
+      '<span class="ul-tag' + (r.readonly ? ' ro' : '') + '">' + (r.readonly ? '原版 · 只读' : '可编辑') + '</span>' +
+      '<button class="btn" data-i="' + i + '">卸载</button>' +
+    '</div>').join('');
+  box.querySelectorAll('button[data-i]').forEach(b=>{
+    b.onclick = ()=>unloadRoot(roots[Number(b.dataset.i)]);
+  });
+}
+function closeUnloadModal(){ document.getElementById('unloadModal').classList.remove('show'); }
+async function unloadRoot(r){
+  if(!r){ return; }
+  const label = r.name || r.path;
+  if(!confirm('从编辑器卸载「' + label + '」？\n只影响当前会话，不会删除磁盘文件。')) return;
   const res = await fetch('/api/unload_mod', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root: r.path || r.root})});
+    body: JSON.stringify({root: r.path})});
   const j = await res.json();
   status(j.msg || '', !j.ok);
-  if(j.ok) await loadData();
+  if(!j.ok) return;
+  await loadData();
+  openUnloadModal();
+  if(!((DATA && DATA.roots) || []).length) closeUnloadModal();
 }
+function unloadMod(){ openUnloadModal(); }
 function contentItems(){
   const out = [];
   ((DATA && DATA.ideas) || []).forEach(i=>out.push({kind:'idea', label:'[精神] ' + i.id + '  ' + (i.name||''), id:i.id}));
@@ -3465,6 +3500,8 @@ function openKeys(){
 function closeKeys(){ document.getElementById('keysModal').classList.remove('show'); }
 document.getElementById('cmdBtn').onclick = openCmd;
 document.getElementById('keysClose').onclick = closeKeys;
+document.getElementById('unloadClose').onclick = closeUnloadModal;
+document.getElementById('unloadModal').addEventListener('click', e=>{ if(e.target.id === 'unloadModal') closeUnloadModal(); });
 document.getElementById('keysModal').addEventListener('click', e=>{ if(e.target.id === 'keysModal') closeKeys(); });
 document.getElementById('cmdPalette').addEventListener('click', e=>{ if(e.target.id === 'cmdPalette') closeCmd(); });
 document.getElementById('cpInput').addEventListener('input', cpRender);

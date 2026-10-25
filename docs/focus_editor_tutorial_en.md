@@ -143,3 +143,12 @@ Left sidebar → "National Spirits" → "🧠 National Spirit Editor":
 - Long ids in the equipment and technology lists are truncated with an ellipsis instead of breaking the sidebar.
 - Parser fix: ids containing "-" (e.g. tsf_equipment_F-15SE) used to be truncated to "15SE";
   equipment goes from 342 to 348 and technologies from 676 to 753.
+
+## v0.53 Unloading what you loaded
+
+- "- Unload mod / vanilla" opens a list of loaded roots: name, full path, and a tag showing
+  "editable" or "vanilla - read-only".
+- Click Unload on a row to drop it from the editor. This only affects the current session; no files are deleted.
+- Vanilla reference can be unloaded too: after that only your own mod content remains, and
+  "Load vanilla reference" brings it back.
+- It used to be impossible for the vanilla layer because the read-only guard also blocked the unload request.
