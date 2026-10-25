@@ -1525,6 +1525,30 @@ def _hist_set_opinions(text, pairs):
     return text
 
 
+# v0.64 开局装备变体
+def _hist_variants(text):
+    """读取 create_equipment_variant 块（只读展示用）"""
+    out = []
+    for m in re.finditer(r'(?m)^[ \t]*create_equipment_variant\s*=\s*\{', text):
+        b = text.find('{', m.end() - 1)
+        e = brace_match(text, b)
+        if e <= b:
+            continue
+        body = text[b + 1:e - 1]
+        nm = _first(body, r'(?m)^[ \t]*name\s*=\s*"?([^"\r\n]+)"?')
+        ty = _first(body, r'(?m)^[ \t]*type\s*=\s*"?([^\s"\r\n]+)"?')
+        ic = _first(body, r'(?m)^[ \t]*icon\s*=\s*"?([^\s"\r\n]+)"?')
+        mods = 0
+        mm = re.search(r'(?m)^[ \t]*modules\s*=\s*\{', body)
+        if mm:
+            mb = body.find('{', mm.end() - 1)
+            me = brace_match(body, mb)
+            if me > mb:
+                mods = len([1 for k, v, hb in top_items(body[mb + 1:me - 1]) if not hb])
+        out.append({"name": nm or "(未命名)", "type": ty, "icon": ic, "modules": mods})
+    return out
+
+
 def country_history_raw(tag):
     c, root, p = _hist_path(tag)
     if not c:
@@ -1552,6 +1576,7 @@ def country_history_raw(tag):
         "techs": [k for k, v, hb in top_items(_hist_block_body(body, "set_technology")) if not hb],
         "popularities": _hist_popularities(body),
         "opinions": _hist_opinions(body),
+        "variants": _hist_variants(body),
     }
     return {"ok": True, "exists": True, "writable": writable, "file": c.get("history_file", ""),
             "root": root, "text": text[:60000], "fields": fields}
