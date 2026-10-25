@@ -449,6 +449,14 @@
   .st-prov{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0 8px}
   .st-prov span{font-size:10.5px;padding:2px 6px;border:1px solid var(--line);border-radius:5px;color:var(--muted);background:var(--panel2)}
   .st-vp{font-size:11.5px;color:var(--text);margin:2px 0}
+  /* v0.58 省份编辑 */
+  .st-tablewrap{max-height:230px;overflow:auto;border:1px solid var(--line);border-radius:8px;margin:4px 0 8px}
+  .st-table{width:100%;border-collapse:collapse;font-size:11.5px}
+  .st-table th{position:sticky;top:0;background:var(--panel2);color:var(--muted);font-weight:500;
+    text-align:left;padding:5px 8px;border-bottom:1px solid var(--line)}
+  .st-table td{padding:3px 8px;border-bottom:1px solid var(--line);color:var(--text)}
+  .st-table input{width:74px;height:26px!important}
+
   /* ---------- v0.56 国家历史编辑 ---------- */
   #historyModal{position:fixed;inset:0;z-index:97;background:rgba(10,12,13,.8);display:none;align-items:center;justify-content:center}
   #historyModal.show{display:flex}
@@ -670,6 +678,18 @@
             <label>战争支持修正<input type="number" step="0.01" id="histWS" placeholder="如 0.1"></label>
             <label>国策树<select id="histTree"></select></label>
           </div>
+          <!-- v0.58 历史编辑器补全 -->
+          <div class="k">政党支持度（set_popularities，0-100；留空 = 不改）</div>
+          <div class="hist-grid" style="grid-template-columns:repeat(4,1fr)">
+            <label>democratic<input type="number" min="0" max="100" id="histPopD"></label>
+            <label>fascism<input type="number" min="0" max="100" id="histPopF"></label>
+            <label>communism<input type="number" min="0" max="100" id="histPopC"></label>
+            <label>neutrality<input type="number" min="0" max="100" id="histPopN"></label>
+          </div>
+          <div class="k">部队编成 oob（相对路径，留空不改）</div>
+          <input type="text" id="histOob" placeholder='例如 "AFR_1999"'>
+          <div class="k">开局科技（每行一个 tech id；清空 = 不写 set_technology）</div>
+          <textarea id="histTechs" style="height:104px" placeholder="infantry_weapons&#10;tech_support_weapons"></textarea>
           <div class="k">开局精神（每行一个 idea id；清空 = 不写这一项）</div>
           <textarea id="histIdeas" style="height:88px" placeholder="mvlv_unf&#10;tsf_production"></textarea>
           <div id="histWarn" class="hist-warn"></div>
@@ -4007,20 +4027,26 @@ function renderStateBody(d){
       '<button class="btn" id="stReload">重新读取</button></div>' +
     '<div id="stDiff" class="hist-diff" style="display:none"></div>';
 
+  const vpMap = {};
+  (d.victory_points || []).forEach(v=>{ vpMap[v[0]] = v[1]; });
+  const pbMap = d.province_buildings || {};
   if(d.provinces.length){
-    html += '<div class="cm-sec">省份<span>' + d.province_count + ' 个</span></div>' +
-      '<div class="st-prov">' + d.provinces.map(p=>'<span>' + p + '</span>').join('') +
-      (d.province_count > d.provinces.length ? '<span>…</span>' : '') + '</div>';
-  }
-  if(d.victory_points.length){
-    html += '<div class="cm-sec">胜利点<span>' + d.victory_points.length + ' 处</span></div>' +
-      d.victory_points.map(vp=>'<div class="st-vp">省份 ' + vp[0] + ' → ' + vp[1] + ' 点</div>').join('');
-  }
-  const pbs = Object.entries(d.province_buildings || {});
-  if(pbs.length){
-    html += '<div class="cm-sec">省份建筑<span>只读</span></div>' +
-      pbs.map(([pid, b])=>'<div class="st-vp">省 ' + escapeHtml(pid) + '：' +
-        Object.entries(b).map(([k, v])=>k + ' ' + v).join('，') + '</div>').join('');
+    html += '<div class="cm-sec">省份 · 建筑 · 胜利点<span>建筑留空=不改，0=删掉；胜利点留空=不写</span></div>' +
+      '<div class="st-tablewrap"><table class="st-table"><thead><tr>' +
+      '<th>省</th><th>naval_base</th><th>coastal_bunker</th><th>胜利点</th></tr></thead><tbody>' +
+      d.provinces.map(p=>{
+        const b = pbMap[p] || pbMap[String(p)] || {};
+        const vv = vpMap[p] != null ? vpMap[p] : '';
+        return '<tr><td>' + p + '</td>' +
+          '<td><input type="number" min="0" data-pb="' + p + '" data-k="naval_base" value="' +
+            (b.naval_base != null ? b.naval_base : '') + '"></td>' +
+          '<td><input type="number" min="0" data-pb="' + p + '" data-k="coastal_bunker" value="' +
+            (b.coastal_bunker != null ? b.coastal_bunker : '') + '"></td>' +
+          '<td><input type="number" min="0" data-vp="' + p + '" value="' + vv + '"></td></tr>';
+      }).join('') +
+      '</tbody></table></div>' +
+      (d.province_count > d.provinces.length ?
+        '<div class="k">只列出前 ' + d.provinces.length + ' 个省，其余未显示</div>' : '');
   }
 
   body.innerHTML = html;
@@ -4048,7 +4074,19 @@ async function saveState(d){
     cores: cores,
     manpower: document.getElementById('stManpower').value.trim(),
     category: document.getElementById('stCategory').value,
-    buildings: buildings
+    buildings: buildings,
+    province_buildings: (function(){
+      const pb = {};
+      document.querySelectorAll('#stateBody [data-pb]').forEach(inp=>{
+        const v = inp.value.trim();
+        if(v === '') return;
+        (pb[inp.dataset.pb] = pb[inp.dataset.pb] || {})[inp.dataset.k] = Number(v);
+      });
+      return pb;
+    })(),
+    victory_points: [...document.querySelectorAll('#stateBody [data-vp]')]
+      .filter(inp=>inp.value.trim() !== '')
+      .map(inp=>[Number(inp.dataset.vp), Number(inp.value)])
   };
   if(!confirm('写入州 ' + d.id + ' 的文件？\n会先自动备份，只改你填写的字段。')) return;
   let r;
@@ -4106,6 +4144,13 @@ async function loadHistoryIntoForm(){
       '<option value="' + escapeHtml(t.id) + '">' + escapeHtml(t.id) + '（' + (t.focuses || []).length + ' 焦点）</option>'
     ).join('');
   sel.value = f.focus_tree || '';
+  const pops = f.popularities || {};
+  document.getElementById('histPopD').value = pops.democratic != null ? pops.democratic : '';
+  document.getElementById('histPopF').value = pops.fascism != null ? pops.fascism : '';
+  document.getElementById('histPopC').value = pops.communism != null ? pops.communism : '';
+  document.getElementById('histPopN').value = pops.neutrality != null ? pops.neutrality : '';
+  document.getElementById('histOob').value = f.oob || '';
+  document.getElementById('histTechs').value = (f.techs || []).join('\n');
   document.getElementById('histSave').disabled = !d.writable;
 }
 
@@ -4119,10 +4164,19 @@ async function saveHistory(){
     stability: document.getElementById('histStab').value.trim(),
     war_support: document.getElementById('histWS').value.trim(),
     focus_tree: document.getElementById('histTree').value,
-    ideas: ideasRaw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean)
+    ideas: ideasRaw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),
+    oob: document.getElementById('histOob').value.trim(),
+    techs: document.getElementById('histTechs').value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),
+    popularities: {
+      democratic: document.getElementById('histPopD').value,
+      fascism: document.getElementById('histPopF').value,
+      communism: document.getElementById('histPopC').value,
+      neutrality: document.getElementById('histPopN').value
+    }
   };
   if(!fields.capital && !fields.ruling_party && !fields.political_power && !fields.stability &&
-     !fields.war_support && !fields.focus_tree && !fields.ideas.length){
+     !fields.war_support && !fields.focus_tree && !fields.ideas.length && !fields.oob &&
+     !fields.techs.length && !Object.values(fields.popularities).some(v=>String(v).trim())){
     status('没有填写任何字段', true); return;
   }
   if(!confirm('把修改写入 ' + histTag + ' 的历史文件？\n会先自动备份（.bak 与历史记录），只改你填写的字段。')) return;

@@ -936,6 +936,68 @@ def _set_building(body, key, value):
     return body[:b + 1] + inner2 + body[e - 1:]
 
 
+def _set_prov_building(body, pid, values):
+    """省份建筑：values 为 {key: int}，全 0 表示删掉这个省块"""
+    positive = {k: v for k, v in values.items() if v and int(v) > 0}
+    m = re.search(r'(?m)^[ \t]*buildings\s*=\s*\{', body)
+    if not m:
+        if not positive:
+            return body
+        block = "buildings = {\n\t\t%s = {\n" % pid
+        block += "".join("\t\t\t%s = %d\n" % (k, v) for k, v in sorted(positive.items()))
+        block += "\t\t}\n\t}"
+        hist = _state_history_range(body)
+        if hist:
+            pos = _insert_pos(body, hist[0], hist[1])
+            return body[:pos] + "\n" + block + body[pos:]
+        return body.rstrip() + "\n" + block + "\n"
+    b = body.find('{', m.end() - 1)
+    e = brace_match(body, b)
+    inner = body[b + 1:e - 1]
+    pm = re.search(r'(?m)^[ \t]*%s\s*=\s*\{' % re.escape(str(pid)), inner)
+    if pm:
+        pb = inner.find('{', pm.end() - 1)
+        pe = brace_match(inner, pb)
+        line_start = inner.rfind("\n", 0, pm.start()) + 1
+        if positive:
+            blk = "%s = {\n" % pid
+            blk += "".join("\t\t\t\t%s = %d\n" % (k, v) for k, v in sorted(positive.items()))
+            blk += "\t\t\t}"
+            inner = inner[:line_start] + "\t\t\t" + blk + inner[pe:]
+        else:
+            inner = inner[:line_start] + inner[pe:]
+    elif positive:
+        blk = "\t\t\t%s = {\n" % pid
+        blk += "".join("\t\t\t\t%s = %d\n" % (k, v) for k, v in sorted(positive.items()))
+        blk += "\t\t\t}\n"
+        inner = blk + inner.lstrip("\r\n")
+    return body[:b + 1] + inner + body[e - 1:]
+
+
+def _set_victory_points(body, vps):
+    """胜利点：vps 为 [[prov, value], ...]，空列表表示删除整块"""
+    pairs = [(int(p), int(v)) for p, v in vps if str(p).strip() and str(v).strip()]
+    m = re.search(r'(?m)^[ \t]*victory_points\s*=\s*\{', body)
+    if m:
+        b = body.find('{', m.end() - 1)
+        e = brace_match(body, b)
+        line_start = body.rfind("\n", 0, m.start()) + 1
+        if not pairs:
+            return body[:line_start] + body[e:]
+        inner = "".join("\n\t\t\t\t%d %d" % (p, v) for p, v in pairs)
+        return body[:b + 1] + inner + "\n\t\t\t" + body[e - 1:]
+    if not pairs:
+        return body
+    block = "victory_points = {\n"
+    block += "".join("\t\t\t\t%d %d\n" % (p, v) for p, v in pairs)
+    block += "\t\t\t}"
+    hist = _state_history_range(body)
+    if hist:
+        pos = _insert_pos(body, hist[0], hist[1])
+        return body[:pos] + "\n" + block + body[pos:]
+    return body.rstrip() + "\n" + block + "\n"
+
+
 def state_detail(sid):
     try:
         sid = int(sid)
@@ -1077,6 +1139,38 @@ def state_save(sid, fields):
         body = _set_building(body, k, v)
         diff.append({"key": "b_" + k, "label": "建筑 " + k,
                      "old": str(old_blds.get(k, "")), "new": str(v)})
+
+    # v0.58 省份编辑
+    pb = fields.get("province_buildings")
+    if pb:
+        old_pb = s.get("province_buildings", {}) or {}
+        for pid, vals in pb.items():
+            vals = vals or {}
+            want = {}
+            for k, v in vals.items():
+                try:
+                    iv = int(v)
+                except Exception:
+                    continue
+                if iv >= 0:
+                    want[k] = iv
+            before = old_pb.get(str(pid), {}) or {}
+            if want == before:
+                continue
+            body = _set_prov_building(body, str(pid), want)
+            diff.append({"key": "pb_" + str(pid), "label": "省份 %s 建筑" % pid,
+                         "old": ", ".join("%s=%d" % (k, v) for k, v in sorted(before.items())) or "无",
+                         "new": ", ".join("%s=%d" % (k, v) for k, v in sorted(want.items())) or "无"})
+
+    if fields.get("victory_points") is not None:
+        want_vp = [[int(p), int(v)] for p, v in (fields.get("victory_points") or [])
+                   if str(p).strip() and str(v).strip()]
+        old_vp = [[int(p), int(v)] for p, v in s.get("victory_points", [])]
+        if sorted(want_vp) != sorted(old_vp):
+            body = _set_victory_points(body, want_vp)
+            diff.append({"key": "vp", "label": "胜利点",
+                         "old": ", ".join("%d:%d" % (p, v) for p, v in old_vp) or "无",
+                         "new": ", ".join("%d:%d" % (p, v) for p, v in want_vp) or "无"})
 
     if not diff:
         return {"ok": True, "msg": "没有改动", "diff": []}
@@ -1256,6 +1350,27 @@ def _first_in(text, pat):
 
 
 
+def _hist_block_body(text, key):
+    """取顶层 key = { ... } 的块内文本，没有返回空串"""
+    m = _hist_find_top(text, re.compile(r'(?m)^[ \t]*%s\s*=\s*\{' % re.escape(key)))
+    if not m:
+        return ""
+    b = text.find('{', m.end() - 1)
+    return text[b + 1:brace_match(text, b) - 1]
+
+
+def _hist_popularities(text):
+    out = {}
+    for k, v, hb in top_items(_hist_block_body(text, "set_popularities")):
+        if hb:
+            continue
+        try:
+            out[k] = int(float(v.strip()))
+        except Exception:
+            pass
+    return out
+
+
 def _hist_party_of(text):
     """ruling_party 一般在 set_politics 块里，先看顶层再看块内"""
     m = _hist_find_top(text, re.compile(r'(?m)^[ 	]*ruling_party\s*=\s*(\w+)'))
@@ -1293,6 +1408,9 @@ def country_history_raw(tag):
         "war_support": top_val(r'(?m)^[ 	]*add_war_support\s*=\s*(-?[\d.]+)'),
         "ideas": (COUNTRIES.get(tag) or {}).get("ideas", []),
         "focus_tree": ((COUNTRIES.get(tag) or {}).get("focus_trees") or [""])[0],
+        "oob": top_val(r'(?m)^[ \t]*oob\s*=\s*"([^"]+)"'),
+        "techs": [k for k, v, hb in top_items(_hist_block_body(body, "set_technology")) if not hb],
+        "popularities": _hist_popularities(body),
     }
     return {"ok": True, "exists": True, "writable": writable, "file": c.get("history_file", ""),
             "root": root, "text": text[:60000], "fields": fields}
@@ -1429,6 +1547,10 @@ def country_history_save(tag, fields):
             "war_support": top_old(r'(?m)^[ 	]*add_war_support\s*=\s*(-?[\d.]+)'),
             "ideas": ",".join(c.get("ideas", [])),
             "focus_tree": (c.get("focus_trees") or [""])[0],
+            "techs": ",".join(c.get("techs", [])),
+            "oob": c.get("oob", ""),
+            "popularities": ",".join("%s=%d" % (k, v) for k, v in
+                                     sorted(_hist_popularities(before).items())),
         }
         new = dict(old)
         for key, mlkey in HIST_KEYS.items():
@@ -1446,8 +1568,32 @@ def country_history_save(tag, fields):
         if fields.get("focus_tree") is not None:
             text = _hist_put_block(text, "load_focus_tree", ["tree = " + tree] if tree else [])
             new["focus_tree"] = tree
+        # v0.58 历史编辑器补全
+        if fields.get("techs") is not None:
+            techs = [x.strip() for x in fields.get("techs") or [] if x and x.strip()]
+            text = _hist_put_block(text, "set_technology", ["%s = 1" % t for t in techs])
+            new["techs"] = ",".join(techs)
+        if fields.get("oob") is not None:
+            oob = (fields.get("oob") or "").strip()
+            if oob:
+                text = _hist_set_scalar(text, "oob", '"%s"' % oob)
+            new["oob"] = oob
+        if fields.get("popularities") is not None:
+            pops = {}
+            for k, v in (fields.get("popularities") or {}).items():
+                if k in PARTIES and str(v).strip():
+                    try:
+                        pops[k] = int(float(v))
+                    except Exception:
+                        pass
+            if pops:
+                text = _hist_put_block(text, "set_popularities",
+                                       ["%s = %d" % (k, pops[k]) for k in PARTIES if k in pops])
+                new["popularities"] = ",".join("%s=%d" % (k, pops[k]) for k in PARTIES if k in pops)
         shown = {"capital": "首都", "ruling_party": "执政党", "political_power": "政治点",
-                 "stability": "稳定度修正", "war_support": "战争支持修正", "ideas": "开局精神", "focus_tree": "国策树"}
+                 "stability": "稳定度修正", "war_support": "战争支持修正", "ideas": "开局精神",
+                 "focus_tree": "国策树", "techs": "开局科技", "oob": "部队编成 oob",
+                 "popularities": "政党支持度"}
         for k, label in shown.items():
             if old.get(k, "") != new.get(k, ""):
                 diff.append({"key": k, "label": label, "old": old.get(k, ""), "new": new.get(k, "")})

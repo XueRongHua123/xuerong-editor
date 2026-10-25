@@ -205,3 +205,20 @@ Sidebar "States" (or click a state in the country hub):
   (e.g. `111 = { naval_base = 1 }`) stay untouched.
 - A backup is created before writing and the changes are listed as old -> new.
 - Province list and victory points are shown read-only for reference.
+
+## v0.58 History editor completed + province editing
+
+**New in the history editor**
+
+- **Party popularity** (`set_popularities`): one number per party, empty means leave unchanged.
+- **OOB path** for the starting army.
+- **Starting technologies** (`set_technology`): one tech id per line; the whole block is rebuilt, empty deletes it.
+- All of these live in the same panel as capital / ruling party / political power / modifiers / ideas / focus tree,
+  and the save result lists old -> new for every changed field.
+
+**Province editing** (inside States)
+
+- A per-province table to edit `naval_base`, `coastal_bunker` and **victory points** directly.
+- Setting a building to 0 removes that province block; leaving it empty keeps the current value.
+  State-level buildings stay in the editor above.
+- Victory points are written back as (province, value) pairs; clearing them all deletes the `victory_points` block.
