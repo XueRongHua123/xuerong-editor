@@ -73,6 +73,7 @@ UI = {
     "由开源模型 DeepSeek v4.1 flash 1017 开发 · 社区共有 · 禁止商业牟利": {
         "en": "Developed with the open-source model DeepSeek v4.1 flash 1017 · Community-owned · Non-commercial use only",
         "ja": "オープンソースモデル DeepSeek v4.1 flash 1017 による開発 · コミュニティ共有 · 商業利用禁止"},
+    "特别鸣谢": {"en": "Special Thanks", "ja": "特別協力"},
     "能改国策、国家精神、装备、科技、事件；装备设计器、原版参考、多模组叠加、AI 辅助和自动校验都在同一个窗口里。": {
         "en": "Edit focus trees, national spirits, equipment, technology and events. The equipment designer, vanilla reference, multi-mod stacking, AI assistance and validation all live in one window.",
         "ja": "国家方針・国家精神・装備・技術・イベントを編集。装備デザイナー、バニラ参照、複数MODの重ね掛け、AI補助、自動検証を同じ画面で使えます。"},

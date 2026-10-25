@@ -126,6 +126,10 @@
 .welcome-sub{position:relative;margin:0;padding:2px 0 4px 12px;color:#c2ae82;font-size:12px;letter-spacing:1.4px;line-height:1.6;font-weight:normal}
 .welcome-sub::before{content:'';position:absolute;left:0;top:3px;bottom:4px;width:2px;background:#8a7a45;border-radius:1px}
 .welcome-credit{margin:0;color:var(--muted);font-size:11px;line-height:1.5}
+.welcome-credits{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:6px 0;border-top:1px dashed var(--line);margin-top:2px}
+.wc-title{font-size:11px;color:var(--muted);letter-spacing:1px}
+.wc-item{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text)}
+.wc-item img{width:28px;height:28px;border-radius:50%;object-fit:cover;border:1px solid var(--line)}
   .welcome-body p{margin:0;color:#bdb6a8;font-size:13px;line-height:1.7}
   .welcome-btns{display:flex;gap:10px;margin-top:4px;flex-wrap:wrap}
   .btn.primary{background:#55684a;border-color:#8fa06a;color:#f1ecd9}
@@ -439,6 +443,12 @@
       </div>
       <p class="welcome-tip">命令行启动：<code>雪绒的钢铁雄心编辑器.exe --mod "本体目录" --mod "子模组目录"</code>（按先后顺序加载）</p>
       <p class="welcome-tip">选错了或想追加？进入界面后点左侧「＋ 添加 mod」就行。</p>
+      <div class="welcome-credits">
+        <span class="wc-title">特别鸣谢</span>
+        <span class="wc-item"><img src="/mascot/liang.png" alt="梁武峰"><b>梁武峰</b></span>
+        <span class="wc-item"><img src="/mascot/fish.png" alt="大肥鱼"><b>大肥鱼</b></span>
+        <span class="wc-item"><img src="/mascot/mascot.png" alt="雪绒"><b>雪绒</b></span>
+      </div>
       <button class="linkbtn" id="welcomeClose">先随便看看</button>
     </div>
   </div>
