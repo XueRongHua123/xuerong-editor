@@ -469,6 +469,22 @@
   .hist-diff .row .old{color:var(--muted);text-decoration:line-through}
   .hist-diff .row .new{color:var(--accent)}
   .hist-warn{color:var(--warn);font-size:11.5px;margin-top:6px;line-height:1.5}
+  /* ---------- v0.61 AI 面板与悬浮球 ---------- */
+  #aiBubble.busy{border-color:var(--accent);animation:bubbleBusy 1.4s linear infinite}
+  @keyframes bubbleBusy{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 55%,transparent)}
+    100%{box-shadow:0 0 0 13px transparent}}
+  #aiMenu{position:fixed;z-index:125;background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    box-shadow:var(--shadow);padding:6px;display:none;min-width:168px}
+  #aiMenu.show{display:block}
+  #aiMenu div{padding:7px 10px;border-radius:6px;font-size:12px;color:var(--text);cursor:pointer;
+    display:flex;gap:8px;align-items:center}
+  #aiMenu div:hover{background:var(--panel2);color:var(--accent)}
+  .ai-tpl{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 6px}
+  #aiHistory{margin:4px 0 6px;max-height:98px;overflow:auto}
+  .ai-h{padding:4px 8px;border-radius:6px;font-size:11px;color:var(--muted);cursor:pointer;
+    border-left:2px solid transparent;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ai-h:hover{background:var(--panel2);color:var(--text);border-left-color:var(--accent)}
+  #aiMeta{font-size:10.5px;color:var(--muted)}
   /* ---------- v0.60 数据源 ---------- */
   #srcBox{margin:10px 10px 6px;padding:10px;border:1px solid color-mix(in srgb,var(--accent) 42%,var(--line));
     border-radius:var(--r-md);
@@ -1009,9 +1025,18 @@
   </div>
 </div>
 <div id="aiBubble" title="雪绒 AI 助手"><img src="/mascot_face.png" alt="雪绒"><span>雪绒</span></div>
+<div id="aiMenu">
+  <div data-act="ai">💬 AI 助手</div>
+  <div data-act="cmd">⌘ 命令面板</div>
+  <div data-act="lint">🩺 项目体检</div>
+  <div data-act="country">🌍 国家中心</div>
+  <div data-act="state">🗺 州 / 地块</div>
+  <div data-act="hide">👀 隐藏雪绒</div>
+</div>
+
 <div id="aiModal">
   <div class="ai-card">
-    <div class="diff-head"><div style="display:flex;align-items:center;gap:8px"><img class="ai-avatar" src="/mascot_face.png" alt="雪绒"><b>雪绒</b></div><div style="display:flex;gap:6px"><button class="btn" id="aiSettingsBtn" title="AI 配置">⚙</button><button class="btn" id="aiSave">保存配置</button><button class="btn" id="aiClose">关闭</button></div></div>
+    <div class="diff-head"><div style="display:flex;align-items:center;gap:8px"><img class="ai-avatar" src="/mascot_face.png" alt="雪绒"><b>雪绒</b></div><div style="display:flex;gap:6px"><button class="btn" id="aiSettingsBtn" title="AI 配置">⚙</button><button class="btn" id="aiTest" title="用当前配置发一条极短请求，验证连通性">🧪 测试</button><button class="btn" id="aiClearHistory" title="清空最近对话">🧹 清空</button><button class="btn" id="aiSave">保存配置</button><button class="btn" id="aiClose">关闭</button></div></div>
     <div class="ai-body">
       <div id="aiSettings" style="display:none">
       <div class="ai-settings">
@@ -1032,8 +1057,17 @@
       <label class="ai-system">系统提示词<textarea id="aiSystem" style="height:54px"></textarea></label>
       </div>
       <label>上下文（可选，贴脚本/要求）<textarea id="aiContext" style="height:70px"></textarea></label>
+      <div class="ai-tpl" id="aiTemplates">
+        <span class="cm-chip" data-tpl="effect">写国策效果</span>
+        <span class="cm-chip" data-tpl="translate">翻译三语</span>
+        <span class="cm-chip" data-tpl="check">检查这段脚本</span>
+        <span class="cm-chip" data-tpl="error">解释报错</span>
+        <span class="cm-chip" data-tpl="event">写一个事件</span>
+      </div>
+      <div id="aiHistory"></div>
       <label>提问<textarea id="aiPrompt" style="height:80px" placeholder="例如：帮我写一个完成时加 50 政治点的国策效果"></textarea></label>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="aiSend">发送</button><button class="btn" id="aiCopy">复制结果</button><select id="aiTarget" class="btn" style="max-width:150px"><option value="">插入到…</option><option value="edEffect">国策效果</option><option value="ideaRaw">精神原文</option><option value="equipRaw">装备原文</option><option value="techRaw">科技原文</option><option value="eventRaw">事件原文</option></select><button class="btn" id="aiInsert">插入</button><span class="k" id="aiHint"></span></div>
+      <div id="aiMeta"></div>
       <pre id="aiOut" class="ai-out"></pre>
     </div>
   </div>
@@ -2072,6 +2106,131 @@ function techFolderNames(){
 }
 let ttView = {x:0, y:0, k:1}, ttFolder = '', ttDrag = null;
 
+/* ---------- v0.61 AI 面板与悬浮球 ---------- */
+const AI_TEMPLATES = {
+  effect: '帮我写一段 HOI4 国策完成效果（completion_reward）：加 50 政治点、10% 稳定度，并解锁一个名为 my_new_idea 的国家精神。只返回效果脚本。',
+  translate: '把下面这段内容翻译成中日英三语，格式：中文 / English / 日本語，各一行，不要解释。\n\n',
+  check: '检查下面这段 HOI4 脚本有没有语法或逻辑错误（花括号、键名、作用域），指出具体行并给修正版。\n\n',
+  error: '下面是 HOI4 的 error.log 片段，帮我判断根因并给出修复步骤，尽量引用具体文件与键名。\n\n',
+  event: '帮我写一个 HOI4 事件：命名空间 my_ns，id my_ns.1，触发条件是国家有 my_flag，选项里加 20 政治点。只返回事件脚本。'
+};
+let AI_HISTORY = [];
+
+function aiFillTemplate(kind){
+  const t = AI_TEMPLATES[kind];
+  if(!t) return;
+  const box = document.getElementById('aiPrompt');
+  box.value = t;
+  box.focus();
+  status('已填入模板，按「发送」提交');
+}
+
+function aiUpdateMeta(txt){
+  const el = document.getElementById('aiMeta');
+  if(el) el.textContent = txt || '';
+}
+
+async function aiTest(){
+  const btn = document.getElementById('aiTest');
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = '测试中…';
+  const t0 = Date.now();
+  try{
+    const r = await fetch('/api/ai_test', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const j = await r.json();
+    aiUpdateMeta((j.ok ? '✓ ' : '✗ ') + (j.msg || '') + ' · ' + (Date.now() - t0) + 'ms');
+    status(j.ok ? 'AI 连接正常' : ('AI 连接失败：' + (j.msg || '')), !j.ok);
+  }catch(e){
+    aiUpdateMeta('✗ ' + e.message);
+    status('测试失败：' + e.message, true);
+  }
+  btn.disabled = false;
+  btn.textContent = old;
+}
+
+function aiPushHistory(prompt, answer){
+  AI_HISTORY.unshift({q: prompt, a: answer, t: new Date().toLocaleTimeString().slice(0, 5)});
+  AI_HISTORY = AI_HISTORY.slice(0, 12);
+  renderAIHistory();
+}
+
+function renderAIHistory(){
+  const box = document.getElementById('aiHistory');
+  if(!box) return;
+  if(!AI_HISTORY.length){ box.innerHTML = ''; return; }
+  box.innerHTML = '<div class="k" style="margin:2px 0 2px">最近提问（点一下回填）</div>' +
+    AI_HISTORY.map((h, i)=>'<div class="ai-h" data-i="' + i + '">' + h.t + ' · ' + escapeHtml(h.q.slice(0, 60)) + '</div>').join('');
+  box.querySelectorAll('.ai-h').forEach(el=>{
+    el.onclick = ()=>{
+      const h = AI_HISTORY[Number(el.dataset.i)];
+      if(!h) return;
+      document.getElementById('aiPrompt').value = h.q;
+      document.getElementById('aiOut').textContent = h.a;
+      aiUpdateMeta('来自历史记录');
+    };
+  });
+}
+
+function aiClearHistory(){
+  AI_HISTORY = [];
+  renderAIHistory();
+  document.getElementById('aiOut').textContent = '';
+  aiUpdateMeta('');
+  status('已清空最近对话');
+}
+
+function aiToggleKey(){
+  const el = document.getElementById('aiKey');
+  el.type = el.type === 'password' ? 'text' : 'password';
+}
+
+/* 悬浮球菜单 */
+function openAiMenu(x, y){
+  const menu = document.getElementById('aiMenu');
+  menu.classList.add('show');
+  const w = menu.offsetWidth || 176, h = menu.offsetHeight || 220;
+  menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, x)) + 'px';
+  menu.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, y)) + 'px';
+}
+function closeAiMenu(){ document.getElementById('aiMenu').classList.remove('show'); }
+
+function aiMenuAction(act){
+  closeAiMenu();
+  if(act === 'ai') return openAI();
+  if(act === 'cmd') return openCmd();
+  if(act === 'lint') return openLint();
+  if(act === 'country') return openCountry();
+  if(act === 'state') return openStates();
+  if(act === 'hide'){
+    const box = document.getElementById('mascotFloat');
+    if(box) box.style.display = 'none';
+    try{ localStorage.setItem('mascotFloatState', JSON.stringify({hidden: true})); }catch(e){}
+    status('已隐藏雪绒，可从左侧「❄ 雪绒」重新显示');
+  }
+}
+
+function aiBubbleBusy(on){
+  const b = document.getElementById('aiBubble');
+  if(b) b.classList.toggle('busy', !!on);
+}
+
+/* v0.61 面板绑定 */
+document.getElementById('aiTest').onclick = aiTest;
+document.getElementById('aiClearHistory').onclick = aiClearHistory;
+document.querySelectorAll('#aiTemplates .cm-chip').forEach(el=>{
+  el.onclick = ()=>aiFillTemplate(el.dataset.tpl);
+});
+document.getElementById('aiKey').addEventListener('dblclick', aiToggleKey);
+document.getElementById('aiMenu').addEventListener('click', e=>{
+  const row = e.target.closest('[data-act]');
+  if(row) aiMenuAction(row.dataset.act);
+});
+document.addEventListener('click', e=>{
+  if(!e.target.closest('#aiMenu') && !e.target.closest('#aiBubble')) closeAiMenu();
+});
+window.addEventListener('resize', closeAiMenu);
+
 /* ---------- v0.60 数据源与加载进度 ---------- */
 let loadTimer = null, loadStartedAt = 0;
 
@@ -2079,6 +2238,7 @@ function startLoading(text){
   loadStartedAt = Date.now();
   const bar = document.getElementById('loadBar');
   if(bar) bar.classList.add('show');
+  aiBubbleBusy(true);
   const st = document.getElementById('srcState');
   if(st){
     st.classList.add('busy');
@@ -2099,6 +2259,7 @@ function updateLoading(text){
 }
 
 function stopLoading(msg, isErr){
+  aiBubbleBusy(false);
   clearInterval(loadTimer); loadTimer = null;
   const bar = document.getElementById('loadBar');
   if(bar) bar.classList.remove('show');
@@ -2462,10 +2623,19 @@ async function sendAI(){
   const prompt = document.getElementById('aiPrompt').value.trim();
   if(!prompt){ status('先输入问题'); return; }
   out.textContent = '请求中…';
-  const r = await fetch('/api/ai_chat', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({prompt, context: document.getElementById('aiContext').value})});
-  const j = await r.json();
-  out.textContent = j.ok ? (j.msg || '') : ('失败：' + (j.msg || '未知错误'));
+  aiUpdateMeta('请求中…');
+  const t0 = Date.now();
+  try{
+    const r = await fetch('/api/ai_chat', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({prompt, context: document.getElementById('aiContext').value})});
+    const j = await r.json();
+    out.textContent = j.ok ? (j.msg || '') : ('失败：' + (j.msg || '未知错误'));
+    aiUpdateMeta((j.ok ? '✓' : '✗') + ' ' + (Date.now() - t0) + 'ms · ' + (j.ok ? '已返回' : '可点「测试」看连通性'));
+    if(j.ok) aiPushHistory(prompt, j.msg || '');
+  }catch(e){
+    out.textContent = '失败：' + e.message;
+    aiUpdateMeta('✗ 网络错误');
+  }
 }
 async function addEvent(){
   const id = prompt('新事件 ID（namespace.member，例如 my_ns.1）：');
@@ -3451,6 +3621,15 @@ fsSel.onchange = ()=>{
       bubble.style.bottom = 'auto';
     }
   } catch(e){}
+  bubble.addEventListener('contextmenu', e=>{
+    e.preventDefault();
+    openAiMenu(e.clientX - 8, e.clientY - 8);
+  });
+  bubble.addEventListener('dblclick', e=>{
+    e.preventDefault();
+    closeAiMenu();
+    openCmd();
+  });
   bubble.addEventListener('pointerdown', e=>{
     e.preventDefault();
     const r = bubble.getBoundingClientRect();

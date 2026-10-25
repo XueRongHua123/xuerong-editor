@@ -3702,6 +3702,12 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path == "/api/ai_config":
             ok, msg = save_ai(body)
             self._send({"ok": ok, "msg": msg})
+        elif self.path == "/api/ai_test":
+            cfg = load_ai_config()
+            t0 = time.time()
+            ok, msg = ai_chat(cfg, "ping，只回复 ok", "")
+            self._send({"ok": ok, "msg": (msg or "")[:200],
+                        "ms": int((time.time() - t0) * 1000)})
         elif self.path == "/api/ai_chat":
             ok, msg = ai_chat(load_ai(), body.get("prompt") or "", body.get("context") or "")
             self._send({"ok": ok, "msg": msg})
