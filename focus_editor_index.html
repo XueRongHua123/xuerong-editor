@@ -469,6 +469,13 @@
   .hist-diff .row .old{color:var(--muted);text-decoration:line-through}
   .hist-diff .row .new{color:var(--accent)}
   .hist-warn{color:var(--warn);font-size:11.5px;margin-top:6px;line-height:1.5}
+  /* ---------- v0.63 缩放适配与面板定位 ---------- */
+  #aiBubble.open{transform:none}
+  #aiBubble img{transition:transform .28s cubic-bezier(.2,.8,.2,1)}
+  #aiBubble.open img{transform:rotate(45deg)}
+  #aiModal{z-index:120!important}
+  .ai-card{max-height:none!important}
+  .ai-body{overflow:auto}
   /* ---------- v0.62 环形菜单与浮窗 ---------- */
   #aiModal{width:min(430px,calc(100vw - 28px))!important;right:20px;bottom:170px;left:auto;top:auto;
     max-height:calc(100vh - 60px)}
@@ -1068,7 +1075,7 @@
   <button class="rad-item" data-act="country" data-name="国家中心">🌍</button>
   <button class="rad-item" data-act="state" data-name="州 / 地块">🗺</button>
   <button class="rad-item" data-act="skins" data-name="换衣服">👗</button>
-  <button class="rad-item" data-act="hide" data-name="隐藏雪绒">👀</button>
+  <button class="rad-item" data-act="mascot" data-name="隐藏雪绒">👀</button>
 </div>
 <div id="aiMenu">
   <div data-act="ai">💬 AI 助手</div>
@@ -2157,6 +2164,63 @@ function techFolderNames(){
   return Array.from(set).sort();
 }
 let ttView = {x:0, y:0, k:1}, ttFolder = '', ttDrag = null;
+/* ---------- v0.63 缩放适配与面板定位 ---------- */
+function uiZoom(){
+  try{
+    const z = parseFloat(getComputedStyle(document.body).zoom || '1');
+    return (isFinite(z) && z > 0) ? z : 1;
+  }catch(e){ return 1; }
+}
+
+function closeAI(){
+  const m = document.getElementById('aiModal');
+  if(m) m.classList.remove('show');
+}
+
+function clampNum(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+
+function placeAiModal(){
+  const el = document.getElementById('aiModal');
+  if(!el) return;
+  const z = uiZoom();
+  const vw = window.innerWidth / z, vh = window.innerHeight / z;
+  let saved = null;
+  try{ saved = JSON.parse(localStorage.getItem('fe_ai_pos') || 'null'); }catch(e){}
+  if(saved && typeof saved.x === 'number'){
+    el.style.left = clampNum(saved.x, 8, Math.max(8, vw - 220)) + 'px';
+    el.style.top = clampNum(saved.y, 8, Math.max(8, vh - 140)) + 'px';
+    el.style.right = 'auto';
+    el.style.bottom = 'auto';
+  } else {
+    el.style.left = 'auto';
+    el.style.right = (18 / z) + 'px';
+    el.style.top = 'auto';
+    el.style.bottom = (110 / z) + 'px';
+  }
+  const maxH = Math.max(320, vh - 40);
+  el.style.maxHeight = maxH + 'px';
+  const card = el.querySelector('.ai-card');
+  if(card) card.style.maxHeight = maxH + 'px';
+}
+
+function toggleMascotFloat(){
+  const box = document.getElementById('mascotFloat');
+  if(!box) return false;
+  const on = (box.style.display !== 'none');
+  showMascotFloat(!on);
+  status(on ? '已隐藏雪绒，点环形菜单里的「显示雪绒」可以再叫出来' : '雪绒回来了');
+  return !on;
+}
+
+function syncRadialMascotItem(){
+  const item = document.querySelector('#aiRadial [data-act="mascot"]');
+  if(!item) return;
+  const box = document.getElementById('mascotFloat');
+  const on = box && box.style.display !== 'none';
+  item.dataset.name = on ? '隐藏雪绒' : '显示雪绒';
+  item.textContent = on ? '👀' : '🐟';
+}
+
 /* ---------- v0.62 环形菜单与浮窗 ---------- */
 function closeRadial(){
   const box = document.getElementById('aiRadial');
@@ -2169,13 +2233,15 @@ function openRadial(){
   const b = document.getElementById('aiBubble');
   const box = document.getElementById('aiRadial');
   if(!b || !box) return;
+  syncRadialMascotItem();
+  const z = uiZoom();
   const r = b.getBoundingClientRect();
-  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  const cx = (r.left + r.width / 2) / z, cy = (r.top + r.height / 2) / z;
   box.style.left = cx + 'px';
   box.style.top = cy + 'px';
   const items = [...box.querySelectorAll('.rad-item')];
   const R = 84, n = items.length;
-  const vw = window.innerWidth, vh = window.innerHeight;
+  const vw = window.innerWidth / z, vh = window.innerHeight / z;
   items.forEach((el, i)=>{
     const a = -Math.PI / 2 + i * 2 * Math.PI / n;
     let x = cx + Math.cos(a) * R, y = cy + Math.sin(a) * R;
@@ -2202,6 +2268,7 @@ function radialAction(act){
   if(act === 'country') return openCountry();
   if(act === 'state') return openStates();
   if(act === 'skins'){ showMascotFloat(true); return openSkinPick(); }
+  if(act === 'mascot'){ toggleMascotFloat(); return; }
   if(act === 'hide'){ showMascotFloat(false); return status('已隐藏雪绒，可从左侧「❄ 雪绒」重新显示'); }
 }
 
@@ -2441,35 +2508,39 @@ document.fonts && document.fonts.ready && document.fonts.ready.then(()=>{});
   }catch(e){}
   head.addEventListener('pointerdown', e=>{
     if(e.target.closest('button')) return;
+    const z = uiZoom();
     const r = modal.getBoundingClientRect();
     modal.style.right = 'auto';
     modal.style.bottom = 'auto';
-    modal.style.left = r.left + 'px';
-    modal.style.top = r.top + 'px';
-    drag = {sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top};
-    head.setPointerCapture && head.setPointerCapture(e.pointerId);
+    modal.style.left = (r.left / z) + 'px';
+    modal.style.top = (r.top / z) + 'px';
+    modal.style.transform = 'none';
+    drag = {sx: e.clientX, sy: e.clientY, ox: r.left / z, oy: r.top / z};
     e.preventDefault();
   });
-  head.addEventListener('pointermove', e=>{
+  window.addEventListener('pointermove', e=>{
     if(!drag) return;
-    const w = modal.offsetWidth;
-    const x = Math.max(8, Math.min(window.innerWidth - w - 8, drag.ox + e.clientX - drag.sx));
-    const y = Math.max(8, Math.min(window.innerHeight - 80, drag.oy + e.clientY - drag.sy));
+    const z = uiZoom();
+    const vw = window.innerWidth / z, vh = window.innerHeight / z;
+    const w = modal.offsetWidth, h = Math.min(modal.offsetHeight, vh - 16);
+    const x = Math.max(8, Math.min(vw - w - 8, drag.ox + (e.clientX - drag.sx) / z));
+    const y = Math.max(8, Math.min(vh - h - 8, drag.oy + (e.clientY - drag.sy) / z));
     modal.style.left = x + 'px';
     modal.style.top = y + 'px';
   });
-  head.addEventListener('pointerup', ()=>{
+  window.addEventListener('pointerup', ()=>{
     if(!drag) return;
     drag = null;
     try{ localStorage.setItem('fe_ai_pos', JSON.stringify({x: parseInt(modal.style.left) || 0, y: parseInt(modal.style.top) || 0})); }catch(e){}
   });
   head.addEventListener('dblclick', e=>{
     if(e.target.closest('button')) return;
+    try{ localStorage.removeItem('fe_ai_pos'); }catch(err){}
     modal.style.left = '';
     modal.style.top = '';
-    modal.style.right = '20px';
-    modal.style.bottom = '170px';
-    try{ localStorage.removeItem('fe_ai_pos'); }catch(err){}
+    modal.style.right = '';
+    modal.style.bottom = '';
+    placeAiModal();
   });
 })();
 document.getElementById('aiMenu').addEventListener('click', e=>{
@@ -2839,7 +2910,9 @@ function fitTT(){
   applyTT();
 }
 async function openAI(){
-  document.getElementById('aiModal').classList.add('show');  document.getElementById('aiHint').textContent = '';
+  document.getElementById('aiModal').classList.add('show');
+  if(typeof placeAiModal === 'function') placeAiModal();
+  document.getElementById('aiHint').textContent = '';
   try {
     const r = await fetch('/api/ai_config');
     const j = await r.json();
@@ -3931,7 +4004,7 @@ document.getElementById('aiSettingsBtn').onclick = ()=>{
   const s = document.getElementById('aiSettings');
   s.style.display = s.style.display === 'none' ? '' : 'none';
 };
-document.getElementById('aiClose').onclick = ()=>{ document.getElementById('aiModal').classList.remove('show'); };
+document.getElementById('aiClose').onclick = closeAI;
 document.getElementById('aiSave').onclick = saveAIConfig;
 document.getElementById('aiSend').onclick = sendAI;
 document.getElementById('aiCopy').onclick = async ()=>{
@@ -4095,6 +4168,10 @@ document.addEventListener('keydown', e=>{
     return;
   }
   if(inField || e.ctrlKey || e.metaKey || e.altKey) return;
+  if(k === 'escape'){
+    const ai = document.getElementById('aiModal');
+    if(ai && ai.classList.contains('show')){ closeAI(); return; }
+  }
   if(k === 'escape'){
     if(document.getElementById('keysModal').classList.contains('show')){ closeKeys(); return; }
     if(linkMode){ setLink(null); return; }
