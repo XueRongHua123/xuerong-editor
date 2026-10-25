@@ -161,3 +161,21 @@ Left sidebar → "National Spirits" → "🧠 National Spirit Editor":
 - The zoom percentage shows live in the toolbar (e.g. `52%`), updated by wheel, buttons and Fit.
 - Coordinate math after zoom was fixed too: dragging used to be inaccurate at 50% zoom; now the node
   follows the pointer 1:1 regardless of zoom level.
+
+## v0.55 Country hub and project lint
+
+**Country hub** (sidebar "Country hub", or search "country" in the command palette)
+
+- Left: every country tag (only ones with content by default; 42 of 117), with color dot, tree/state counts and issue count.
+- Right: everything that country currently has, on one screen - capital, ruling party, political power, stability/war support
+  modifiers, graphical culture, focus trees, owned states, core-only states, starting ideas and technologies,
+  plus the history and definition file paths.
+- Click "Open" on a tree to switch to it; click an idea or technology chip to open that editor with the item selected.
+- Structural problems are listed at the bottom (missing history, missing capital, referenced tree that doesn't exist,
+  add_ideas pointing at an unknown idea...).
+
+**Project lint** (toolbar "Lint")
+
+- Cross-system reference checks grouped by error / warning / info: tree country tags, load_focus_tree targets,
+  add_ideas targets, state owner and add_core_of tags, events that trigger missing events, missing localisation keys.
+- Each entry shows its file and jumps where possible; localisation keys are copied to the clipboard on click.

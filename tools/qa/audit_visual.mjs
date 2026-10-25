@@ -108,7 +108,7 @@ const CLOSE_ALL = `(function(){
       e.classList.remove('show');
       e.style.display='none';
     });
-    ['treeSet','skinPick','iconPick','folderPick','newMod','cmdPalette','focusPreview','unloadModal'].forEach(id=>{
+    ['treeSet','skinPick','iconPick','folderPick','newMod','cmdPalette','focusPreview','unloadModal','countryModal','lintModal'].forEach(id=>{
       const e=document.getElementById(id); if(!e) return;
       e.classList.remove('show');
       e.style.display='none';
@@ -141,7 +141,9 @@ const STATES = [
   { name: 'aiModal', open: `openAI();`, wait: 700 },
   { name: 'focusPreview', open: `(function(){const t=curTree(); if(t&&t.focuses[0]) openFocusPreview(t.focuses[0]);})();`, wait: 900 },
   { name: 'newMod', open: `openNewMod();`, wait: 400 },
-  { name: 'unloadModal', open: `openUnloadModal();`, wait: 500 }
+  { name: 'unloadModal', open: `openUnloadModal();`, wait: 500 },
+  { name: 'countryModal', open: `openCountry('AFR');`, wait: 2600 },
+  { name: 'lintModal', open: `openLint();`, wait: 3200 }
 ];
 
 const KILL_TRANSITION = `(function(){
