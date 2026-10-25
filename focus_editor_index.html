@@ -4727,13 +4727,13 @@ function renderStateList(q){
   });
 }
 
-async function selectState(id){
+async function selectState(id, full){
   stateSel = id;
   renderStateList(document.getElementById('stateSearch').value || '');
   const body = document.getElementById('stateBody');
   body.innerHTML = '<div class="cm-empty">读取中…</div>';
   let d;
-  try { d = await (await fetch('/api/state?id=' + encodeURIComponent(id))).json(); }
+  try { d = await (await fetch('/api/state?id=' + encodeURIComponent(id) + (full ? '&full=1' : ''))).json(); }
   catch(e){ body.innerHTML = '<div class="cm-empty">读取失败：' + escapeHtml(e.message) + '</div>'; return; }
   if(!d.ok){ body.innerHTML = '<div class="cm-empty">' + escapeHtml(d.msg || '没有这个州') + '</div>'; return; }
   renderStateBody(d);
@@ -4797,12 +4797,15 @@ function renderStateBody(d){
       }).join('') +
       '</tbody></table></div>' +
       (d.province_count > d.provinces.length ?
-        '<div class="k">只列出前 ' + d.provinces.length + ' 个省，其余未显示</div>' : '');
+        '<div class="k">只列出前 ' + d.provinces.length + ' / ' + d.province_count +
+        ' 个省 <button class="btn" id="stShowAll" style="margin-left:6px">显示全部</button></div>' : '');
   }
 
   body.innerHTML = html;
   document.getElementById('stOwner').value = d.owner || '';
   document.getElementById('stCategory').value = d.category || '';
+  const showAll = document.getElementById('stShowAll');
+  if(showAll) showAll.onclick = ()=>selectState(d.id, true);
   document.getElementById('stSave').onclick = ()=>saveState(d);
   document.getElementById('stReload').onclick = ()=>selectState(d.id);
 }
