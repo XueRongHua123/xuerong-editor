@@ -1093,7 +1093,7 @@ function showMutex(){ return document.getElementById('showMutex').checked; }
 function applyView(){ vp.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`); }
 function resetView(){ view = {x:0,y:0,k:1}; applyView(); (typeof updateZoomLabel === 'function') && updateZoomLabel(); }
 
-async function loadData(){ const r = await fetch('/api/data'); DATA = await r.json(); dirty.clear(); linkSrc = null; selId = null; cpCache = null; if(!DATA.trees || current >= DATA.trees.length) current = 0; renderAll(); applySavedSkin(); updateWelcome(); }
+async function loadData(){ const r = await fetch('/api/data'); DATA = await r.json(); dirty.clear(); linkSrc = null; selId = null; cpCache = null; COUNTRY_DATA = null; LINT_DATA = null; if(!DATA.trees || current >= DATA.trees.length) current = 0; renderAll(); applySavedSkin(); updateWelcome(); }
 function updateWelcome(){
   const w = document.getElementById('welcome'); if(!w) return;
   const empty = !(DATA && DATA.roots && DATA.roots.length);
@@ -3666,16 +3666,26 @@ function rgbOf(c){
 
 async function openCountry(tag){
   document.getElementById('countryModal').classList.add('show');
-  if(!COUNTRY_DATA){
-    status('正在读取国家数据…');
-    try {
-      COUNTRY_DATA = await (await fetch('/api/countries')).json();
-    } catch(e){ status('国家数据读取失败：' + e.message, true); return; }
+  const prev = tag || countrySel;
+  status('正在读取国家数据…');
+  try {
+    COUNTRY_DATA = await (await fetch('/api/countries')).json();
+  } catch(e){
+    if(!COUNTRY_DATA){ status('国家数据读取失败：' + e.message, true); return; }
+    status('刷新失败，显示上次的数据：' + e.message, true);
   }
   renderCountryList('');
   const list = COUNTRY_DATA.list || [];
-  const pick = tag || (list.find(x=>x.trees.length) || list[0] || {}).tag;
-  if(pick) selectCountry(pick);
+  if(!list.length){
+    countrySel = null;
+    document.getElementById('countryCount').textContent = '0';
+    document.getElementById('countryBody').innerHTML =
+      '<div class="cm-empty">还没有读取到任何国家。<br>先用左侧「＋ 添加 mod」或「📖 加载原版参考」，再打开这里。</div>';
+    status('国家中心：0 个 tag（还没有加载 mod）');
+    return;
+  }
+  const pick = (prev && list.some(x=>x.tag === prev)) ? prev : (list.find(x=>x.trees.length) || list[0] || {}).tag;
+  if(pick) await selectCountry(pick);
   status('国家中心：' + list.length + ' 个 tag');
 }
 
