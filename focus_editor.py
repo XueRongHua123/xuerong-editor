@@ -1014,8 +1014,25 @@ def _tech_block_range(text, tid):
     return None
 
 
+def _tech_coord_token(tok, value, macros):
+    """原写法是 @宏 且宏当前值等于新值 → 保持宏名；否则写数字"""
+    tok = (tok or "").strip()
+    if tok.startswith("@"):
+        name = tok[1:]
+        mv = macros.get(name)
+        try:
+            if mv is not None and float(mv) == float(value):
+                return tok
+        except Exception:
+            pass
+    return str(int(value))
+
+
 def tech_move(root, rel, tid, x, y):
-    """把科技在树上的位置写回 folder.position 的 x/y（游戏读的就是这两个数）"""
+    """把科技在树上的位置写回 folder.position 的 x/y（游戏读的就是这两个数）。
+
+    原来写的是 @宏（如 y = @1936）且宏值仍然等于新值时，保留宏名，不会把宏拍平成数字。
+    """
     if not root or not rel or not tid:
         return {"ok": False, "msg": "参数不完整"}
     if is_under_game(root):
@@ -1030,6 +1047,10 @@ def tech_move(root, rel, tid, x, y):
         return {"ok": False, "msg": "坐标必须是整数"}
 
     text, has_bom = _read_bom_text(p)
+    macros = {}
+    for mm in re.finditer(r'(?m)^[ \t]*@([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', text):
+        macros[mm.group(1)] = mm.group(2)
+
     loc = _tech_block_range(text, tid)
     if not loc:
         return {"ok": False, "msg": "找不到科技块：" + tid}
@@ -1048,14 +1069,18 @@ def tech_move(root, rel, tid, x, y):
         pb = finner.find('{', pm.end() - 1)
         pe = brace_match(finner, pb)
         pinner = finner[pb + 1:pe - 1]
-        px = re.compile(r'(?m)(^|[ \t{])x\s*=\s*[^\s\r\n}]+')
-        py = re.compile(r'(?m)(^|[ \t{])y\s*=\s*[^\s\r\n}]+')
-        if px.search(pinner):
-            pinner2 = px.sub(lambda m: m.group(1) + "x = %d" % x, pinner, count=1)
+        px = re.compile(r'(?m)(^|[ \t{])x\s*=\s*([^\s\r\n}]+)')
+        py = re.compile(r'(?m)(^|[ \t{])y\s*=\s*([^\s\r\n}]+)')
+        mx = px.search(pinner)
+        if mx:
+            tok = _tech_coord_token(mx.group(2), x, macros)
+            pinner2 = pinner[:mx.start()] + mx.group(1) + "x = " + tok + pinner[mx.end():]
         else:
             pinner2 = " x = %d" % x + pinner
-        if py.search(pinner2):
-            pinner2 = py.sub(lambda m: m.group(1) + "y = %d" % y, pinner2, count=1)
+        my = py.search(pinner2)
+        if my:
+            tok = _tech_coord_token(my.group(2), y, macros)
+            pinner2 = pinner2[:my.start()] + my.group(1) + "y = " + tok + pinner2[my.end():]
         else:
             pinner2 = pinner2.rstrip() + " y = %d" % y
         finner2 = finner[:pb + 1] + pinner2 + finner[pe - 1:]
