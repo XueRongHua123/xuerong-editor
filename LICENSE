@@ -1,21 +1,64 @@
-MIT License
+# 雪绒社区非商业许可 1.0
 
-Copyright (c) 2026 Xuerong Editor contributors
+Copyright (c) 2026 雪绒的钢铁雄心编辑器 贡献者
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+本软件（含源代码、界面、文本、雪绒形象与立绘）由开源模型
+DeepSeek v4.1 flash 1017 参与开发，是面向《钢铁雄心 IV》模组制作社区的
+共有财富。
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+## 你可以
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+1. 免费使用本软件制作、修改、发布你的模组；
+2. 复制、修改源代码，制作自己的版本；
+3. 在保留本许可和作者署名的前提下，免费分发原版或修改版。
+
+## 你不可以
+
+1. **将本软件或其修改版用于任何商业牟利**，包括但不限于：
+   - 出售软件、出售修改版、出售激活码或订阅；
+   - 把本软件的功能作为付费服务、付费会员或付费课程的一部分；
+   - 在软件内植入广告、付费墙或诱导付费；
+   - 用本软件为商业产品提供收费服务。
+2. 删除或隐藏本许可、作者署名和“社区共有”声明；
+3. 将本软件用于违反当地法律或游戏服务条款的用途。
+
+## 分发与修改
+
+- 修改版必须继续使用本许可，并注明修改内容；
+- 分发时必须附带本许可全文；
+- 雪绒形象与立绘仅可用于本软件及其非商业衍生作品，未经作者书面许可不得用于商业项目。
+
+## 免责
+
+本软件按“现状”提供，不附带任何明示或暗示的担保。使用本软件修改模组造成的
+存档损坏、游戏报错、版权纠纷等风险由使用者自行承担。
+
+## 说明
+
+由于禁止商业使用，本许可不属于 OSI 定义下的“开源许可”，更准确的称呼是
+“源代码公开的非商业许可”。本软件仍然公开全部源代码，欢迎社区共同维护。
+
+---
+
+# Xuerong Community Non-Commercial License 1.0
+
+Copyright (c) 2026 Xuerong Hearts of Iron Editor contributors
+
+This software was developed with participation from the open-source model
+DeepSeek v4.1 flash 1017 and is a shared asset of the Hearts of Iron IV
+modding community.
+
+You may use, copy, modify and redistribute this software for free, provided
+that this license and attribution are preserved. You may not use this software,
+or any modified version, for commercial gain, including selling the software,
+paywalling its features, bundling it with paid services, or using it to
+provide paid services.
+
+Modified versions must remain under this license and must state their changes.
+The Xuerong character and artwork may not be used in commercial projects
+without written permission.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+
+Because commercial use is prohibited, this is a source-available
+non-commercial license, not an OSI-approved open-source license.
