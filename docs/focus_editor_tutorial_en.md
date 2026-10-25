@@ -134,3 +134,12 @@ Left sidebar → "National Spirits" → "🧠 National Spirit Editor":
 - Shortcuts: Ctrl+S save all, Ctrl+Z / Ctrl+Y undo and redo, F fit to screen, H or Shift+? opens the shortcut sheet;
 - In edit mode Delete removes the selected focus (the diff confirmation still appears); Esc closes the focus panel or leaves link mode;
 - The sidebar search is now a result list of every matching focus (current tree first); click one to jump there and center it.
+
+## v0.52 Colors and parser fixes
+
+- All colors now go through design tokens, so the paper theme no longer paints dark-theme colors on a light background;
+  body text reaches WCAG AA (4.5:1) in both themes.
+- Paper accent darkened from #8a6a2f to #7c5d24 so large headings stay legible.
+- Long ids in the equipment and technology lists are truncated with an ellipsis instead of breaking the sidebar.
+- Parser fix: ids containing "-" (e.g. tsf_equipment_F-15SE) used to be truncated to "15SE";
+  equipment goes from 342 to 348 and technologies from 676 to 753.

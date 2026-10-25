@@ -105,7 +105,7 @@ def top_items(body):
         if body[i] in " \t\r\n":
             i += 1
             continue
-        m = re.match(r'([A-Za-z0-9_]+)\s*=\s*', body[i:])
+        m = re.match(r'([A-Za-z0-9_.\-]+)\s*=\s*', body[i:])
         if not m:
             i += 1
             continue
@@ -509,7 +509,7 @@ def load_equipment(root):
                            "is_archetype", "archetype", "can_be_produced", "group_by",
                            "interface_category"):
                     m2 = re.search(r'(?m)^\s*%s\s*=\s*([^\s#]+)' % pk, v)
-                    if m2:
+                    if m2 and not m2.group(1).startswith("{"):
                         props[pk] = m2.group(1)
                 slots = []
                 for sm in re.finditer(r'module_slots\s*=\s*\{', v):
