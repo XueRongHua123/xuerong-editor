@@ -19,11 +19,18 @@ await send('Page.navigate', { url: URL });
 await sleep(6000);
 await evalJS(`document.getElementById('welcomeClose') && document.getElementById('welcomeClose').click(); openSkinPick();`);
 await sleep(2500);
+// 点一下最后新增的那套，确认主图切换
+await evalJS(`(function(){ const items=[...document.querySelectorAll('#skinGrid .ip-item')]; const hit=items.find(x=>x.textContent.indexOf('领桌')>=0); if(hit) hit.click(); })()`);
+await sleep(1200);
 const info = await evalJS(`JSON.stringify({
   items: [...document.querySelectorAll('#skinGrid img')].map(i=>({src:i.getAttribute('src'), w:i.naturalWidth, h:i.naturalHeight})),
-  selected: (document.querySelector('#skinGrid .ip-item.on, #skinGrid .on')||{}).textContent
+  selected: (document.querySelector('#skinGrid .ip-item.on, #skinGrid .on')||{}).textContent,
+  main: (function(){ const i=document.getElementById('mascotImg'); return {src:i.getAttribute('src'), w:i.naturalWidth, h:i.naturalHeight}; })(),
+  saved: localStorage.getItem('mascotSkin')
 })`);
 console.log(info);
+await evalJS(`openSkinPick()`);
+await sleep(700);
 const shot = await send('Page.captureScreenshot', { format: 'png' });
 fs.mkdirSync('qa/shots', { recursive: true });
 fs.writeFileSync('qa/shots/v0.561_skin_classroom.png', Buffer.from(shot.result.data, 'base64'));
