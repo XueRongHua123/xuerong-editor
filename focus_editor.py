@@ -1106,7 +1106,7 @@ def tech_move(root, rel, tid, x, y):
     return {"ok": True, "msg": "%s → x=%d y=%d" % (tid, x, y), "x": x, "y": y}
 
 
-def state_detail(sid):
+def state_detail(sid, full=False):
     try:
         sid = int(sid)
     except Exception:
@@ -1129,7 +1129,7 @@ def state_detail(sid):
         "manpower": s.get("manpower", ""),
         "category": s.get("category", ""),
         "history_date": s.get("history_date", ""),
-        "provinces": s.get("provinces", [])[:300],
+        "provinces": s.get("provinces", []) if full else s.get("provinces", [])[:300],
         "province_count": s.get("province_count", 0),
         "buildings": s.get("buildings", {}),
         "province_buildings": s.get("province_buildings", {}),
@@ -3464,7 +3464,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._send(states_payload())
         elif path_only == "/api/state":
             qs = parse_qs(urlparse(self.path).query)
-            self._send(state_detail(qs.get("id", [""])[0]))
+            self._send(state_detail(qs.get("id", [""])[0], bool(qs.get("full", [""])[0])))
         elif path_only == "/api/country":
             qs = parse_qs(urlparse(self.path).query)
             self._send(country_detail(qs.get("tag", [""])[0]))
