@@ -1856,7 +1856,40 @@ def _focus_refs():
     return {"ideas": ideas, "events": events}
 
 
+# v0.66 全局 flag 配对
+def _flag_usage():
+    """扫描事件 / 国策原文 / 精神原文里的 set_global_flag 与 has_global_flag"""
+    sets, haves = {}, {}
+
+    def scan(raw, where):
+        if not raw:
+            return
+        for m in re.finditer(r'set_global_flag\s*=\s*([A-Za-z0-9_]+)', raw):
+            sets.setdefault(m.group(1), where)
+        for m in re.finditer(r'(?:has_global_flag|clr_global_flag)\s*=\s*([A-Za-z0-9_]+)', raw):
+            haves.setdefault(m.group(1), where)
+
+    for eid, ev in EVENTS.items():
+        scan(ev.get("raw", ""), "事件 " + eid)
+    for iid, idea in IDEAS.items():
+        scan(idea.get("raw", ""), "精神 " + iid)
+    for root in ROOTS:
+        d = os.path.join(root, "common", "national_focus")
+        if not os.path.isdir(d):
+            continue
+        for fn in os.listdir(d):
+            if not fn.endswith(".txt"):
+                continue
+            try:
+                text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
+            except Exception:
+                continue
+            scan(text, "国策 " + fn)
+    return sets, haves
+
+
 def lint_project(limit=1500):
+
     """跨系统引用检查：树↔国家、历史↔树、州↔国家、事件↔事件、本地化"""
     items = []
 
@@ -1924,6 +1957,21 @@ def lint_project(limit=1500):
         if r["id"] not in EVENTS:
             add("warn", "focus", "国策 %s 触发了不存在的事件 %s" % (r["focus"], r["id"]),
                 r["file"], {"type": "tree", "id": r["tree"]})
+
+    # v0.66 全局 flag 配对
+    try:
+        sets, haves = _flag_usage()
+    except Exception as e:
+        sets, haves = {}, {}
+        print("flag scan fail:", e)
+    for f, where in list(haves.items())[:120]:
+        if f not in sets:
+            add("warn", "flag", "全局 flag %s 只被读取（%s），没有任何 set_global_flag" % (f, where), "",
+                {"type": "tree", "id": ""})
+    for f, where in list(sets.items())[:120]:
+        if f not in haves:
+            add("info", "flag", "全局 flag %s 只被设置（%s），目前没人读取" % (f, where), "",
+                {"type": "tree", "id": ""})
 
     for it in missing_loc()[:limit]:
         add("warn", "loc", "缺本地化：%s" % it.get("key", ""), it.get("file", ""),
