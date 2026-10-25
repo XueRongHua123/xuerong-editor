@@ -152,3 +152,12 @@ Left sidebar → "National Spirits" → "🧠 National Spirit Editor":
 - Vanilla reference can be unloaded too: after that only your own mod content remains, and
   "Load vanilla reference" brings it back.
 - It used to be impossible for the vanilla layer because the read-only guard also blocked the unload request.
+
+## v0.54 Focus tree zoom
+
+- Wheel zoom is now **cursor-anchored**: whatever node is under the pointer stays under the pointer,
+  instead of drifting to the top-left corner.
+- New toolbar switch `Mouse zoom / Screen zoom` (remembered): screen mode zooms around the canvas center.
+- The zoom percentage shows live in the toolbar (e.g. `52%`), updated by wheel, buttons and Fit.
+- Coordinate math after zoom was fixed too: dragging used to be inaccurate at 50% zoom; now the node
+  follows the pointer 1:1 regardless of zoom level.
