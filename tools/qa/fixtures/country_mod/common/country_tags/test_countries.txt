@@ -1,0 +1,2 @@
+TST = "countries/Test.txt"
+TSU = "countries/Test2.txt"

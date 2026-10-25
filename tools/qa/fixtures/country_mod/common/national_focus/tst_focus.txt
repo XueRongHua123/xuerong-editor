@@ -1,0 +1,16 @@
+focus_tree = {
+	id = tst_focus
+	country = {
+		factor = 0
+		modifier = {
+			add = 10
+			tag = TST
+		}
+	}
+	focus = {
+		id = tst_root
+		x = 0
+		y = 0
+		cost = 1
+	}
+}

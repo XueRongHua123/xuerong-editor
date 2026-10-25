@@ -1,0 +1,2 @@
+graphical_culture = western_gfx
+color = { 20 40 60 }

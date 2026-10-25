@@ -179,3 +179,16 @@ Left sidebar → "National Spirits" → "🧠 National Spirit Editor":
 - Cross-system reference checks grouped by error / warning / info: tree country tags, load_focus_tree targets,
   add_ideas targets, state owner and add_core_of tags, events that trigger missing events, missing localisation keys.
 - Each entry shows its file and jumps where possible; localisation keys are copied to the clipboard on click.
+
+## v0.56 Edit country history
+
+Pick a country in the country hub and click "Edit history" to change `history/countries/TAG.txt` in place:
+
+- capital (state id), ruling party, political power, stability / war support modifiers, focus tree;
+- starting ideas, one id per line; leave empty to skip that key;
+- only the fields you fill are touched - comments, `if` blocks and other keys stay as they are,
+  and the file keeps its BOM and CRLF endings;
+- a backup is created before writing (`.bak` plus the history list, restorable from the Backup panel);
+  after saving, every changed field is listed as old -> new;
+- unknown ideas or focus trees produce a warning but are still written (useful when scaffolding first);
+- if the country has no history file yet, saving creates a new `TAG - Name.txt`.
