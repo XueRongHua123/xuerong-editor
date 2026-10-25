@@ -57,7 +57,7 @@ MASCOTS = [
     {"id": "running", "name": "运动", "file": "mascot/running.png", "thumb": "mascot/running_thumb.png"},
     {"id": "flowers", "name": "花田", "file": "mascot/flowers.png", "thumb": "mascot/flowers_thumb.png"},
     {"id": "classroom", "name": "教室", "file": "mascot/classroom.png", "thumb": "mascot/classroom_thumb.png"},
-    {"id": "charm", "name": "领桌小绒", "file": "mascot/charm.png", "thumb": "mascot/charm_thumb.png"},
+    {"id": "charm", "name": "邻桌小绒", "file": "mascot/charm.png", "thumb": "mascot/charm_thumb.png"},
     {"id": "cafe", "name": "咖啡店", "file": "mascot/cafe.png", "thumb": "mascot/cafe_thumb.png"},
     {"id": "snow", "name": "雪天", "file": "mascot/snow.png", "thumb": "mascot/snow_thumb.png"},
 ]
@@ -751,7 +751,7 @@ def load_countries(root):
 
 
 def load_states(root):
-    """history/states：id / 名称 / 人力 / 类别 / owner / cores / 省份数"""
+    """history/states：id / 名称 / 人力 / 类别 / owner / cores / 省份 / 建筑 / 胜利点"""
     root = os.path.abspath(root)
     name = os.path.basename(root.rstrip("\\/")) or root
     d = os.path.join(root, "history", "states")
@@ -769,28 +769,323 @@ def load_states(root):
             cur = STATES.get(sid)
             if not _prefer(cur, root):
                 continue
-            hist = ""
-            hm = re.search(r'history\s*=\s*\{', body)
+
+            dep = _hist_depths(body)
+            hb = he = -1
+            hm = re.search(r'(?m)^[ \t]*history\s*=\s*\{', body)
             if hm:
-                hb = body.find('{', hm.start())
+                hb = body.find('{', hm.end() - 1)
                 he = brace_match(body, hb)
-                hist = body[hb + 1:he - 1]
-            owner = _first(body, r'(?m)^\s*owner\s*=\s*([A-Z0-9]{2,4})')
+
+            def first_at(pat, want, lo=0, hi=None):
+                hi = len(body) if hi is None else hi
+                for m in re.finditer(pat, body[lo:hi]):
+                    pos = lo + m.start()
+                    if pos < len(dep) and dep[pos] == want:
+                        return m.group(1).strip()
+                return ""
+
+            owner = ""
+            if hb > 0:
+                owner = first_at(r'(?m)^[ \t]*owner\s*=\s*([A-Z0-9]{2,4})', 1, hb, he)
+                if not owner:
+                    owner = first_at(r'(?m)^[ \t]*owner\s*=\s*([A-Z0-9]{2,4})', 2, hb, he)
             if not owner:
-                owner = _first(hist, r'(?m)^\s*owner\s*=\s*([A-Z0-9]{2,4})')
-            cores = re.findall(r'(?m)^\s*add_core_of\s*=\s*([A-Z0-9]{2,4})', hist or body)
+                owner = first_at(r'(?m)^[ \t]*owner\s*=\s*([A-Z0-9]{2,4})', 0)
+
+            cores = []
+            for m in re.finditer(r'(?m)^[ \t]*add_core_of\s*=\s*([A-Z0-9]{2,4})', body):
+                pos = m.start()
+                if pos < len(dep) and dep[pos] in (0, 1, 2):
+                    cores.append(m.group(1))
+
+            blds, prov_blds = {}, {}
+            bm = re.search(r'(?m)^[ \t]*buildings\s*=\s*\{', body)
+            if bm:
+                bb = body.find('{', bm.end() - 1)
+                be = brace_match(body, bb)
+                for bk, bv, has_block in top_items(body[bb + 1:be - 1]):
+                    if has_block:
+                        sub = {}
+                        for sk, sv, sb in top_items(bv):
+                            if not sb and sv.strip().isdigit():
+                                sub[sk] = int(sv.strip())
+                        prov_blds[bk] = sub
+                    elif bv.strip().isdigit():
+                        blds[bk] = int(bv.strip())
+
+            vps = []
+            vm = re.search(r'victory_points\s*=\s*\{([^}]*)\}', body)
+            if vm:
+                nums = re.findall(r'\d+', vm.group(1))
+                for i in range(0, len(nums) - 1, 2):
+                    vps.append((int(nums[i]), int(nums[i + 1])))
+
             pm = re.search(r'provinces\s*=\s*\{([^}]*)\}', body)
+            provs = [int(x) for x in re.findall(r'\d+', pm.group(1))] if pm else []
+            hist_date = _first(body, r'(?m)^[ \t]*(\d{3,4}\.\d{1,2}\.\d{1,2})\s*=\s*\{')
+
             STATES[sid] = {
                 "id": sid, "file": rel, "root": root, "source": name,
                 "name": _first(body, r'(?m)^\s*name\s*=\s*"?([A-Za-z0-9_]+)"?'),
                 "manpower": _first(body, r'(?m)^\s*manpower\s*=\s*(\d+)'),
                 "category": _first(body, r'(?m)^\s*state_category\s*=\s*(\w+)'),
                 "owner": owner, "cores": sorted(set(cores)),
-                "provinces": len(re.findall(r'\d+', pm.group(1))) if pm else 0,
-                "has_history": bool(hist),
+                "provinces": provs, "province_count": len(provs),
+                "buildings": blds, "province_buildings": prov_blds,
+                "victory_points": vps,
+                "history_date": hist_date,
+                "has_history": hb > 0,
             }
             n += 1
     return n
+
+
+STATE_CATEGORIES = ("wasteland", "enclave", "tiny_island", "small_island", "pastoral",
+                    "rural", "town", "large_city", "metropolis", "megalopolis")
+STATE_BUILDINGS = ("infrastructure", "arms_factory", "industrial_complex", "dockyard",
+                   "air_base", "anti_air_building", "radar_station", "synthetic_refinery",
+                   "fuel_silo", "rocket_site", "nuclear_reactor")
+
+
+def states_payload():
+    items = []
+    for sid in sorted(STATES):
+        s = STATES[sid]
+        ow = s.get("owner", "") or ""
+        items.append({
+            "id": sid,
+            "name": LOC.get(s.get("name", ""), s.get("name", "")),
+            "raw_name": s.get("name", ""),
+            "owner": ow,
+            "owner_name": LOC.get(ow, ""),
+            "cores": len(s.get("cores", [])),
+            "manpower": s.get("manpower", ""),
+            "category": s.get("category", ""),
+            "provinces": s.get("province_count", 0),
+            "buildings": sum(s.get("buildings", {}).values()),
+        })
+    return {"count": len(items), "list": items}
+
+
+def _state_locate(text):
+    m = _hist_find_top(text, re.compile(r'(?m)^[ \t]*state\s*=\s*\{'))
+    if not m:
+        return None
+    b = text.find('{', m.end() - 1)
+    return b, brace_match(text, b)
+
+
+def _state_history_range(body):
+    m = re.search(r'(?m)^[ \t]*history\s*=\s*\{', body)
+    if not m:
+        return None
+    b = body.find('{', m.end() - 1)
+    return b, brace_match(body, b)
+
+
+def _insert_pos(body, lo, hi):
+    """在块内末尾插入：跳过 `}` 本身与尾部空白"""
+    pos = hi - 1 if hi - 1 > lo and body[hi - 1] == '}' else hi
+    while pos > lo and body[pos - 1] in " \t\r\n":
+        pos -= 1
+    return pos
+
+
+def _set_in_scope(body, key, value, want_depth, lo, hi, insert=False):
+    pat = re.compile(r'(?m)^([ \t]*)%s\s*=\s*[^\s#\r\n]+' % re.escape(key))
+    dep = _hist_depths(body)
+    for m in pat.finditer(body, lo, hi):
+        if m.start() < len(dep) and dep[m.start()] == want_depth:
+            return body[:m.start()] + (m.group(1) or "") + "%s = %s" % (key, value) + body[m.end():]
+    if not insert:
+        return body
+    indent = "\t" * want_depth
+    pos = _insert_pos(body, lo, hi)
+    return body[:pos] + "\n" + indent + "%s = %s" % (key, value) + "\n" + body[pos:]
+
+
+def _drop_in_scope(body, key, depths, lo, hi):
+    pat = re.compile(r'(?m)^[ \t]*%s\s*=\s*[^\s#\r\n]*[ \t]*\r?\n?' % re.escape(key))
+    dep = _hist_depths(body)
+    out, last = [], 0
+    hit = False
+    for m in pat.finditer(body, lo, hi):
+        if m.start() < len(dep) and dep[m.start()] in depths:
+            out.append(body[last:m.start()])
+            last = m.end()
+            hit = True
+    if not hit:
+        return body
+    out.append(body[last:])
+    return "".join(out)
+
+
+def _set_building(body, key, value):
+    m = re.search(r'(?m)^[ \t]*buildings\s*=\s*\{', body)
+    if not m:
+        return body.rstrip() + "\n\t\tbuildings = {\n\t\t\t%s = %d\n\t\t}\n" % (key, value)
+    b = body.find('{', m.end() - 1)
+    e = brace_match(body, b)
+    inner = body[b + 1:e - 1]
+    pat = re.compile(r'(?m)^([ \t]*)%s\s*=\s*\d+' % re.escape(key))
+    if pat.search(inner):
+        inner2 = pat.sub(lambda mm: (mm.group(1) or "\t") + "%s = %d" % (key, value), inner, count=1)
+    else:
+        inner2 = "\n\t\t\t%s = %d\n" % (key, value) + inner.lstrip("\r\n")
+    return body[:b + 1] + inner2 + body[e - 1:]
+
+
+def state_detail(sid):
+    try:
+        sid = int(sid)
+    except Exception:
+        return {"ok": False, "msg": "州 id 必须是数字"}
+    s = STATES.get(sid)
+    if not s:
+        return {"ok": False, "msg": "没有这个州"}
+    root = s.get("root") or ""
+    owner = s.get("owner", "") or ""
+    return {
+        "ok": True, "id": sid,
+        "name": LOC.get(s.get("name", ""), s.get("name", "")),
+        "raw_name": s.get("name", ""),
+        "file": s.get("file", ""), "root": root,
+        "writable": bool(root) and not is_under_game(root),
+        "owner": owner,
+        "owner_name": LOC.get(owner, ""),
+        "cores": s.get("cores", []),
+        "core_names": {c: LOC.get(c, c) for c in s.get("cores", [])},
+        "manpower": s.get("manpower", ""),
+        "category": s.get("category", ""),
+        "history_date": s.get("history_date", ""),
+        "provinces": s.get("provinces", [])[:80],
+        "province_count": s.get("province_count", 0),
+        "buildings": s.get("buildings", {}),
+        "province_buildings": s.get("province_buildings", {}),
+        "victory_points": s.get("victory_points", [])[:20],
+        "categories": list(STATE_CATEGORIES),
+        "building_keys": list(STATE_BUILDINGS),
+        "owners": sorted(COUNTRIES.keys()),
+    }
+
+
+def state_save(sid, fields):
+    try:
+        sid = int(sid)
+    except Exception:
+        return {"ok": False, "msg": "州 id 必须是数字"}
+    s = STATES.get(sid)
+    if not s:
+        return {"ok": False, "msg": "没有这个州"}
+    root = s.get("root") or ""
+    rel = s.get("file") or ""
+    if not rel:
+        return {"ok": False, "msg": "这个州没有来源文件"}
+    if is_under_game(root):
+        return {"ok": False, "msg": "原版目录只读：请先复制到自己的模组再修改"}
+    p = os.path.join(root, rel)
+    if not os.path.exists(p):
+        return {"ok": False, "msg": "州文件不存在：" + rel}
+
+    owner = (fields.get("owner") or "").strip().upper()
+    if owner and owner not in COUNTRIES:
+        return {"ok": False, "msg": "owner 不是有效 tag：" + owner}
+    cores = [x.strip().upper() for x in (fields.get("cores") or []) if x and x.strip()]
+    bad = [c for c in cores if c not in COUNTRIES]
+    if bad:
+        return {"ok": False, "msg": "核心不是有效 tag：" + ", ".join(bad[:3])}
+    cat = (fields.get("category") or "").strip()
+    if cat and cat not in STATE_CATEGORIES:
+        return {"ok": False, "msg": "state_category 只能是 " + " / ".join(STATE_CATEGORIES)}
+    man = (fields.get("manpower") or "").strip()
+    if man and not man.isdigit():
+        return {"ok": False, "msg": "人力必须是整数"}
+    blds = {}
+    for k, v in (fields.get("buildings") or {}).items():
+        if k not in STATE_BUILDINGS:
+            continue
+        try:
+            iv = int(v)
+        except Exception:
+            continue
+        if iv >= 0:
+            blds[k] = iv
+
+    text, has_bom = _read_bom_text(p)
+    loc = _state_locate(text)
+    if not loc:
+        return {"ok": False, "msg": "文件里找不到 state = { } 块"}
+    b, e = loc
+    body = text[b + 1:e - 1]
+
+    diff = []
+    old_owner = s.get("owner", "")
+    old_cores = list(s.get("cores", []))
+    old_man = s.get("manpower", "")
+    old_cat = s.get("category", "")
+    old_blds = dict(s.get("buildings", {}))
+
+    hist = _state_history_range(body)
+    hb, he = hist if hist else (0, len(body))
+
+    if owner and owner != old_owner:
+        before = body
+        if hist:
+            body = _set_in_scope(body, "owner", owner, 1, hb, he)
+            if body == before:
+                body = _set_in_scope(body, "owner", owner, 2, hb, he)
+            if body == before:
+                body = _set_in_scope(body, "owner", owner, 1, hb, he, insert=True)
+        else:
+            body = _set_in_scope(body, "owner", owner, 0, 0, len(body), insert=True)
+        if body != before:
+            diff.append({"key": "owner", "label": "所属国家", "old": old_owner, "new": owner})
+
+    if fields.get("cores") is not None and cores != old_cores:
+        if hist:
+            body = _drop_in_scope(body, "add_core_of", (1, 2), hb, he)
+            if cores:
+                # 删过行后原来的 hb/he 已失效，重新定位 history 块再插
+                hist2 = _state_history_range(body)
+                ins = "\n".join("\t\tadd_core_of = %s" % c for c in cores)
+                if hist2:
+                    hb2, he2 = hist2
+                    pos = _insert_pos(body, hb2, he2)
+                    body = body[:pos] + "\n" + ins + body[pos:]
+                else:
+                    body = body.rstrip() + "\n" + ins + "\n"
+        else:
+            body = _drop_in_scope(body, "add_core_of", (0,), 0, len(body))
+            if cores:
+                ins = "\n".join("\tadd_core_of = %s" % c for c in cores)
+                body = body.rstrip() + "\n" + ins + "\n"
+        diff.append({"key": "cores", "label": "核心", "old": ",".join(old_cores), "new": ",".join(cores)})
+
+    if man and man != old_man:
+        body = _set_in_scope(body, "manpower", man, 0, 0, len(body), insert=True)
+        diff.append({"key": "manpower", "label": "人力", "old": old_man, "new": man})
+
+    if cat and cat != old_cat:
+        body = _set_in_scope(body, "state_category", cat, 0, 0, len(body), insert=True)
+        diff.append({"key": "category", "label": "州类别", "old": old_cat, "new": cat})
+
+    for k in sorted(blds):
+        v = blds[k]
+        if old_blds.get(k, None) == v:
+            continue
+        body = _set_building(body, k, v)
+        diff.append({"key": "b_" + k, "label": "建筑 " + k,
+                     "old": str(old_blds.get(k, "")), "new": str(v)})
+
+    if not diff:
+        return {"ok": True, "msg": "没有改动", "diff": []}
+    new_text = text[:b + 1] + body + text[e - 1:]
+    snapshot(p)
+    _write_bom_text(p, new_text, has_bom)
+    reload_data()
+    link_countries()
+    return {"ok": True, "msg": "已写入 " + rel, "diff": diff}
 
 
 def link_countries():
@@ -2780,6 +3075,11 @@ class Handler(SimpleHTTPRequestHandler):
             self._send(fs_list(qs.get("path", [""])[0]))
         elif path_only == "/api/countries":
             self._send(countries_payload())
+        elif path_only == "/api/states":
+            self._send(states_payload())
+        elif path_only == "/api/state":
+            qs = parse_qs(urlparse(self.path).query)
+            self._send(state_detail(qs.get("id", [""])[0]))
         elif path_only == "/api/country":
             qs = parse_qs(urlparse(self.path).query)
             self._send(country_detail(qs.get("tag", [""])[0]))
@@ -2912,6 +3212,8 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path == "/api/delete_tree":
             ok, msg = delete_tree(body.get("root"), body.get("file"), body.get("id"))
             self._send({"ok": ok, "msg": msg})
+        elif self.path == "/api/state_save":
+            self._send(state_save(body.get("id", ""), body.get("fields") or {}))
         elif self.path == "/api/country_save":
             self._send(country_history_save(body.get("tag", ""), body.get("fields") or {}))
         elif self.path == "/api/idea_save":

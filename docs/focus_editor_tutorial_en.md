@@ -192,3 +192,16 @@ Pick a country in the country hub and click "Edit history" to change `history/co
   after saving, every changed field is listed as old -> new;
 - unknown ideas or focus trees produce a warning but are still written (useful when scaffolding first);
 - if the country has no history file yet, saving creates a new `TAG - Name.txt`.
+
+## v0.57 States
+
+Sidebar "States" (or click a state in the country hub):
+
+- Left: all states (first 400, filter by id / name / owner) with owner and manpower.
+- Right: owner, core count, manpower, state category, province count, victory points, total buildings, history date.
+- Editable: **owner**, **cores (add_core_of, multiple)**, **manpower**, **state category** and **state-level buildings**
+  (infrastructure / arms_factory / industrial_complex / dockyard / air_base and friends).
+- Only filled fields are written - comments, the `history` date block and province-level building blocks
+  (e.g. `111 = { naval_base = 1 }`) stay untouched.
+- A backup is created before writing and the changes are listed as old -> new.
+- Province list and victory points are shown read-only for reference.
