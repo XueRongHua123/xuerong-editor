@@ -690,6 +690,8 @@
           <input type="text" id="histOob" placeholder='例如 "AFR_1999"'>
           <div class="k">开局科技（每行一个 tech id；清空 = 不写 set_technology）</div>
           <textarea id="histTechs" style="height:104px" placeholder="infantry_weapons&#10;tech_support_weapons"></textarea>
+          <div class="k">初始外交 add_opinion（每行「TAG 数值」，如 <code>EUR 50</code>；清空 = 不写）</div>
+          <textarea id="histOpinions" style="height:64px" placeholder="EUR 50"></textarea>
           <div class="k">开局精神（每行一个 idea id；清空 = 不写这一项）</div>
           <textarea id="histIdeas" style="height:88px" placeholder="mvlv_unf&#10;tsf_production"></textarea>
           <div id="histWarn" class="hist-warn"></div>
@@ -901,6 +903,12 @@
   </div>
   <div id="techTreePane" style="display:none;flex-direction:column;flex:1;min-height:0;position:relative">
     <div id="techFolderTabs" class="tt-tabs"></div>
+    <div id="ttTools" style="display:flex;gap:6px;align-items:center;padding:0 0 6px">
+      <button class="btn" id="ttEditToggle" title="打开后可以拖动科技节点改它在树上的位置">✏️ 拖动改位置</button>
+      <button class="btn" id="ttSavePos" title="把拖动后的 folder.position 写回文件">💾 保存位置</button>
+      <span id="ttPosHint" style="font-size:11px;color:var(--muted)"></span>
+    </div>
+
     <button class="btn" id="ttFit" style="position:absolute;right:12px;top:8px;z-index:3">适应</button>
     <svg id="techSvg"><g id="ttView"></g></svg>
     <div id="techDetail" class="tt-detail"></div>
@@ -2026,6 +2034,103 @@ function techFolderNames(){
   return Array.from(set).sort();
 }
 let ttView = {x:0, y:0, k:1}, ttFolder = '', ttDrag = null;
+
+/* ---------- v0.59 科技树位置编辑 ---------- */
+let ttEdit = false, ttOrigin = null, ttDirty = new Map(), ttDragNode = null;
+
+function ttUpdateHint(){
+  const btn = document.getElementById('ttSavePos');
+  const hint = document.getElementById('ttPosHint');
+  if(!btn || !hint) return;
+  const n = ttDirty.size;
+  btn.textContent = n ? ('💾 保存位置（' + n + '）') : '💾 保存位置';
+  btn.classList.toggle('primary', n > 0);
+  if(!ttOrigin){
+    hint.textContent = '这个 folder 里的科技还没有 position，先在文件里设置后再拖';
+  } else if(ttEdit){
+    hint.textContent = n ? ('已改 ' + n + ' 个，点保存写回 folder.position') : '拖动节点改位置，松手后点保存';
+  } else {
+    hint.textContent = '写回的是 folder.position 的 x / y，和游戏读的是同一处';
+  }
+}
+
+function ttToggleEdit(){
+  ttEdit = !ttEdit;
+  document.getElementById('ttEditToggle').classList.toggle('on', ttEdit);
+  updateTechTreeShell();
+  status(ttEdit ? '科技树位置编辑已开启：拖动节点，然后点「保存位置」' : '科技树位置编辑已关闭');
+}
+
+function updateTechTreeShell(){
+  const svg = document.getElementById('techSvg');
+  if(svg) svg.style.cursor = ttEdit ? 'default' : '';
+  if(ttFolder) drawTechTree(ttFolder);
+  ttUpdateHint();
+}
+
+function ttStartDrag(ev, node){
+  if(!ttEdit || !ttOrigin) return;
+  ev.stopPropagation(); ev.preventDefault();
+  const t = ((DATA && DATA.techs) || []).find(x=>x.id === node.dataset.id);
+  if(!t) return;
+  const m = /translate\(([-\d.]+),([-\d.]+)\)/.exec(node.getAttribute('transform')) || [0, 0, 0];
+  ttDragNode = { node, t, ox: parseFloat(m[1]), oy: parseFloat(m[2]), sx: ev.clientX, sy: ev.clientY };
+  window.addEventListener('mousemove', ttOnDrag);
+  window.addEventListener('mouseup', ttEndDrag, { once: true });
+}
+
+function ttScale(){
+  const svg = document.getElementById('techSvg');
+  const r = svg.getBoundingClientRect();
+  const vb = svg.viewBox && svg.viewBox.baseVal;
+  const base = (vb && vb.width) ? (vb.width / r.width) : 1;
+  return base / (ttView.k || 1);
+}
+
+function ttOnDrag(ev){
+  if(!ttDragNode) return;
+  const s = ttScale();
+  const nx = ttDragNode.ox + (ev.clientX - ttDragNode.sx) * s;
+  const ny = ttDragNode.oy + (ev.clientY - ttDragNode.sy) * s;
+  ttDragNode.nx = nx; ttDragNode.ny = ny;
+  ttDragNode.node.setAttribute('transform', 'translate(' + nx + ',' + ny + ')');
+}
+
+function ttEndDrag(){
+  window.removeEventListener('mousemove', ttOnDrag);
+  if(!ttDragNode) return;
+  const d = ttDragNode; ttDragNode = null;
+  if(d.nx == null) return;
+  const fx = Math.round((d.nx - 120) / 300 + ttOrigin.minx);
+  const fy = Math.round((d.ny - 70) / 110 + ttOrigin.miny);
+  const snappedX = 120 + (fx - ttOrigin.minx) * 300;
+  const snappedY = 70 + (fy - ttOrigin.miny) * 110;
+  d.node.setAttribute('transform', 'translate(' + snappedX + ',' + snappedY + ')');
+  d.t.fx = fx; d.t.fy = fy;
+  ttDirty.set(d.t.id, { id: d.t.id, x: fx, y: fy, file: d.t.file, source: d.t.source });
+  ttUpdateHint();
+  status(d.t.id + '：x=' + fx + ' y=' + fy + '（未保存）');
+}
+
+async function ttSavePositions(){
+  if(!ttDirty.size){ status('没有改过位置'); return; }
+  const items = [...ttDirty.values()];
+  let ok = 0, fail = [];
+  for(const it of items){
+    try{
+      const r = await (await fetch('/api/tech_move', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({root: rootByName(it.source), rel: it.file, tid: it.id, x: it.x, y: it.y})})).json();
+      if(r.ok) ok++; else fail.push(it.id + '：' + (r.msg || '失败'));
+    }catch(e){ fail.push(it.id + '：' + e.message); }
+  }
+  ttDirty.clear();
+  if(ok) await loadData();
+  updateTechTreeShell();
+  if(fail.length) status('保存 ' + ok + ' 个，失败 ' + fail.length + '：' + fail[0], true);
+  else status('已保存 ' + ok + ' 个科技的位置（写回 folder.position）');
+}
+
+
 function applyTT(){
   const v = document.getElementById('ttView');
   if(v) v.setAttribute('transform', 'translate(' + ttView.x + ',' + ttView.y + ') scale(' + ttView.k + ')');
@@ -2039,6 +2144,7 @@ function drawTechTree(folder){
     const xs = list.map(t=>typeof t.fx === 'number' ? t.fx : 0);
     const ys = list.map(t=>typeof t.fy === 'number' ? t.fy : 0);
     const minx = Math.min.apply(null, xs), miny = Math.min.apply(null, ys);
+    ttOrigin = {minx: minx, miny: miny};
     list.forEach(t=>{
       const x = typeof t.fx === 'number' ? t.fx : 0;
       const y = typeof t.fy === 'number' ? t.fy : 0;
@@ -2046,6 +2152,7 @@ function drawTechTree(folder){
       maxRow = Math.max(maxRow, y - miny);
     });
   } else {
+    ttOrigin = null;
     const byYear = {};
     list.forEach(t=>{ const y = t.year || '?'; (byYear[y] = byYear[y] || []).push(t); });
     const years = Object.keys(byYear).sort((a,b)=>(parseInt(a)||9999)-(parseInt(b)||9999) || a.localeCompare(b));
@@ -2137,12 +2244,14 @@ function drawTechTree(folder){
   const w = Math.max(400, maxX + 140), h = 70 + (maxRow + 1) * 110 + 80;
   view.dataset.w = w; view.dataset.h = h;
   view.querySelectorAll('.tt-node').forEach(n=>{
+    n.addEventListener('mousedown', e=>ttStartDrag(e, n));
     n.addEventListener('click', e=>{
       e.stopPropagation();
       const t = ((DATA && DATA.techs) || []).find(x=>x.id === n.dataset.id);
       if(t){ showTechDetail(t); }
     });
   });
+  ttUpdateHint();
   view.querySelectorAll('.tt-link').forEach(h=>{
     h.addEventListener('mousedown', ev=>{
       ev.stopPropagation(); ev.preventDefault();
@@ -3303,6 +3412,8 @@ document.getElementById('techDelete').onclick = deleteTechSel;
 document.getElementById('techTabEdit').onclick = ()=>switchTechTab('edit');
 document.getElementById('techTabTree').onclick = ()=>switchTechTab('tree');
 document.getElementById('ttFit').onclick = fitTT;
+document.getElementById('ttEditToggle').onclick = ttToggleEdit;
+document.getElementById('ttSavePos').onclick = ttSavePositions;
 (function(){
   const svg = document.getElementById('techSvg');
   svg.addEventListener('wheel', e=>{
@@ -4151,6 +4262,8 @@ async function loadHistoryIntoForm(){
   document.getElementById('histPopN').value = pops.neutrality != null ? pops.neutrality : '';
   document.getElementById('histOob').value = f.oob || '';
   document.getElementById('histTechs').value = (f.techs || []).join('\n');
+  document.getElementById('histOpinions').value =
+    (f.opinions || []).map(p=>p[0] + ' ' + p[1]).join('\n');
   document.getElementById('histSave').disabled = !d.writable;
 }
 
@@ -4167,6 +4280,9 @@ async function saveHistory(){
     ideas: ideasRaw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),
     oob: document.getElementById('histOob').value.trim(),
     techs: document.getElementById('histTechs').value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),
+    opinions: document.getElementById('histOpinions').value.split(/\r?\n/)
+      .map(s=>s.trim()).filter(Boolean)
+      .map(s=>{ const p = s.split(/[,，\s]+/); return [p[0], Number(p[1] || 0)]; }),
     popularities: {
       democratic: document.getElementById('histPopD').value,
       fascism: document.getElementById('histPopF').value,

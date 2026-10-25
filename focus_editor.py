@@ -998,6 +998,89 @@ def _set_victory_points(body, vps):
     return body.rstrip() + "\n" + block + "\n"
 
 
+def _tech_block_range(text, tid):
+    """定位科技块：优先顶层，其次嵌套在 folder/分组块里的同名键"""
+    pats = [re.compile(r'(?m)^[ \t]*%s\s*=\s*\{' % re.escape(tid))]
+    for pat in pats:
+        for m in pat.finditer(text):
+            b = text.find('{', m.end() - 1)
+            if b < 0:
+                continue
+            e = brace_match(text, b)
+            body = text[b + 1:e - 1]
+            # 看起来像科技块：有 folder / path / enable_* / research_cost 之一
+            if re.search(r'(?m)^[ \t]*(folder|path|enable_equipments|research_cost|start_year|year)\s*=', body):
+                return b, e
+    return None
+
+
+def tech_move(root, rel, tid, x, y):
+    """把科技在树上的位置写回 folder.position 的 x/y（游戏读的就是这两个数）"""
+    if not root or not rel or not tid:
+        return {"ok": False, "msg": "参数不完整"}
+    if is_under_game(root):
+        return {"ok": False, "msg": "原版目录只读：请先复制到自己的模组再修改"}
+    p = os.path.join(root, rel)
+    if not os.path.exists(p):
+        return {"ok": False, "msg": "找不到文件：" + rel}
+    try:
+        x = int(round(float(x)))
+        y = int(round(float(y)))
+    except Exception:
+        return {"ok": False, "msg": "坐标必须是整数"}
+
+    text, has_bom = _read_bom_text(p)
+    loc = _tech_block_range(text, tid)
+    if not loc:
+        return {"ok": False, "msg": "找不到科技块：" + tid}
+    b, e = loc
+    block = text[b + 1:e - 1]
+
+    fm = re.search(r'(?m)^[ \t]*folder\s*=\s*\{', block)
+    if not fm:
+        return {"ok": False, "msg": "这个科技没有 folder 块，先在文件里给它加 folder = { name = ... } 再拖"}
+    fb = block.find('{', fm.end() - 1)
+    fe = brace_match(block, fb)
+    finner = block[fb + 1:fe - 1]
+
+    pm = re.search(r'(?m)^[ \t]*position\s*=\s*\{', finner)
+    if pm:
+        pb = finner.find('{', pm.end() - 1)
+        pe = brace_match(finner, pb)
+        pinner = finner[pb + 1:pe - 1]
+        px = re.compile(r'(?m)(^|[ \t{])x\s*=\s*[^\s\r\n}]+')
+        py = re.compile(r'(?m)(^|[ \t{])y\s*=\s*[^\s\r\n}]+')
+        if px.search(pinner):
+            pinner2 = px.sub(lambda m: m.group(1) + "x = %d" % x, pinner, count=1)
+        else:
+            pinner2 = " x = %d" % x + pinner
+        if py.search(pinner2):
+            pinner2 = py.sub(lambda m: m.group(1) + "y = %d" % y, pinner2, count=1)
+        else:
+            pinner2 = pinner2.rstrip() + " y = %d" % y
+        finner2 = finner[:pb + 1] + pinner2 + finner[pe - 1:]
+    else:
+        nm = re.search(r'(?m)^([ \t]*)name\s*=\s*[^\s\r\n]+', finner)
+        line = "position = { x = %d y = %d }" % (x, y)
+        if nm:
+            indent = nm.group(1) or "\t\t\t"
+            finner2 = finner[:nm.end()] + "\n" + indent + line + finner[nm.end():]
+        else:
+            indent = "\t\t\t"
+            finner2 = finner.rstrip() + "\n" + indent + line + "\n\t\t"
+
+    block2 = block[:fb + 1] + finner2 + block[fe - 1:]
+    new_text = text[:b + 1] + block2 + text[e - 1:]
+    if new_text == text:
+        return {"ok": True, "msg": "坐标没变"}
+    snapshot(p)
+    _write_bom_text(p, new_text, has_bom)
+    if tid in TECHS:
+        TECHS[tid]["fx"] = x
+        TECHS[tid]["fy"] = y
+    return {"ok": True, "msg": "%s → x=%d y=%d" % (tid, x, y), "x": x, "y": y}
+
+
 def state_detail(sid):
     try:
         sid = int(sid)
@@ -1021,7 +1104,7 @@ def state_detail(sid):
         "manpower": s.get("manpower", ""),
         "category": s.get("category", ""),
         "history_date": s.get("history_date", ""),
-        "provinces": s.get("provinces", [])[:80],
+        "provinces": s.get("provinces", [])[:300],
         "province_count": s.get("province_count", 0),
         "buildings": s.get("buildings", {}),
         "province_buildings": s.get("province_buildings", {}),
@@ -1385,6 +1468,38 @@ def _hist_party_of(text):
     return mm.group(1).strip() if mm else ""
 
 
+# v0.59 初始外交
+def _hist_opinions(text):
+    """读取 add_opinion 块，返回 [[tag, value], ...]"""
+    out = []
+    for m in re.finditer(r'(?m)^[ \t]*add_opinion\s*=\s*\{', text):
+        b = text.find('{', m.end() - 1)
+        e = brace_match(text, b)
+        if e <= b:
+            continue
+        body = text[b + 1:e - 1]
+        t = _first(body, r'(?m)^[ \t]*target\s*=\s*([A-Z0-9]{2,4})')
+        v = _first(body, r'(?m)^[ \t]*(?:value|opinion)\s*=\s*(-?\d+)')
+        if t:
+            out.append([t, int(v or 0)])
+    return out
+
+
+def _hist_set_opinions(text, pairs):
+    """删掉所有 add_opinion 块再按 pairs 重建（顶层）"""
+    for _ in range(40):
+        m = _hist_find_top(text, re.compile(r'(?m)^[ \t]*add_opinion\s*=\s*\{'))
+        if not m:
+            break
+        b = text.find('{', m.end() - 1)
+        e = brace_match(text, b)
+        line_start = text.rfind("\n", 0, m.start()) + 1
+        text = text[:line_start] + text[e:]
+    for tag, val in pairs:
+        text = text.rstrip() + "\nadd_opinion = {\n\ttarget = %s\n\tvalue = %d\n}\n" % (tag, val)
+    return text
+
+
 def country_history_raw(tag):
     c, root, p = _hist_path(tag)
     if not c:
@@ -1411,6 +1526,7 @@ def country_history_raw(tag):
         "oob": top_val(r'(?m)^[ \t]*oob\s*=\s*"([^"]+)"'),
         "techs": [k for k, v, hb in top_items(_hist_block_body(body, "set_technology")) if not hb],
         "popularities": _hist_popularities(body),
+        "opinions": _hist_opinions(body),
     }
     return {"ok": True, "exists": True, "writable": writable, "file": c.get("history_file", ""),
             "root": root, "text": text[:60000], "fields": fields}
@@ -1551,6 +1667,7 @@ def country_history_save(tag, fields):
             "oob": c.get("oob", ""),
             "popularities": ",".join("%s=%d" % (k, v) for k, v in
                                      sorted(_hist_popularities(before).items())),
+            "opinions": ",".join("%s:%d" % (t4, v4) for t4, v4 in _hist_opinions(before)),
         }
         new = dict(old)
         for key, mlkey in HIST_KEYS.items():
@@ -1578,6 +1695,19 @@ def country_history_save(tag, fields):
             if oob:
                 text = _hist_set_scalar(text, "oob", '"%s"' % oob)
             new["oob"] = oob
+        if fields.get("opinions") is not None:
+            pairs = []
+            for pair in fields.get("opinions") or []:
+                try:
+                    tag2, val2 = pair[0], int(pair[1])
+                except Exception:
+                    continue
+                if tag2 in COUNTRIES:
+                    pairs.append((tag2, val2))
+            old_pairs = _hist_opinions(before)
+            if pairs != old_pairs:
+                text = _hist_set_opinions(text, pairs)
+                new["opinions"] = ",".join("%s:%d" % (t3, v3) for t3, v3 in pairs)
         if fields.get("popularities") is not None:
             pops = {}
             for k, v in (fields.get("popularities") or {}).items():
@@ -1593,7 +1723,7 @@ def country_history_save(tag, fields):
         shown = {"capital": "首都", "ruling_party": "执政党", "political_power": "政治点",
                  "stability": "稳定度修正", "war_support": "战争支持修正", "ideas": "开局精神",
                  "focus_tree": "国策树", "techs": "开局科技", "oob": "部队编成 oob",
-                 "popularities": "政党支持度"}
+                 "popularities": "政党支持度", "opinions": "初始外交"}
         for k, label in shown.items():
             if old.get(k, "") != new.get(k, ""):
                 diff.append({"key": k, "label": label, "old": old.get(k, ""), "new": new.get(k, "")})
@@ -1630,6 +1760,50 @@ def country_history_save(tag, fields):
     reload_data()
     link_countries()
     return {"ok": True, "msg": "已写入 " + (c.get("history_file") or tag), "diff": diff, "warnings": warnings}
+
+
+# v0.59 国策引用体检
+def _focus_refs():
+    """从 national_focus 原文里收集 add_ideas / has_idea / country_event 引用"""
+    ideas, events = [], []
+    for root in ROOTS:
+        d = os.path.join(root, "common", "national_focus")
+        if not os.path.isdir(d):
+            continue
+        name = os.path.basename(root.rstrip("\\/")) or root
+        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+            rel = os.path.join("common", "national_focus", fn)
+            try:
+                text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
+            except Exception:
+                continue
+            for m in re.finditer(r'(?m)^[ \t]*(?:focus|shared_focus)\s*=\s*\{', text):
+                b = text.find('{', m.end() - 1)
+                e = brace_match(text, b)
+                if e <= b:
+                    continue
+                body = text[b + 1:e - 1]
+                fid = _first(body, r'(?m)^[ \t]*id\s*=\s*"?([A-Za-z0-9_.\-]+)')
+                if not fid:
+                    continue
+                tree = ""
+                for tid, t in TREES.items():
+                    if t.get("file") == rel and t.get("source") == name:
+                        tree = tid
+                        break
+                for im in re.finditer(r'(?m)^[ \t]*add_ideas\s*=\s*([A-Za-z0-9_]+)', body):
+                    ideas.append({"focus": fid, "id": im.group(1), "where": "add_ideas",
+                                  "file": rel, "tree": tree})
+                for im in re.finditer(r'add_ideas\s*=\s*\{([^}]*)\}', body):
+                    for iid in re.findall(r'[A-Za-z0-9_]+', im.group(1)):
+                        ideas.append({"focus": fid, "id": iid, "where": "add_ideas",
+                                      "file": rel, "tree": tree})
+                for im in re.finditer(r'(?m)^[ \t]*has_idea\s*=\s*([A-Za-z0-9_]+)', body):
+                    ideas.append({"focus": fid, "id": im.group(1), "where": "has_idea",
+                                  "file": rel, "tree": tree})
+                for im in re.finditer(r'(?:country_event|news_event|state_event)\s*=\s*\{\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)', body):
+                    events.append({"focus": fid, "id": im.group(1), "file": rel, "tree": tree})
+    return {"ideas": ideas, "events": events}
 
 
 def lint_project(limit=1500):
@@ -1685,6 +1859,21 @@ def lint_project(limit=1500):
             if ref not in EVENTS:
                 add("warn", "event", "事件 %s 触发了不存在的事件 %s" % (eid, ref), ev.get("file", ""),
                     {"type": "event", "id": eid})
+
+    # v0.59：国策里的引用
+    try:
+        refs = _focus_refs()
+    except Exception as e:
+        refs = {"ideas": [], "events": []}
+        print("focus refs fail:", e)
+    for r in refs["ideas"]:
+        if r["id"] not in IDEAS:
+            add("warn", "focus", "国策 %s 的 %s 引用了不存在的国家精神 %s" % (r["focus"], r["where"], r["id"]),
+                r["file"], {"type": "tree", "id": r["tree"]})
+    for r in refs["events"]:
+        if r["id"] not in EVENTS:
+            add("warn", "focus", "国策 %s 触发了不存在的事件 %s" % (r["focus"], r["id"]),
+                r["file"], {"type": "tree", "id": r["tree"]})
 
     for it in missing_loc()[:limit]:
         add("warn", "loc", "缺本地化：%s" % it.get("key", ""), it.get("file", ""),
@@ -3358,6 +3547,9 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path == "/api/delete_tree":
             ok, msg = delete_tree(body.get("root"), body.get("file"), body.get("id"))
             self._send({"ok": ok, "msg": msg})
+        elif self.path == "/api/tech_move":
+            self._send(tech_move(body.get("root", ""), body.get("rel", ""),
+                                 body.get("tid", ""), body.get("x", 0), body.get("y", 0)))
         elif self.path == "/api/state_save":
             self._send(state_save(body.get("id", ""), body.get("fields") or {}))
         elif self.path == "/api/country_save":
