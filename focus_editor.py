@@ -2443,7 +2443,163 @@ def _map_files_layered(root):
     return None, None, None, layers
 
 
+# v0.94 地图像素编辑地基：原位写 bmp + 区块撤销
+import struct
+
+
+def bmp_info(path):
+    """读 BMP 头，返回 (width, height, bpp, data_offset, row_size, top_down)"""
+    with open(path, "rb") as f:
+        head = f.read(54)
+        if len(head) < 54 or head[:2] != b"BM":
+            return None
+        data_off = struct.unpack("<I", head[10:14])[0]
+        w = struct.unpack("<i", head[18:22])[0]
+        h = struct.unpack("<i", head[22:26])[0]
+        bpp = struct.unpack("<H", head[28:30])[0]
+        top_down = h < 0
+        h = abs(h)
+        row_size = ((w * bpp // 8) + 3) // 4 * 4
+        return {"w": w, "h": h, "bpp": bpp, "offset": data_off,
+                "row": row_size, "top_down": top_down, "bytes_pp": bpp // 8}
+
+
+def bmp_read_rect(path, x0, y0, w, h):
+    """读矩形区域的原始像素（RGB 三元组列表，行优先）"""
+    info = bmp_info(path)
+    if not info or info["bpp"] != 24:
+        return None
+    out = []
+    with open(path, "rb") as f:
+        for y in range(y0, y0 + h):
+            row_idx = y if info["top_down"] else (info["h"] - 1 - y)
+            f.seek(info["offset"] + row_idx * info["row"] + x0 * 3)
+            data = f.read(w * 3)
+            for i in range(0, len(data), 3):
+                out.append((data[i + 2], data[i + 1], data[i]))   # BGR -> RGB
+    return out
+
+
+def bmp_write_rect(path, x0, y0, w, h, pixels):
+    """把 RGB 像素列表原位写回 bmp（不重存文件，保持原有结构）"""
+    info = bmp_info(path)
+    if not info or info["bpp"] != 24:
+        return False
+    buf = bytearray()
+    for (r, g, b) in pixels:
+        buf += bytes((b, g, r))
+    with open(path, "r+b") as f:
+        stride = w * 3
+        for row in range(h):
+            row_idx = (y0 + row) if info["top_down"] else (info["h"] - 1 - (y0 + row))
+            f.seek(info["offset"] + row_idx * info["row"] + x0 * 3)
+            f.write(bytes(buf[row * stride:(row + 1) * stride]))
+    return True
+
+
+MAP_EDIT = {"pending": [], "undo": [], "redo": [], "file": "", "touched": set()}
+MAP_UNDO_DIR = os.path.join(WORK, "mapundo")
+
+
+def map_edit_begin(bmp_path):
+    """开始一次地图编辑事务：清空待提交队列"""
+    MAP_EDIT["pending"] = []
+    MAP_EDIT["file"] = bmp_path
+    MAP_EDIT["touched"] = set()
+    return True
+
+
+def map_edit_dab(bmp_path, x, y, radius, rgb):
+    """在事务里画一笔（圆），记录待写像素；返回实际影响的像素数"""
+    info = bmp_info(bmp_path)
+    if not info:
+        return 0
+    w, h = info["w"], info["h"]
+    n = 0
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            if dx * dx + dy * dy > radius * radius:
+                continue
+            px, py = x + dx, y + dy
+            if 0 <= px < w and 0 <= py < h:
+                MAP_EDIT["pending"].append((px, py, rgb))
+                MAP_EDIT["touched"].add((px, py))
+                n += 1
+    return n
+
+
+def map_edit_commit(bmp_path=None):
+    """提交事务：先保存受影响区域的原始像素（供撤销），再原位写入"""
+    bmp_path = bmp_path or MAP_EDIT.get("file")
+    pend = MAP_EDIT.get("pending") or []
+    if not bmp_path or not pend:
+        return {"ok": False, "msg": "没有待写入的像素"}
+    info = bmp_info(bmp_path)
+    if not info:
+        return {"ok": False, "msg": "读不到 bmp 头"}
+    xs = [p[0] for p in pend]
+    ys = [p[1] for p in pend]
+    x0, x1 = min(xs), max(xs)
+    y0, y1 = min(ys), max(ys)
+    w, h = x1 - x0 + 1, y1 - y0 + 1
+    before = bmp_read_rect(bmp_path, x0, y0, w, h)
+    if before is None:
+        return {"ok": False, "msg": "只支持 24 位 BMP"}
+    # 组装新像素
+    grid = {(px - x0, py - y0): rgb for (px, py, rgb) in pend}
+    after = list(before)
+    for (gx, gy), rgb in grid.items():
+        after[gy * w + gx] = rgb
+    bmp_write_rect(bmp_path, x0, y0, w, h, after)
+    # 存撤销区块
+    os.makedirs(MAP_UNDO_DIR, exist_ok=True)
+    seq = int(time.time() * 1000)
+    fn = os.path.join(MAP_UNDO_DIR, "u%d_%d_%d_%d_%d.bin" % (seq, x0, y0, w, h))
+    with open(fn, "wb") as f:
+        for (r, g, b) in before:
+            f.write(bytes((r, g, b)))
+    MAP_EDIT["undo"].append({"file": fn, "bmp": bmp_path, "x": x0, "y": y0, "w": w, "h": h,
+                             "count": len(pend)})
+    MAP_EDIT["redo"] = []
+    MAP_EDIT["pending"] = []
+    MAP_EDIT["touched"] = set()
+    return {"ok": True, "pixels": len(pend), "rect": [x0, y0, w, h], "undo_depth": len(MAP_EDIT["undo"])}
+
+
+def map_edit_undo():
+    if not MAP_EDIT["undo"]:
+        return {"ok": False, "msg": "没有可撤销的地图编辑"}
+    u = MAP_EDIT["undo"].pop()
+    cur = bmp_read_rect(u["bmp"], u["x"], u["y"], u["w"], u["h"])
+    prev = []
+    with open(u["file"], "rb") as f:
+        data = f.read()
+    for i in range(0, len(data), 3):
+        prev.append((data[i], data[i + 1], data[i + 2]))
+    bmp_write_rect(u["bmp"], u["x"], u["y"], u["w"], u["h"], prev)
+    MAP_EDIT["redo"].append({"file": u["file"], "bmp": u["bmp"], "x": u["x"], "y": u["y"],
+                             "w": u["w"], "h": u["h"], "current": cur, "count": u["count"]})
+    return {"ok": True, "restored": u["count"], "undo_depth": len(MAP_EDIT["undo"])}
+
+
+def map_edit_redo():
+    if not MAP_EDIT["redo"]:
+        return {"ok": False, "msg": "没有可重做的地图编辑"}
+    r = MAP_EDIT["redo"].pop()
+    # 用当前值回写，再压回 undo
+    bmp_write_rect(r["bmp"], r["x"], r["y"], r["w"], r["h"], r["current"])
+    MAP_EDIT["undo"].append({"file": r["file"], "bmp": r["bmp"], "x": r["x"], "y": r["y"],
+                             "w": r["w"], "h": r["h"], "count": r["count"]})
+    return {"ok": True, "undo_depth": len(MAP_EDIT["undo"])}
+
+
+def map_edit_state():
+    return {"ok": True, "undo": len(MAP_EDIT["undo"]), "redo": len(MAP_EDIT["redo"]),
+            "pending": len(MAP_EDIT.get("pending") or []), "file": MAP_EDIT.get("file") or ""}
+
+
 def _map_files_strict(root):
+
     """严格模式：沿叠加链找地图（子 mod 没有地图时用父 mod 的），整条链都没有才返回 None。
     返回的地图 bmp 可能来自父 mod，但 base 仍报请求的 root，便于界面区分"数据来自哪里"。"""
     if not root:
@@ -5351,6 +5507,24 @@ class Handler(SimpleHTTPRequestHandler):
                                  body.get("tid", ""), body.get("x", 0), body.get("y", 0)))
         elif self.path == "/api/state_province":
             self._send(state_province_edit(body.get("pid"), body.get("target")))
+        elif self.path == "/api/map_paint":
+            act = body.get("act") or ""
+            if act == "begin":
+                r = {"ok": map_edit_begin(body.get("bmp") or MAP_EDIT.get("file") or "")}
+            elif act == "dab":
+                nx = map_edit_dab(MAP_EDIT.get("file") or body.get("bmp"), int(body.get("x", 0)),
+                                  int(body.get("y", 0)), int(body.get("r", 2)),
+                                  tuple(body.get("rgb") or (255, 0, 255)))
+                r = {"ok": True, "pixels": nx}
+            elif act == "commit":
+                r = map_edit_commit()
+            elif act == "undo":
+                r = map_edit_undo()
+            elif act == "redo":
+                r = map_edit_redo()
+            else:
+                r = map_edit_state()
+            self._send(r)
         elif self.path == "/api/map_integrity":
             self._send(map_integrity(body.get("root") or None))
         elif self.path == "/api/map_cache_clear":
