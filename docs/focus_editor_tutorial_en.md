@@ -222,3 +222,40 @@ Sidebar "States" (or click a state in the country hub):
 - Setting a building to 0 removes that province block; leaving it empty keeps the current value.
   State-level buildings stay in the editor above.
 - Victory points are written back as (province, value) pairs; clearing them all deletes the `victory_points` block.
+
+## Added in v0.67–v0.72
+
+**Script check** (sidebar "🔍 脚本检查")
+
+- Lists every `scripted_trigger` / `scripted_effect` in the mod with type, file and how many times
+  `name =` appears across the project. A count of 1 means only the definition itself — flagged as "likely unused"
+  (references that are commented out don't count).
+- Search (Chinese names supported), filter by type, sort by refs / name / file; empty blocks are marked.
+
+**Starting equipment variants** (Country hub → History)
+
+- Read-only list of existing `create_equipment_variant` (name / chassis / module count).
+- "＋ New variant" asks for name, chassis type, icon and one `slot = module` per line, then writes the block.
+  "Delete" on each row removes the block after confirmation. Everything is snapshotted first and can be rolled back
+  from "🕘 Backups".
+
+**Streaming AI**
+
+- Text appears token by token; a "Stop" button aborts the request and keeps what already arrived.
+- Elapsed time shown above the answer (`✓ 651ms · streaming`); recent questions can be recalled.
+
+**Command palette recents**
+
+- `Ctrl+K` with an empty query shows "Recently used · N" (up to 8), which disappears once you type.
+
+**Map** (sidebar "🗺 地图")
+
+- First "Build layers" run takes ~13 s (5632×2048, 13264 provinces), then it opens from cache instantly.
+- Four stacked layers — province colours / states / borders / base map — each with its own toggle and opacity.
+- Wheel zooms at the cursor, drag pans, "Fit" fills the view; hover shows "province N · state M".
+- Single click selects a province, **double click opens that state panel**; the search box jumps to a province or state id.
+
+**Node density & narrow windows**
+
+- Toolbar "紧凑 / 标准 / 舒适" switches focus-node size (remembered locally).
+- Below 1100 px wide, save / export / backups / library / tutorial collapse into "⋯ more" and the toolbar wraps.
