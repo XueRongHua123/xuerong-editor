@@ -2202,12 +2202,34 @@ def _map_files(root):
     return None, None, None
 
 
+def _dir_mtime(p):
+    """目录下所有 .txt 的最大 mtime（文件内容变动也会反映出来）"""
+    if not os.path.isdir(p):
+        return 0
+    mt = 0
+    try:
+        for fn in os.listdir(p):
+            if fn.endswith(".txt"):
+                try:
+                    mt = max(mt, int(os.path.getmtime(os.path.join(p, fn))))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return mt
+
+
 def _map_key(root):
+    """缓存键必须覆盖所有会影响图层的输入：
+    省位图、definition.csv、州 history、战略区定义。
+    少一项就会出现"改了数据但地图没变"的错觉。"""
     b, d, base = _map_files(root)
     if not b:
         return None, None
-    key = "%s|%d|%d|%d" % (os.path.abspath(base), os.path.getmtime(b), os.path.getsize(b),
-                           os.path.getmtime(d))
+    key = "%s|%d|%d|%d|%d|%d" % (
+        os.path.abspath(base), os.path.getmtime(b), os.path.getsize(b), os.path.getmtime(d),
+        _dir_mtime(os.path.join(base, "history", "states")),
+        _dir_mtime(os.path.join(base, "map", "strategicregions")))
     return key, base
 
 
@@ -2275,8 +2297,19 @@ def map_meta(root=None):
             meta = json.loads(io.open(os.path.join(dirp, "meta.json"), encoding="utf-8").read())
         except Exception:
             meta = {}
-    return {"ok": True, "built": built, "dir": dirp, "source": base, "stamp": key,
-            "meta": meta, "picked": root, "sources": map_sources()}
+    # 缓存过期：同一来源以前构建过，但缓存键变了（数据或版本改动）
+    stale = False
+    prev = {}
+    lastp = os.path.join(MAP_CACHE_DIR, "_last.json")
+    if os.path.exists(lastp):
+        try:
+            prev = json.loads(io.open(lastp, encoding="utf-8").read())
+        except Exception:
+            prev = {}
+    if not built and prev.get("root") and os.path.abspath(prev.get("root")) == os.path.abspath(base or ""):
+        stale = prev.get("key") != key
+    return {"ok": True, "built": built, "stale": stale, "dir": dirp, "source": base, "stamp": key,
+            "prev_built": prev.get("built"), "meta": meta, "picked": root, "sources": map_sources()}
 
 
 MAP_PALETTE = ((196, 112, 92), (96, 138, 186), (150, 158, 96),
@@ -2305,6 +2338,13 @@ def map_build(force=False, root=None):
         return {"ok": False, "msg": "无法创建缓存目录"}
     os.makedirs(dirp, exist_ok=True)
     meta_path = os.path.join(dirp, "meta.json")
+    try:
+        os.makedirs(MAP_CACHE_DIR, exist_ok=True)
+        io.open(os.path.join(MAP_CACHE_DIR, "_last.json"), "w", encoding="utf-8", newline="").write(
+            json.dumps({"root": os.path.abspath(base or ""), "key": key,
+                        "built": time.strftime("%Y-%m-%d %H:%M:%S")}, ensure_ascii=False))
+    except Exception:
+        pass
     if not force and os.path.exists(meta_path):
         try:
             return {"ok": True, "cached": True,
@@ -3123,16 +3163,36 @@ def read_error_log(path=None, limit_files=40):
         b["count"] += 1
         if len(b["samples"]) < 3:
             b["samples"].append(msg[:160])
-        fm = re.search(r"file:\s*([^\s]+)(?:\s+line:\s*(\d+))?", msg)
+        fm = re.search(r'file:\s*"?([^"\s]+)"?(?:\s+line:\s*(\d+))?', msg)
         if fm:
-            f = fm.group(1)
-            b["files"][f] = b["files"].get(f, 0) + 1
-            files[f] = files.get(f, 0) + 1
+            f = fm.group(1).replace("\\", "/").lstrip("./")
+            owner = "other"
+            try:
+                root0 = ROOTS[0] if ROOTS else GAME
+                if os.path.exists(os.path.join(root0 or "", f)):
+                    owner = "mine"
+                elif os.path.exists(os.path.join(GAME or "", f)):
+                    owner = "vanilla"
+            except Exception:
+                pass
+            b.setdefault("owners", {})
+            b["owners"][owner] = b["owners"].get(owner, 0) + 1
+            if owner == "mine":
+                b["files"][f] = b["files"].get(f, 0) + 1
+                files[f] = files.get(f, 0) + 1
     items = []
     for key, b in sorted(buckets.items(), key=lambda kv: -kv[1]["count"]):
         top_files = sorted(b["files"].items(), key=lambda kv: -kv[1])[:4]
+        own = b.get("owners") or {}
+        mine_n = own.get("mine", 0)
+        van_n = own.get("vanilla", 0)
         detail = "；".join("%s ×%d" % (f, n) for f, n in top_files) or "（日志未给出文件名）"
-        items.append({"level": b["level"], "kind": "log",
+        if own:
+            detail += "　[本 mod %d / 原版 %d / 其它 %d]" % (mine_n, van_n, own.get("other", 0))
+        lvl = b["level"]
+        if lvl == "error" and own and mine_n == 0:
+            lvl = "info"   # 报错不来自本 mod，降级
+        items.append({"level": lvl, "kind": "log",
                       "title": "%s（%d 条）" % (b["title"], b["count"]),
                       "detail": detail + "　建议：" + b["hint"],
                       "samples": b["samples"]})
