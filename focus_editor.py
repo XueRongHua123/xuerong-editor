@@ -2255,10 +2255,18 @@ def map_sources():
         if p in seen:
             continue
         seen.add(p)
-        has = (os.path.exists(os.path.join(p, "map", "provinces.bmp"))
-               and os.path.exists(os.path.join(p, "map", "definition.csv")))
-        out.append({"path": p, "name": os.path.basename(p.rstrip("\\/")) or p,
-                    "has_map": has, "readonly": is_under_game(p), "is_game": False})
+        # 用叠加链判断：submod 自己没有 bmp，但父 mod 有
+        try:
+            _b, _d, _prov, _layers = _map_files_layered(p)
+        except Exception:
+            _b = _d = _prov = None
+        has = bool(_b and _d)
+        prov_name = ""
+        if _prov and os.path.abspath(_prov) != os.path.abspath(p):
+            prov_name = os.path.basename(_prov.replace(chr(92), "/").rstrip("/"))
+        out.append({"path": p, "name": os.path.basename(p.replace(chr(92), "/").rstrip("/")) or p,
+                    "has_map": has, "map_from": prov_name,
+                    "readonly": is_under_game(p), "is_game": False})
     if GAME:
         g = os.path.abspath(GAME)
         out.append({"path": g, "name": "原版（游戏本体）",
@@ -2440,7 +2448,15 @@ def map_meta(root=None):
     layers = mod_layers(root)
     return {"ok": True, "built": built, "stale": stale, "dir": dirp, "source": base, "stamp": key,
             "prev_built": prev.get("built"), "meta": meta, "picked": root,
-            "layers": [{"path": x, "name": os.path.basename(x.replace("\\", "/").rstrip("/")) or x} for x in layers],
+            "layers": [{"path": x,
+                        "name": os.path.basename(x.replace("\\", "/").rstrip("/")) or x,
+                        "is_game": os.path.abspath(x) == os.path.abspath(GAME or ""),
+                        "descriptor_file": os.path.join(x, "descriptor.mod"),
+                        "has_descriptor": os.path.exists(os.path.join(x, "descriptor.mod")),
+                        "mod_name": _mod_descriptor(x)["name"],
+                        "deps": _mod_descriptor(x)["deps"],
+                        "replace_count": len(_mod_descriptor(x)["replace"])}
+                       for x in layers],
             "sources": map_sources()}
 
 

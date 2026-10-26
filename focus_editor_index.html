@@ -1092,8 +1092,12 @@
               <label><input type="checkbox" id="mapLBase" checked>底图</label>
               <label>透明度<input type="range" id="mapOpacity" min="20" max="100" value="85"></label>
             </div>
-            <button class="btn" id="mapClear" style="margin-top:4px;font-size:11px" title="删除已生成的图层缓存，源文件不动">清理地图缓存</button>
             </div>
+            <div class="lt-group" id="mapLayersBox" style="margin-top:8px">
+              <div class="lt-title">来源链</div>
+              <div id="mapLayersList" style="font-size:11px;line-height:1.6;color:var(--t2)">（加载后显示）</div>
+            </div>
+            <button class="btn" id="mapClear" style="margin-top:4px;font-size:11px" title="删除已生成的图层缓存，源文件不动">清理地图缓存</button>
           </div>
         </div><!-- /mapStageWrap -->
         <div id="mapSide" class="empty">
@@ -4772,6 +4776,28 @@ function mapFocusProvince(pid){
   return true;
 }
 
+function mapRenderLayers(d){
+  const listEl = document.getElementById('mapLayersList');
+  if(!listEl) return;
+  if(!d || !Array.isArray(d.layers) || !d.layers.length){
+    listEl.textContent = '（未读到 descriptor）';
+    return;
+  }
+  const src = (d.source || '').replace(/[\/]+$/, '');
+  listEl.innerHTML = d.layers.map((L, i)=>{
+    const isSrc = src && L.path && L.path.replace(/[\/]+$/, '').indexOf(src) >= 0;
+    const tag = L.is_game ? '原版（游戏本体）' : (L.mod_name || L.name);
+    const extra = [];
+    if(L.replace_count) extra.push('replace_path ' + L.replace_count);
+    if(L.deps && L.deps.length) extra.push('依赖 ' + L.deps.join(', '));
+    if(!L.has_descriptor && !L.is_game) extra.push('无 descriptor.mod');
+    return '<div style="margin:3px 0">' + (i + 1) + '. ' + escapeHtml(tag) +
+      (isSrc ? ' <span style="color:var(--accent)">← 地图</span>' : '') +
+      (extra.length ? '<div style="color:var(--t3);padding-left:12px">' + escapeHtml(extra.join(' · ')) + '</div>' : '') +
+      '</div>';
+  }).join('');
+}
+
 async function mapRunCheck(){
   const list = document.getElementById('mckList');
   const stats = document.getElementById('mckStats');
@@ -4961,7 +4987,7 @@ function mapFillSources(list, picked){
   if(!sel) return;
   sel.innerHTML = list.map(s=>'<option value="' + escapeHtml(s.path) + '"' +
     (s.path === picked ? ' selected' : '') + (s.has_map ? '' : ' disabled') + '>' +
-    escapeHtml(s.name + (s.has_map ? '' : '（无地图）')) + '</option>').join('');
+    escapeHtml(s.name + (s.has_map ? (s.map_from ? '（地图来自 ' + s.map_from + '）' : '') : '（无地图）')) + '</option>').join('');
 }
 
 function mapSwitchSource(path){
@@ -4989,6 +5015,7 @@ async function mapLoadMeta(root){
     const d = await (await fetch('/api/map_meta' + q)).json();
     MAP.root = d.picked || root || MAP.root || '';
     if(d.sources) mapFillSources(d.sources, MAP.root);
+    mapRenderLayers(d);
     if(!d.ok){ metaEl.textContent = d.msg || '没有地图数据'; return; }
     if(!d.built){
       const bb = document.getElementById('mapBuild');
