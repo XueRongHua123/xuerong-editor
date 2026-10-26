@@ -484,6 +484,46 @@
   #tbMoreMenu .tb-more-item{padding:7px 10px;border-radius:6px;font-size:12px;color:var(--text);cursor:pointer}
   #tbMoreMenu .tb-more-item:hover{background:var(--panel2);color:var(--accent)}
   /* ---------- v0.71 地图面板 ---------- */
+  /* ---------- v0.81 地图界面重构 ---------- */
+  #mapCard{display:flex;flex-direction:column}
+  #mapHead{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
+  #mapHead b{font-size:13px}
+  #mapHead .map-grow{flex:1}
+  #mapBody{flex:1;display:flex;min-height:0}
+  #mapRail{width:56px;flex:0 0 56px;border-right:1px solid var(--line);display:flex;flex-direction:column;
+    align-items:center;gap:6px;padding:10px 0;background:color-mix(in srgb,var(--panel2) 60%,var(--panel))}
+  .map-tool{width:40px;height:40px;border-radius:10px;border:1px solid transparent;background:transparent;
+    color:var(--muted);font-size:17px;cursor:pointer;display:grid;place-items:center;transition:.15s}
+  .map-tool:hover{background:var(--panel2);color:var(--text)}
+  .map-tool.on{border-color:var(--accent);color:var(--accent);
+    background:color-mix(in srgb,var(--accent) 14%,transparent)}
+  .map-tool[disabled]{opacity:.35;cursor:not-allowed}
+  #mapStageWrap{flex:1;position:relative;overflow:hidden;background:#12150f}
+  #mapSide{width:236px;flex:0 0 236px;border-left:1px solid var(--line);display:flex;flex-direction:column;
+    background:var(--panel);overflow:auto}
+  #mapSide.empty{display:none}
+  #mapSide h4{margin:0;padding:10px 12px 6px;font-size:11px;letter-spacing:1px;color:var(--muted);
+    text-transform:uppercase}
+  .mp-row{display:flex;justify-content:space-between;gap:8px;padding:4px 12px;font-size:12px}
+  .mp-row b{font-weight:600;color:var(--text)}
+  .mp-row span{color:var(--muted);font-variant-numeric:tabular-nums}
+  .mp-acts{display:flex;flex-direction:column;gap:6px;padding:10px 12px 14px}
+  .mp-acts input{height:28px}
+  .mp-acts .btn{justify-content:center;min-width:0;width:100%}
+  #mapSide .btn{height:30px}
+  #mapStatus{display:flex;align-items:center;gap:14px;padding:6px 14px;border-top:1px solid var(--line);
+    font-size:11px;color:var(--muted);background:color-mix(in srgb,var(--panel2) 50%,var(--panel))}
+  #mapStatus .st-mode{color:var(--accent)}
+  #mapTools{position:absolute;right:10px;bottom:40px;top:auto;left:auto;margin:0;
+    width:172px;height:fit-content;max-height:calc(100% - 90px);border-radius:10px;
+    background:rgba(10,12,10,.92);overflow:auto;z-index:4;
+    box-shadow:0 6px 20px rgba(0,0,0,.45);display:block}
+  #mapTools h4{margin:0 0 4px;font-size:10.5px;letter-spacing:1px;color:var(--muted);text-transform:uppercase;
+    display:flex;justify-content:space-between;align-items:center}
+  #mapTools.min .lt-body{display:none}
+  #mapTools .lt-toggle{background:none;border:0;color:var(--muted);cursor:pointer;font-size:11px}
+  #mapTools .lt-toggle:hover{color:var(--accent)}
+  #mapHud{display:none}
   #mapModal{position:fixed;inset:0;z-index:97;display:none;place-items:center;background:rgba(8,10,9,.72);
     backdrop-filter:blur(3px)}
   #mapModal.show{display:grid}
@@ -936,16 +976,22 @@
     </div>
     <div id="mapModal">
       <div id="mapCard">
-        <div class="cm-head">
+        <div id="mapHead">
           <b>地图</b>
           <span class="k" id="mapMeta">未构建</span>
-          <div id="mapSearchWrap">
-            <select id="mapSource" class="btn" style="padding:3px 6px;max-width:190px" title="地图来源"></select>
-            <input id="mapSearch" placeholder="省号 / 州号，回车定位">
-            <button class="btn" id="mapFit">适应</button>
-            <button class="btn" id="mapBuild">构建图层</button>
-            <button class="btn" id="mapClose">关闭</button>
-          </div>
+          <span class="map-grow"></span>
+          <select id="mapSource" class="btn" style="padding:3px 6px;max-width:190px" title="地图来源"></select>
+          <input id="mapSearch" placeholder="省 / 州 / 战略区号，回车定位" style="width:200px;height:28px">
+          <button class="btn" id="mapFit">适应</button>
+          <button class="btn" id="mapBuild">构建图层</button>
+          <button class="btn" id="mapClose">关闭</button>
+        </div>
+        <div id="mapBody">
+        <div id="mapRail">
+          <button class="map-tool on" data-mode="view" title="浏览（V）">🖐</button>
+          <button class="map-tool" data-mode="state" title="改州归属（S）">🏷</button>
+          <button class="map-tool" data-mode="paint" title="涂色改省界（P）— 开发中" disabled>🖌</button>
+          <button class="map-tool" data-mode="pick" title="吸管（I）— 开发中" disabled>💧</button>
         </div>
         <div id="mapStageWrap">
           <div id="mapStack">
@@ -956,15 +1002,10 @@
             <img id="mapState" alt="">
             <img id="mapEdges" alt="">
           </div>
-          <div id="mapHud">
-            <div id="mapHudText">把鼠标移到地图上看看</div>
-            <div id="mapProvOps" style="display:none;margin-top:6px;display:none">
-              <input id="mapTargetState" placeholder="目标州号" style="width:74px;height:24px;font-size:11px">
-              <button class="btn" id="mapMoveProv" style="padding:2px 8px;font-size:11px">移入州</button>
-              <button class="btn" id="mapDetachProv" style="padding:2px 8px;font-size:11px">移出州</button>
-            </div>
-          </div>
+          <div id="mapHud" style="display:none"><div id="mapHudText"></div></div>
           <div id="mapTools">
+            <h4>图层 <button class="lt-toggle" id="mapLayerToggle" title="折叠/展开">−</button></h4>
+            <div class="lt-body">
             <label><input type="checkbox" id="mapLProv" checked>省色块</label>
             <label><input type="checkbox" id="mapLPolit">政治（按国家）</label>
             <label><input type="checkbox" id="mapLRegion">战略区</label>
@@ -973,7 +1014,30 @@
             <label><input type="checkbox" id="mapLBase" checked>底图</label>
             <label>透明度<input type="range" id="mapOpacity" min="20" max="100" value="85"></label>
             <button class="btn" id="mapClear" style="margin-top:4px;font-size:11px" title="删除已生成的图层缓存，源文件不动">清理地图缓存</button>
+            </div>
           </div>
+        </div><!-- /mapStageWrap -->
+        <div id="mapSide" class="empty">
+          <h4>选中省份</h4>
+          <div class="mp-row"><b id="msId">—</b><span id="msType"></span></div>
+          <div class="mp-row"><span>州</span><b id="msState">—</b></div>
+          <div class="mp-row"><span>战略区</span><b id="msRegion">—</b></div>
+          <div class="mp-row"><span>像素</span><b id="msPx">—</b></div>
+          <h4>操作</h4>
+          <div class="mp-acts">
+            <input id="msTarget" placeholder="目标州号" style="height:28px">
+            <button class="btn" id="msMoveProv">移入目标州</button>
+            <button class="btn" id="msDetachProv">移出当前州</button>
+            <button class="btn" id="msOpenState">在州面板打开</button>
+          </div>
+        </div>
+        </div><!-- /mapBody -->
+        <div id="mapStatus">
+          <span class="st-mode" id="msMode">浏览</span>
+          <span id="msPos">—</span>
+          <span id="msInfo">—</span>
+          <span style="margin-left:auto" id="msHint">滚轮缩放 · 拖动平移 · 单击选省</span>
+        </div>
         </div>
       </div>
     </div>
@@ -4616,6 +4680,96 @@ function initNarrowMore(){
 /* ---------- v0.71 地图面板 ---------- */
 const MAP = {x: 0, y: 0, k: 0.24, w: 5632, h: 2048, meta: null, ready: false, idCanvas: null, idx: null, centers: null};
 
+/* ---------- v0.81 地图界面 ---------- */
+MAP.mode = 'view';
+MAP.lastPid = null;
+MAP.lastState = null;
+
+const MAP_MODE_TEXT = {view: '浏览', state: '改州归属', paint: '涂色（开发中）', pick: '吸管（开发中）'};
+
+function mapSetMode(mode){
+  if(mode === 'paint' || mode === 'pick'){ status('这个工具还在开发中'); return; }
+  MAP.mode = mode;
+  document.querySelectorAll('#mapRail .map-tool').forEach(b=>{
+    b.classList.toggle('on', b.dataset.mode === mode);
+  });
+  const el = document.getElementById('msMode');
+  if(el) el.textContent = MAP_MODE_TEXT[mode] || mode;
+  const hint = document.getElementById('msHint');
+  if(hint){
+    hint.textContent = mode === 'state'
+      ? '单击省份后在右侧改归属'
+      : '滚轮缩放 · 拖动平移 · 单击选省';
+  }
+  // 浏览模式下，未选省时属性面板保持收起
+  if(mode === 'view' && !MAP.lastPid){
+    const side = document.getElementById('mapSide');
+    if(side) side.classList.add('empty');
+  }
+}
+
+function mapStatusPos(clientX, clientY){
+  const p = mapScreenToImage(clientX, clientY);
+  const el = document.getElementById('msPos');
+  if(el) el.textContent = Math.round(p.x) + ', ' + Math.round(p.y);
+}
+
+function mapSelectProvince(pid){
+  MAP.lastPid = pid;
+  const rec = (MAP.idx && MAP.idx[String(pid)]) || {};
+  const side = document.getElementById('mapSide');
+  if(side) side.classList.remove('empty');
+  const set = (id, v)=>{ const e = document.getElementById(id); if(e) e.textContent = v; };
+  set('msId', '省 ' + pid);
+  set('msType', rec.type || '');
+  set('msState', rec.state ? String(rec.state) : '无');
+  set('msRegion', rec.region ? String(rec.region) : '无');
+  set('msPx', rec.px ? rec.px.toLocaleString() : '—');
+  const inp = document.getElementById('msTarget');
+  if(inp) inp.value = rec.state ? String(rec.state) : '';
+  const det = document.getElementById('msDetachProv');
+  if(det) det.disabled = !rec.state;
+  MAP.lastState = rec.state || null;
+  const info = document.getElementById('msInfo');
+  if(info) info.textContent = '省 ' + pid + ' · 州 ' + (rec.state || '无') + ' · 地区 ' + (rec.region || '无');
+}
+
+function mapBindV081(){
+  const card = document.getElementById('mapCard');
+  if(card && card.dataset.v081) return;
+  if(card) card.dataset.v081 = '1';
+  document.querySelectorAll('#mapRail .map-tool').forEach(btn=>{
+    btn.addEventListener('click', ()=>mapSetMode(btn.dataset.mode));
+  });
+  const toggle = document.getElementById('mapLayerToggle');
+  if(toggle){
+    toggle.addEventListener('click', ()=>{
+      const box = document.getElementById('mapTools');
+      box.classList.toggle('min');
+      toggle.textContent = box.classList.contains('min') ? '+' : '−';
+    });
+  }
+  const mv = document.getElementById('msMoveProv');
+  if(mv) mv.onclick = ()=>{
+    const t = (document.getElementById('msTarget').value || '').trim();
+    if(!/^\d+$/.test(t)){ status('填一个目标州号', true); return; }
+    if(window.MAP_LAST) MAP_LAST_PID = MAP_LAST_PID || null;
+    const src = document.getElementById('msTarget');
+    if(src) src.value = t;
+    mapMoveProv(false);
+  };
+  const det = document.getElementById('msDetachProv');
+  if(det) det.onclick = ()=>mapMoveProv(true);
+  const open = document.getElementById('msOpenState');
+  if(open) open.onclick = ()=>{
+    if(!MAP.lastState){ status('这个省不属于任何州'); return; }
+    const sid = MAP.lastState;
+    document.getElementById('mapModal').classList.remove('show');
+    if(typeof openStates === 'function') openStates(sid);
+  };
+  mapSetMode('view');
+}
+
 function mapAssetUrl(name){
   return '/api/map_asset?name=' + encodeURIComponent(name) +
     (MAP.root ? '&root=' + encodeURIComponent(MAP.root) : '');
@@ -4642,6 +4796,7 @@ function mapSwitchSource(path){
 
 async function openMap(){
   document.getElementById('mapModal').classList.add('show');
+  mapBindV081();
   if(MAP.ready){ mapApply(); return; }
   await mapLoadMeta();
 }
@@ -4777,22 +4932,22 @@ let MAP_LAST_PID = null, MAP_LAST_STATE = null;
 function mapShowOps(pid, sid){
   MAP_LAST_PID = pid;
   MAP_LAST_STATE = sid || null;
-  const box = document.getElementById('mapProvOps');
-  const inp = document.getElementById('mapTargetState');
-  if(!box) return;
-  box.style.display = 'block';
-  inp.value = sid ? String(sid) : '';
-  document.getElementById('mapDetachProv').disabled = !sid;
+  if(typeof mapSelectProvince === 'function') mapSelectProvince(pid);
+  const inp = document.getElementById('msTarget');
+  if(inp) inp.value = sid ? String(sid) : '';
+  const det = document.getElementById('msDetachProv');
+  if(det) det.disabled = !sid;
 }
 
 function mapHideOps(){
-  const box = document.getElementById('mapProvOps');
-  if(box) box.style.display = 'none';
+  const side = document.getElementById('mapSide');
+  if(side) side.classList.add('empty');
 }
 
 async function mapMoveProv(detach){
   if(!MAP_LAST_PID) return;
-  const target = detach ? null : (document.getElementById('mapTargetState').value || '').trim();
+  const src = document.getElementById('msTarget');
+  const target = detach ? null : ((src && src.value) || '').trim();
   if(!detach && !/^\d+$/.test(target)){ status('填一个目标州号', true); return; }
   const pided = MAP_LAST_PID;
   const verb = detach ? '移出州' : ('移入州 ' + target);
@@ -4807,7 +4962,10 @@ async function mapMoveProv(detach){
     const newSid = detach ? 0 : Number(target);
     if(MAP.idx && MAP.idx[String(pided)]) MAP.idx[String(pided)].state = newSid;
     mapShowOps(pided, newSid);
-    document.getElementById('mapHudText').textContent = '省 ' + pided + ' · 州 ' + (newSid || '无');
+    const info = document.getElementById('msInfo');
+    if(info) info.textContent = '省 ' + pided + ' · 州 ' + (newSid || '无');
+    const stEl = document.getElementById('msState');
+    if(stEl) stEl.textContent = newSid ? String(newSid) : '无';
   }catch(e){ status('失败：' + e.message, true); }
 }
 
@@ -5172,8 +5330,7 @@ document.getElementById('mapSource').addEventListener('change', e=>mapSwitchSour
 document.getElementById('mapFit').onclick = mapFit;
 document.getElementById('mapBuild').onclick = mapBuild;
 document.getElementById('mapClear').onclick = mapClearCache;
-document.getElementById('mapMoveProv').onclick = ()=>mapMoveProv(false);
-document.getElementById('mapDetachProv').onclick = ()=>mapMoveProv(true);
+
 document.getElementById('mapSearch').addEventListener('keydown', e=>{ if(e.key === 'Enter') mapSearchGo(); });
 ['mapLProv','mapLState','mapLEdges','mapLBase','mapLPolit','mapLRegion'].forEach(id=>{  const el = document.getElementById(id); if(el) el.addEventListener('change', mapApplyLayers); });
 const mapOpEl = document.getElementById('mapOpacity'); if(mapOpEl) mapOpEl.addEventListener('input', mapApplyLayers);
