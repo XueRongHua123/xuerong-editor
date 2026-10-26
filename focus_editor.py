@@ -1549,6 +1549,112 @@ def _hist_variants(text):
     return out
 
 
+# v0.68 开局装备变体写入
+def _variant_blocks(text):
+    """返回 [(start, end, name, body)]，覆盖所有 create_equipment_variant 块"""
+    out = []
+    for m in re.finditer(r'(?m)^[ \t]*create_equipment_variant\s*=\s*\{', text):
+        b = text.find('{', m.end() - 1)
+        e = brace_match(text, b)
+        if e <= b:
+            continue
+        body = text[b + 1:e - 1]
+        nm = _first(body, r'(?m)^[ \t]*name\s*=\s*"?([^"\r\n]+)"?')
+        out.append((m.start(), e, (nm or "").strip(), body))
+    return out
+
+
+def _hist_append_top(text, block):
+    """把 block 插到最后一个顶层块之后（深度 0 处），保证不落进别的块里"""
+    depth = 0
+    last = 0
+    for i, ch in enumerate(text):
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                last = i + 1
+    if last == 0:
+        return text.rstrip() + "\n\n" + block + "\n"
+    return text[:last] + "\n\n" + block + text[last:]
+
+
+def country_variant_add(tag, spec):
+    """新增一个开局变体：spec = {name, type, icon, modules:{slot:module}}"""
+    name = (spec.get("name") or "").strip()
+    etype = (spec.get("type") or "").strip()
+    if not name:
+        return {"ok": False, "msg": "变体名称不能为空"}
+    if not re.match(r'^[A-Za-z0-9_\- ]{1,60}$', name):
+        return {"ok": False, "msg": "名称只能用字母数字、空格、下划线和连字符"}
+    if not etype:
+        return {"ok": False, "msg": "请选择底盘（type）"}
+    if not re.match(r'^[A-Za-z0-9_]+$', etype):
+        return {"ok": False, "msg": "底盘 id 只能用字母数字下划线"}
+    if EQUIPMENTS and etype not in EQUIPMENTS:
+        return {"ok": False, "msg": "底盘 %s 不在装备列表里" % etype}
+    mods = spec.get("modules") or {}
+    if not isinstance(mods, dict) or not mods:
+        return {"ok": False, "msg": "至少要填一个模块（槽位 = 模块）"}
+    c, root, path = _hist_path(tag)
+    if not path or is_under_game(root):
+        return {"ok": False, "msg": "这个国家没有可写的历史文件"}
+    text, has_bom = _read_bom_text(path)
+    if any(n == name for (_, _, n, _) in _variant_blocks(text)):
+        return {"ok": False, "msg": "已经有同名变体 %s" % name}
+    lines = ['create_equipment_variant = {', '\tname = "%s"' % name, '\ttype = %s' % etype]
+    icon = (spec.get("icon") or "").strip()
+    if icon:
+        lines.append('\ticon = %s' % icon)
+    lines.append('\tmodules = {')
+    for slot, mod in mods.items():
+        if not re.match(r'^[A-Za-z0-9_]+$', str(slot)) or not re.match(r'^[A-Za-z0-9_]+$', str(mod)):
+            return {"ok": False, "msg": "槽位/模块 id 只能用字母数字下划线：%s = %s" % (slot, mod)}
+        lines.append('\t\t%s = %s' % (slot, mod))
+    lines.append('\t}')
+    lines.append('}')
+    block = "\n".join(lines)
+    new_text = _hist_append_top(text, block)
+    snapshot(path)
+    _write_bom_text(path, new_text, has_bom)
+    CHANGED[path] = os.path.relpath(path, root)
+    reload_data()
+    link_countries()
+    return {"ok": True, "msg": "已新增变体 %s（%d 个模块）" % (name, len(mods)),
+            "variants": _hist_variants(_read_bom_text(path)[0])}
+
+
+def country_variant_del(tag, name):
+    """按 name 删除一个开局变体块"""
+    name = (name or "").strip()
+    if not name:
+        return {"ok": False, "msg": "缺少变体名称"}
+    c, root, path = _hist_path(tag)
+    if not path or is_under_game(root):
+        return {"ok": False, "msg": "这个国家没有可写的历史文件"}
+    text, has_bom = _read_bom_text(path)
+    target = None
+    for (s, e, nm, body) in _variant_blocks(text):
+        if nm == name:
+            target = (s, e)
+            break
+    if not target:
+        return {"ok": False, "msg": "找不到变体 %s" % name}
+    s, e = target
+    line_start = text.rfind("\n", 0, s)
+    if line_start < 0:
+        line_start = 0
+    new_text = text[:line_start] + text[e:]
+    snapshot(path)
+    _write_bom_text(path, new_text, has_bom)
+    CHANGED[path] = os.path.relpath(path, root)
+    reload_data()
+    link_countries()
+    return {"ok": True, "msg": "已删除变体 %s" % name,
+            "variants": _hist_variants(_read_bom_text(path)[0])}
+
+
 def country_history_raw(tag):
     c, root, p = _hist_path(tag)
     if not c:
@@ -3737,6 +3843,12 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path == "/api/tech_move":
             self._send(tech_move(body.get("root", ""), body.get("rel", ""),
                                  body.get("tid", ""), body.get("x", 0), body.get("y", 0)))
+        elif self.path == "/api/country_variant":
+            act = (body.get("action") or "add").lower()
+            if act == "del":
+                self._send(country_variant_del(body.get("tag", ""), body.get("name", "")))
+            else:
+                self._send(country_variant_add(body.get("tag", ""), body))
         elif self.path == "/api/state_save":
             self._send(state_save(body.get("id", ""), body.get("fields") or {}))
         elif self.path == "/api/country_save":
