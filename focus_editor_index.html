@@ -937,6 +937,7 @@
           <b>地图</b>
           <span class="k" id="mapMeta">未构建</span>
           <div id="mapSearchWrap">
+            <select id="mapSource" class="btn" style="padding:3px 6px;max-width:190px" title="地图来源"></select>
             <input id="mapSearch" placeholder="省号 / 州号，回车定位">
             <button class="btn" id="mapFit">适应</button>
             <button class="btn" id="mapBuild">构建图层</button>
@@ -4600,7 +4601,27 @@ function initNarrowMore(){
 /* ---------- v0.71 地图面板 ---------- */
 const MAP = {x: 0, y: 0, k: 0.24, w: 5632, h: 2048, meta: null, ready: false, idCanvas: null, idx: null, centers: null};
 
-function mapAssetUrl(name){ return '/api/map_asset?name=' + encodeURIComponent(name); }
+function mapAssetUrl(name){
+  return '/api/map_asset?name=' + encodeURIComponent(name) +
+    (MAP.root ? '&root=' + encodeURIComponent(MAP.root) : '');
+}
+
+function mapFillSources(list, picked){
+  const sel = document.getElementById('mapSource');
+  if(!sel) return;
+  sel.innerHTML = list.map(s=>'<option value="' + escapeHtml(s.path) + '"' +
+    (s.path === picked ? ' selected' : '') + (s.has_map ? '' : ' disabled') + '>' +
+    escapeHtml(s.name + (s.has_map ? '' : '（无地图）')) + '</option>').join('');
+}
+
+function mapSwitchSource(path){
+  MAP.ready = false;
+  MAP.idCanvas = null;
+  MAP.idx = null;
+  MAP.centers = null;
+  document.getElementById('mapMeta').textContent = '切换来源…';
+  mapLoadMeta(path);
+}
 
 async function openMap(){
   document.getElementById('mapModal').classList.add('show');
@@ -4608,10 +4629,13 @@ async function openMap(){
   await mapLoadMeta();
 }
 
-async function mapLoadMeta(){
+async function mapLoadMeta(root){
   const metaEl = document.getElementById('mapMeta');
   try{
-    const d = await (await fetch('/api/map_meta')).json();
+    const q = root ? ('?root=' + encodeURIComponent(root)) : '';
+    const d = await (await fetch('/api/map_meta' + q)).json();
+    MAP.root = d.picked || root || MAP.root || '';
+    if(d.sources) mapFillSources(d.sources, MAP.root);
     if(!d.ok){ metaEl.textContent = d.msg || '没有地图数据'; return; }
     if(!d.built){
       metaEl.textContent = '图层未构建（点右上角「构建图层」，约 15 秒）';
@@ -4831,7 +4855,7 @@ async function mapBuild(){
   startLoading('正在构建地图图层…');
   try{
     const r = await (await fetch('/api/map_build', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({force: true})})).json();
+      body: JSON.stringify({force: true, root: MAP.root || ''})})).json();
     stopLoading(r.ok ? '地图图层构建完成' : (r.msg || '构建失败'), !r.ok);
     if(r.ok){
       MAP.ready = false; MAP.idCanvas = null;
@@ -5048,6 +5072,7 @@ document.getElementById('densitySel').addEventListener('change', e=>applyDensity
 initNarrowMore();
 document.getElementById('mapEntry').onclick = ()=>{ openMap(); mapBindEvents(); };
 document.getElementById('mapClose').onclick = ()=>{ document.getElementById('mapModal').classList.remove('show'); };
+document.getElementById('mapSource').addEventListener('change', e=>mapSwitchSource(e.target.value));
 document.getElementById('mapFit').onclick = mapFit;
 document.getElementById('mapBuild').onclick = mapBuild;
 document.getElementById('mapSearch').addEventListener('keydown', e=>{ if(e.key === 'Enter') mapSearchGo(); });
