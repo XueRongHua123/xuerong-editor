@@ -2082,7 +2082,7 @@ def scripted_payload():
 
 # v0.71 地图图层构建（Pillow，无需 numpy）
 MAP_CACHE_DIR = os.path.join(WORK, "cache", "map")
-MAP_ASSETS = ("base.png", "province.png", "edges.png", "state.png", "prov_id.png",
+MAP_ASSETS = ("base.png", "province.png", "edges.png", "state.png", "political.png", "prov_id.png",
               "prov_index.json", "centers.json", "meta.json")
 
 
@@ -2245,6 +2245,28 @@ def map_build(force=False, root=None):
             except Exception:
                 pass
 
+    # 3.5) 政治视图：省 -> owner -> 国家颜色
+    prov2owner = {}
+    for sid, st in STATES.items():
+        ow = (st.get("owner") or "").strip()
+        if not ow:
+            continue
+        for p in (st.get("provinces") or []):
+            try:
+                prov2owner[int(p)] = ow
+            except Exception:
+                pass
+    tag_color = {}
+    for tag, c in COUNTRIES.items():
+        col = c.get("color") or []
+        if len(col) >= 3:
+            tag_color[tag] = bytes((max(0, min(255, int(col[0] * 255))),
+                                    max(0, min(255, int(col[1] * 255))),
+                                    max(0, min(255, int(col[2] * 255)))))
+        else:
+            tag_color[tag] = bytes((132, 132, 132))
+    neutral = bytes((46, 50, 46))
+
     # 4) 一遍像素：ids、质心累加
     n = w * h
     ids = [0] * n
@@ -2266,6 +2288,7 @@ def map_build(force=False, root=None):
     # 5) 图层缓冲
     provbuf = bytearray(n * 3)
     statebuf = bytearray(n * 3)
+    polbuf = bytearray(n * 3)
     edgebuf = bytearray(n * 3)
     idbuf = bytearray(n * 3)
     prov_color = {}
@@ -2284,6 +2307,11 @@ def map_build(force=False, root=None):
         o = i * 3
         provbuf[o:o + 3] = c
         statebuf[o:o + 3] = sc
+        ow = prov2owner.get(pid, "")
+        pcb = tag_color.get(ow) if ow else neutral
+        if pcb is None:
+            pcb = neutral
+        polbuf[o:o + 3] = pcb
         idbuf[o] = (pid >> 16) & 0xFF
         idbuf[o + 1] = (pid >> 8) & 0xFF
         idbuf[o + 2] = pid & 0xFF
@@ -2309,10 +2337,33 @@ def map_build(force=False, root=None):
                 edgebuf[o + 1] = 250
                 edgebuf[o + 2] = 250
 
+    # 6.5) 国家边界：相邻省属于不同 owner 的地方压深一档
+    for y in range(h):
+        row = y * w
+        for x in range(w):
+            i = row + x
+            pid = ids[i]
+            ow = prov2owner.get(pid, "")
+            border = False
+            if x + 1 < w:
+                ow2 = prov2owner.get(ids[i + 1], "")
+                if ow2 != ow:
+                    border = True
+            elif y + 1 < h:
+                ow3 = prov2owner.get(ids[i + w], "")
+                if ow3 != ow:
+                    border = True
+            if border:
+                o = i * 3
+                polbuf[o] = min(255, int(polbuf[o] * 0.45))
+                polbuf[o + 1] = min(255, int(polbuf[o + 1] * 0.45))
+                polbuf[o + 2] = min(255, int(polbuf[o + 2] * 0.45))
+
     # 7) 写资产
     Image.frombytes("RGB", (w, h), bytes(provbuf)).save(os.path.join(dirp, "province.png"))
     Image.frombytes("RGB", (w, h), bytes(statebuf)).save(os.path.join(dirp, "state.png"))
     Image.frombytes("RGB", (w, h), bytes(edgebuf)).save(os.path.join(dirp, "edges.png"))
+    Image.frombytes("RGB", (w, h), bytes(polbuf)).save(os.path.join(dirp, "political.png"))
     Image.frombytes("RGB", (w, h), bytes(idbuf)).save(os.path.join(dirp, "prov_id.png"))
     im.resize((max(1, w // 2), max(1, h // 2)), Image.BILINEAR).save(os.path.join(dirp, "base.png"))
 
