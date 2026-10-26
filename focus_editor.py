@@ -3614,6 +3614,52 @@ def read_error_log(path=None, limit_files=40):
             "items": items, "files": sorted(files.items(), key=lambda kv: -kv[1])[:limit_files]}
 
 
+def _bom_issues(root, limit=40):
+    """编码规范检查（HOI4 要求）：
+    - localisation/*.yml 必须带 UTF-8 BOM（否则游戏读不到本地化）
+    - common / history / events 下的 .txt 不应带 BOM
+    返回 (问题列表 [(类型, 相对路径)], yml 总数, txt 总数)"""
+    root = os.path.abspath(root)
+    BOM3 = bytes((0xEF, 0xBB, 0xBF))
+    issues = []
+    yml_n = txt_n = 0
+    locd = os.path.join(root, "localisation")
+    if os.path.isdir(locd):
+        for dp, _dn, fs in os.walk(locd):
+            for fn in fs:
+                if not fn.lower().endswith(".yml"):
+                    continue
+                yml_n += 1
+                fp = os.path.join(dp, fn)
+                try:
+                    with open(fp, "rb") as f:
+                        head = f.read(3)
+                except Exception:
+                    continue
+                if head != BOM3:
+                    issues.append(("缺 BOM", os.path.relpath(fp, root)))
+    for sub in ("common", "history", "events"):
+        d0 = os.path.join(root, sub)
+        if not os.path.isdir(d0):
+            continue
+        for dp, _dn, fs in os.walk(d0):
+            for fn in fs:
+                if not fn.lower().endswith(".txt"):
+                    continue
+                txt_n += 1
+                fp = os.path.join(dp, fn)
+                try:
+                    with open(fp, "rb") as f:
+                        head = f.read(3)
+                except Exception:
+                    continue
+                if head == BOM3:
+                    issues.append(("多余 BOM", os.path.relpath(fp, root)))
+                if len(issues) >= limit * 3:
+                    break
+    return issues[:limit], yml_n, txt_n, len(issues)
+
+
 def lint_project(limit=1500):
 
 
@@ -3685,6 +3731,23 @@ def lint_project(limit=1500):
         if r["id"] not in EVENTS:
             add("warn", "focus", "国策 %s 触发了不存在的事件 %s" % (r["focus"], r["id"]),
                 r["file"], {"type": "tree", "id": r["tree"]})
+
+    # v0.96 编码规范（BOM）
+    try:
+        _bom, _yml_n, _txt_n, _bom_total = _bom_issues(ROOTS[0] if ROOTS else GAME)
+        if _bom_total:
+            miss = sum(1 for k, _ in _bom if k == "缺 BOM")
+            extra = _bom_total - miss
+            parts = []
+            if miss:
+                parts.append("%d 个 .yml 缺 BOM（游戏会读不到本地化）" % miss)
+            if extra:
+                parts.append("%d 个 .txt 带多余 BOM" % extra)
+            add("warn", "bom", "编码规范问题：" + "；".join(parts),
+                "抽查 %d 个 yml / %d 个 txt；示例：" % (_yml_n, _txt_n) +
+                "、".join("%s %s" % (k, v) for k, v in _bom[:5]), "", {"type": "log", "id": ""})
+    except Exception as e:
+        print("BOM 检查失败:", e)
 
     # v0.86 铁路等级（静态，不必跑游戏）
     try:
