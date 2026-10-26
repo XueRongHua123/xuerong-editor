@@ -5009,6 +5009,14 @@ async function mapLoadMeta(root){
     metaEl.textContent = (MAP.w + '×' + MAP.h) + ' · ' + (MAP.meta.provinces || 0) + ' 块 · 构建于 ' + (MAP.meta.built || '');
     const bb = document.getElementById('mapBuild');
     if(bb) bb.classList.remove('primary');
+    // submod：地图可能来自父 mod
+    if(Array.isArray(d.layers) && d.layers.length > 2){
+      const parent = d.layers[d.layers.length - 2];
+      const provider = (d.source || '').replace(/[\/]+$/, '');
+      if(parent && provider && provider.indexOf(parent.name) < 0){
+        metaEl.textContent += ' · 地图来自 ' + parent.name;
+      }
+    }
     mapFit();
     mapReadyHint();
   }catch(e){ metaEl.textContent = '读取失败：' + e.message; }
