@@ -3732,6 +3732,25 @@ def lint_project(limit=1500):
             add("warn", "focus", "国策 %s 触发了不存在的事件 %s" % (r["focus"], r["id"]),
                 r["file"], {"type": "tree", "id": r["tree"]})
 
+    # v0.97 科技前置引用闭环
+    try:
+        _KW = {"focus", "OR", "AND", "NOT", "has_dlc", "has_global_flag", "has_country_flag",
+               "has_tech", "if", "else", "limit", "tooltip", "custom_effect_tooltip",
+               "has_start_date", "date", "original_tag", "tag"}
+        _dangling = []
+        for _tid, _t in TECHS.items():
+            for _p in (_t.get("prereq") or []):
+                if _p in _KW or _p in TECHS:
+                    continue
+                _dangling.append((_tid, _p))
+        if _dangling:
+            add("warn", "tech", "%d 处科技前置引用了不存在的科技" % len(_dangling),
+                "例如 " + "、".join("%s → %s" % (a, b) for a, b in _dangling[:6]) +
+                "；可能是科技改名或删掉后没清 prerequisites", "",
+                {"type": "log", "id": ""})
+    except Exception as e:
+        print("科技前置检查失败:", e)
+
     # v0.96 编码规范（BOM）
     try:
         _bom, _yml_n, _txt_n, _bom_total = _bom_issues(ROOTS[0] if ROOTS else GAME)
