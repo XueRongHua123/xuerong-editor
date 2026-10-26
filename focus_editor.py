@@ -3058,14 +3058,42 @@ def _rail_over_level(root, max_level=5):
     return 0, 0
 
 
+# v0.87 日志快照（防止 error.log 被下一次启动覆盖）
+LOG_SNAP_DIR = os.path.join(WORK, "logs")
+LOG_KEEP = 10
+
+
+def _log_snapshot(src):
+    """把当前 error.log 复制一份带时间戳的快照，返回 (快照路径, 快照时间, 是否新建)"""
+    try:
+        os.makedirs(LOG_SNAP_DIR, exist_ok=True)
+        st = os.stat(src)
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(st.st_mtime))
+        dst = os.path.join(LOG_SNAP_DIR, "error_%s.log" % stamp)
+        created = not os.path.exists(dst)
+        if created:
+            shutil.copy2(src, dst)
+            # 只保留最近 N 份
+            snaps = sorted(f for f in os.listdir(LOG_SNAP_DIR) if f.startswith("error_") and f.endswith(".log"))
+            for old in snaps[:-LOG_KEEP]:
+                try:
+                    os.remove(os.path.join(LOG_SNAP_DIR, old))
+                except Exception:
+                    pass
+        return dst, stamp, created
+    except Exception:
+        return src, "", False
+
+
 def read_error_log(path=None, limit_files=40):
     """解析 error.log：按类别聚合，给出计数、样例与涉及文件"""
     cand = [path] if path else _log_paths()
     if not cand or not os.path.exists(cand[0]):
         return {"ok": False, "msg": "没找到 error.log（先运行一次游戏）"}
     p = cand[0]
+    snap, stamp, created = _log_snapshot(p)
     try:
-        text = io.open(p, encoding="utf-8", errors="replace").read()
+        text = io.open(snap if os.path.exists(snap) else p, encoding="utf-8", errors="replace").read()
     except Exception as e:
         return {"ok": False, "msg": "读取日志失败：%s" % e}
     lines = text.splitlines()
@@ -3108,7 +3136,8 @@ def read_error_log(path=None, limit_files=40):
                       "title": "%s（%d 条）" % (b["title"], b["count"]),
                       "detail": detail + "　建议：" + b["hint"],
                       "samples": b["samples"]})
-    return {"ok": True, "path": p, "lines": len(lines), "unmatched": unmatched,
+    return {"ok": True, "path": p, "snapshot": snap, "snapshot_stamp": stamp,
+            "snapshot_created": created, "lines": len(lines), "unmatched": unmatched,
             "items": items, "files": sorted(files.items(), key=lambda kv: -kv[1])[:limit_files]}
 
 
