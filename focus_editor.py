@@ -2187,7 +2187,7 @@ def scripted_payload():
 
 # v0.71 地图图层构建（Pillow，无需 numpy）
 MAP_CACHE_DIR = os.path.join(WORK, "cache", "map")
-MAP_ASSETS = ("base.png", "province.png", "edges.png", "state.png", "political.png", "region.png", "prov_id.png",
+MAP_ASSETS = ("base.png", "province.png", "edges.png", "state.png", "political.png", "region.png", "terrain.png", "continent.png", "prov_id.png",
               "prov_index.json", "centers.json", "regions.json", "meta.json")
 
 
@@ -2319,6 +2319,8 @@ def map_build(force=False, root=None):
     # 1) definition.csv：颜色 -> 省 id
     color2prov = {}
     prov2type = {}
+    prov2terrain = {}
+    prov2continent = {}
     with io.open(csv, encoding="utf-8", errors="replace") as f:
         for line in f:
             parts = line.strip().split(";")
@@ -2331,6 +2333,13 @@ def map_build(force=False, root=None):
                 continue
             color2prov[rgb] = pid
             prov2type[pid] = parts[4] or "land"
+            if len(parts) > 6:
+                prov2terrain[pid] = (parts[6] or "").strip()
+            if len(parts) > 7:
+                try:
+                    prov2continent[pid] = int(parts[7])
+                except Exception:
+                    pass
 
     # 2) 读图
     im = Image.open(bmp).convert("RGB")
@@ -2398,11 +2407,15 @@ def map_build(force=False, root=None):
     statebuf = bytearray(n * 3)
     polbuf = bytearray(n * 3)
     regbuf = bytearray(n * 3)
+    terrbuf = bytearray(n * 3)
+    contbuf = bytearray(n * 3)
     edgebuf = bytearray(n * 3)
     idbuf = bytearray(n * 3)
     prov_color = {}
     state_color = {}
     reg_color = {}
+    terr_color = {}
+    cont_color = {}
     for i in range(n):
         pid = ids[i]
         c = prov_color.get(pid)
@@ -2422,6 +2435,20 @@ def map_build(force=False, root=None):
         if pcb is None:
             pcb = neutral
         polbuf[o:o + 3] = pcb
+        # 地形：按 definition.csv 的 terrain 名字取稳定色
+        tname = prov2terrain.get(pid, "")
+        tc = terr_color.get(tname)
+        if tc is None:
+            tc = _hsv_hex(zlib.crc32(tname.encode("utf-8")) % 997, 0.35, 0.72) if tname else bytes((26, 30, 28))
+            terr_color[tname] = tc
+        terrbuf[o:o + 3] = tc
+        # 大洲
+        con = prov2continent.get(pid, 0)
+        cc2 = cont_color.get(con)
+        if cc2 is None:
+            cc2 = _hsv_hex(con * 7 + 11, 0.40, 0.78) if con else bytes((30, 34, 32))
+            cont_color[con] = cc2
+        contbuf[o:o + 3] = cc2
         rid = prov2region.get(pid, 0)
         rc = reg_color.get(rid)
         if rc is None:
@@ -2481,6 +2508,8 @@ def map_build(force=False, root=None):
     Image.frombytes("RGB", (w, h), bytes(edgebuf)).save(os.path.join(dirp, "edges.png"))
     Image.frombytes("RGB", (w, h), bytes(polbuf)).save(os.path.join(dirp, "political.png"))
     Image.frombytes("RGB", (w, h), bytes(regbuf)).save(os.path.join(dirp, "region.png"))
+    Image.frombytes("RGB", (w, h), bytes(terrbuf)).save(os.path.join(dirp, "terrain.png"))
+    Image.frombytes("RGB", (w, h), bytes(contbuf)).save(os.path.join(dirp, "continent.png"))
     Image.frombytes("RGB", (w, h), bytes(idbuf)).save(os.path.join(dirp, "prov_id.png"))
     im.resize((max(1, w // 2), max(1, h // 2)), Image.BILINEAR).save(os.path.join(dirp, "base.png"))
 
@@ -2492,7 +2521,8 @@ def map_build(force=False, root=None):
     index = {}
     for pid, cnt in counts.items():
         index[str(pid)] = {"state": prov2state.get(pid, 0), "type": prov2type.get(pid, ""),
-                           "region": prov2region.get(pid, 0), "px": cnt}
+                           "region": prov2region.get(pid, 0), "terrain": prov2terrain.get(pid, ""),
+                           "continent": prov2continent.get(pid, 0), "px": cnt}
 
     io.open(os.path.join(dirp, "centers.json"), "w", encoding="utf-8", newline="").write(
         json.dumps(centers, ensure_ascii=False))
@@ -2716,7 +2746,236 @@ def _strategic_regions(root):
     return prov2region, regions
 
 
+# v0.85 地图完整性检查
+def _map_ids_from_cache(dirp):
+    """从缓存的 prov_id.png 还原 ids 数组（省 id 按 RGB 编码）"""
+    from array import array
+    from PIL import Image
+    p = os.path.join(dirp, "prov_id.png")
+    if not os.path.exists(p):
+        return None, 0, 0, None
+    im = Image.open(p).convert("RGB")
+    w, h = im.size
+    raw = im.tobytes()
+    n = w * h
+    ids = array("I", bytes(4 * n))
+    a = ids
+    for i in range(n):
+        o = i * 3
+        a[i] = (raw[o] << 16) | (raw[o + 1] << 8) | raw[o + 2]
+    return ids, w, h, raw
+
+
+def map_integrity(root=None, limit=200):
+    """地图完整性检查：连通性、州/战略区连续、无效 ID、十字交叉、铁路断连、无主/超大省"""
+    root = _map_pick(root)
+    if not root:
+        return {"ok": False, "msg": "还没有加载 mod"}
+    dirp, _, base = _map_dir(root)
+    if not dirp or not os.path.exists(os.path.join(dirp, "prov_id.png")):
+        return {"ok": False, "msg": "请先构建图层（缺少 prov_id.png）"}
+    t0 = time.time()
+    ids, w, h, raw = _map_ids_from_cache(dirp)
+    if not ids:
+        return {"ok": False, "msg": "读取图层缓存失败"}
+    n = w * h
+    items = []
+
+    def add(level, title, detail, provs=None):
+        items.append({"level": level, "kind": "map", "title": title,
+                      "detail": detail or "", "provinces": provs or []})
+
+    # 省集合与像素数
+    px = {}
+    for i in range(n):
+        pid = ids[i]
+        if pid:
+            px[pid] = px.get(pid, 0) + 1
+    known = set(px)
+
+    # 4-邻接 + 十字交叉
+    adj = {}
+    cross = 0
+    for y in range(h):
+        row = y * w
+        for x in range(w):
+            i = row + x
+            a = ids[i]
+            if x + 1 < w:
+                b = ids[i + 1]
+                if a != b:
+                    if a and b:
+                        adj.setdefault(a, set()).add(b)
+                        adj.setdefault(b, set()).add(a)
+            if y + 1 < h:
+                b = ids[i + w]
+                if a != b:
+                    if a and b:
+                        adj.setdefault(a, set()).add(b)
+                        adj.setdefault(b, set()).add(a)
+                # 2x2 十字：左上==右下 且 右上==左下 且 两两不同
+                if x + 1 < w:
+                    c = ids[i + 1]
+                    d = ids[i + w]
+                    e = ids[i + w + 1]
+                    if a == e and c == d and a != c and a and c:
+                        cross += 1
+
+    # 省份像素连通（BFS）
+    seen = bytearray(n)
+    comp = {}
+    for i in range(n):
+        if seen[i]:
+            continue
+        pid = ids[i]
+        if not pid:
+            seen[i] = 1
+            continue
+        stack = [i]
+        seen[i] = 1
+        cnt = 0
+        while stack:
+            cur = stack.pop()
+            cnt += 1
+            cy, cx = divmod(cur, w)
+            for nb in (cur - 1 if cx > 0 else -1,
+                       cur + 1 if cx + 1 < w else -1,
+                       cur - w if cy > 0 else -1,
+                       cur + w if cy + 1 < h else -1):
+                if nb < 0 or seen[nb]:
+                    continue
+                if ids[nb] == pid:
+                    seen[nb] = 1
+                    stack.append(nb)
+        comp[pid] = comp.get(pid, 0) + 1
+
+    bad_comp = [(pid, c) for pid, c in comp.items() if c > 1]
+
+    # 州 / 战略区归属
+    prov2state = {}
+    prov2state_one = {}
+    for sid, st in STATES.items():
+        try:
+            sid_int = int(st.get("id") or sid)
+        except Exception:
+            continue
+        for p in (st.get("provinces") or []):
+            try:
+                pid_i = int(p)
+            except Exception:
+                continue
+            prov2state.setdefault(pid_i, []).append(sid_int)
+            if pid_i not in prov2state_one:
+                prov2state_one[pid_i] = sid_int
+    prov2region, region_list = _strategic_regions(root)
+
+    # 一省多州 / 无效 ID
+    multi = [(pid, sids) for pid, sids in prov2state.items() if len(sids) > 1]
+    dead_state = [pid for pid in prov2state if pid not in known]
+    dead_region = [pid for pid in prov2region if pid not in known]
+
+    def group_split(mapping, label):
+        """按州/地区分组，用省邻接图判断每组是否连通"""
+        groups = {}
+        for pid, v in mapping.items():
+            groups.setdefault(v, set()).add(pid)
+        bad = []
+        for gid, members in groups.items():
+            members = set(m for m in members if m in known)
+            if len(members) < 2:
+                continue
+            start = next(iter(members))
+            stack = [start]
+            visited = {start}
+            while stack:
+                cur = stack.pop()
+                for nb in adj.get(cur, ()):
+                    if nb in members and nb not in visited:
+                        visited.add(nb)
+                        stack.append(nb)
+            if len(visited) != len(members):
+                bad.append((gid, len(members), len(visited)))
+        return bad
+
+    split_state = group_split(prov2state_one, "州")
+    split_region = group_split(prov2region, "战略区")
+
+    # 铁路
+    rail_bad = 0
+    rail_check = 0
+    rp = None
+    for b in (root, GAME):
+        cand = os.path.join(b or "", "map", "railways.txt")
+        if os.path.exists(cand):
+            rp = cand
+            break
+    if rp:
+        try:
+            text = strip_comments(io.open(rp, encoding="utf-8", errors="replace").read())
+            for m in re.finditer(r'railway\s*=\s*\{([^{}]*)\}', text):
+                body = m.group(1)
+                pm = re.search(r'provinces\s*=\s*\{([^}]*)\}', body)
+                if not pm:
+                    continue
+                chain = [int(x) for x in re.findall(r'\d+', pm.group(1))]
+                for a, b2 in zip(chain, chain[1:]):
+                    rail_check += 1
+                    if b2 not in adj.get(a, set()):
+                        rail_bad += 1
+        except Exception:
+            pass
+
+    # 无主省 / 超大省
+    no_state = [pid for pid in known if pid not in prov2state and px.get(pid, 0) > 0]
+    big = sorted(((pid, c) for pid, c in px.items() if c > 2000), key=lambda x: -x[1])[:30]
+
+    # 汇总条目
+    if bad_comp:
+        items.append({"level": "warn", "kind": "map",
+                      "title": "%d 个省份由多块不相连的区域组成（岛屿/飞地或碎片）" % len(bad_comp),
+                      "detail": "例如省 " + ", ".join("%d（%d 块）" % (p, c) for p, c in bad_comp[:8]),
+                      "provinces": [p for p, c in bad_comp[:20]]})
+    if multi:
+        add("error", "%d 个省份同时属于多个州" % len(multi),
+            "例如省 %s" % ", ".join("%d→州%s" % (p, s) for p, s in multi[:5]),
+            [p for p, s in multi[:20]])
+    if split_state:
+        add("warn", "%d 个州在图上不连续（多为岛屿/飞地，需逐个人工确认）" % len(split_state),
+            "例如州 " + ", ".join("%d（%d 省，最大连通 %d）" % g for g in split_state[:6]),
+            [])
+    if split_region:
+        add("warn", "%d 个战略区不连续（多为跨海区域）" % len(split_region),
+            "例如地区 " + ", ".join("%d（%d 省，最大连通 %d）" % g for g in split_region[:6]),
+            [])
+    if dead_state:
+        add("error", "州里引用了 %d 个不存在的省" % len(dead_state),
+            "例如 " + ", ".join(str(x) for x in dead_state[:10]), dead_state[:20])
+    if dead_region:
+        add("error", "战略区里引用了 %d 个不存在的省" % len(dead_region),
+            "例如 " + ", ".join(str(x) for x in dead_region[:10]), dead_region[:20])
+    if cross:
+        add("warn", "%d 处十字交叉像素（2×2 对角线歧义）" % cross,
+            "会在地图上产生斜角接缝，可用「检查」后手动修或跑修复", [])
+    if rail_check and rail_bad:
+        add("warn", "铁路有 %d 段两端省份不相邻（共检查 %d 段）" % (rail_bad, rail_check),
+            "可能是拆分/删除省份后遗留", [])
+    if no_state:
+        add("info", "%d 块陆地省份不属于任何州" % len(no_state),
+            "例如 " + ", ".join(str(x) for x in no_state[:10]), no_state[:20])
+    if big:
+        add("info", "%d 个省份面积超过 2000 像素（细化候选）" % len(big),
+            "最大：" + ", ".join("%d（%d px）" % (p, c) for p, c in big[:6]), [p for p, c in big[:10]])
+
+    counts = {"error": 0, "warn": 0, "info": 0}
+    for it in items:
+        counts[it["level"]] = counts.get(it["level"], 0) + 1
+    return {"ok": True, "items": items[:limit], "stats": counts,
+            "sizes": {"w": w, "h": h, "provinces": len(known)},
+            "ms": int((time.time() - t0) * 1000), "source": base}
+
+
 def map_asset(name, root=None):
+
 
     """返回缓存目录里的资产路径（白名单，防路径穿越）"""
     if name not in MAP_ASSETS:
@@ -4631,6 +4890,8 @@ class Handler(SimpleHTTPRequestHandler):
                                  body.get("tid", ""), body.get("x", 0), body.get("y", 0)))
         elif self.path == "/api/state_province":
             self._send(state_province_edit(body.get("pid"), body.get("target")))
+        elif self.path == "/api/map_integrity":
+            self._send(map_integrity(body.get("root") or None))
         elif self.path == "/api/map_cache_clear":
             self._send(map_cache_clear())
         elif self.path == "/api/map_build":
