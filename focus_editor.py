@@ -2338,6 +2338,29 @@ def map_build(force=False, root=None):
     return {"ok": True, "cached": False, "meta": meta}
 
 
+def map_cache_clear():
+    """清空所有地图图层缓存（源文件不动，下次打开自动重建）"""
+    total = 0
+    n = 0
+    if os.path.isdir(MAP_CACHE_DIR):
+        for name in sorted(os.listdir(MAP_CACHE_DIR)):
+            p = os.path.join(MAP_CACHE_DIR, name)
+            if not os.path.isdir(p):
+                continue
+            size = 0
+            for dp, _, fs in os.walk(p):
+                for f in fs:
+                    try:
+                        size += os.path.getsize(os.path.join(dp, f))
+                    except Exception:
+                        pass
+            shutil.rmtree(p, ignore_errors=True)
+            total += size
+            n += 1
+    return {"ok": True, "dirs": n, "bytes": total,
+            "msg": "已清理 %d 个来源的缓存，释放 %.1f MB" % (n, total / 1e6)}
+
+
 def map_asset(name, root=None):
     """返回缓存目录里的资产路径（白名单，防路径穿越）"""
     if name not in MAP_ASSETS:
@@ -4250,6 +4273,8 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path == "/api/tech_move":
             self._send(tech_move(body.get("root", ""), body.get("rel", ""),
                                  body.get("tid", ""), body.get("x", 0), body.get("y", 0)))
+        elif self.path == "/api/map_cache_clear":
+            self._send(map_cache_clear())
         elif self.path == "/api/map_build":
             self._send(map_build(bool(body.get("force")), (body.get("root") or None)))
         elif self.path == "/api/country_variant":
