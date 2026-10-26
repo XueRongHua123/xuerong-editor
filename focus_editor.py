@@ -1888,7 +1888,94 @@ def _flag_usage():
     return sets, haves
 
 
+# v0.67 脚本检查：定义清单 + 全项目引用计数
+LOGIC_WORDS = {"OR", "AND", "NOT", "NOR", "NAND", "XOR", "IF", "ELSE", "LIMIT", "ELSE_IF"}
+SCRIPT_CACHE = {"stamp": None, "payload": None}
+
+
+def _is_logic_word(name):
+    return name in LOGIC_WORDS or (name.isupper() and len(name) <= 4)
+
+
+def _scripted_defs():
+    """只扫 mod 的 scripted_triggers / scripted_effects，只认顶格定义（支持中文名）"""
+    out = []
+    def_re = re.compile(r'(?m)^([^\W\d][\w]*)\s*=\s*\{')
+    for root in ROOTS:
+        if is_under_game(root):
+            continue
+        for kind, sub in (("trigger", "scripted_triggers"), ("effect", "scripted_effects")):
+            d = os.path.join(root, "common", sub)
+            if not os.path.isdir(d):
+                continue
+            for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+                try:
+                    text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
+                except Exception:
+                    continue
+                for m in def_re.finditer(text):
+                    k = m.group(1)
+                    if _is_logic_word(k) or k in ("scripted_triggers", "scripted_effects"):
+                        continue
+                    b = text.find('{', m.end() - 1)
+                    e = brace_match(text, b)
+                    body = text[b + 1:e - 1].strip() if e > b else ""
+                    out.append({"kind": kind, "name": k, "file": fn, "empty": not body})
+    return out
+
+
+def _script_ref_counts(names):
+    """全项目扫 `名字 =` 形式的键出现次数（含定义本身）"""
+    counts = dict((n, 0) for n in names)
+    if not names:
+        return counts
+    key_re = re.compile(r'(?<!\w)([^\W\d][\w]*)\s*=')
+    for root in ROOTS:
+        if is_under_game(root):
+            continue
+        for base in ("common", "events", "history"):
+            base_dir = os.path.join(root, base)
+            if not os.path.isdir(base_dir):
+                continue
+            for dirpath, _, files in os.walk(base_dir):
+                for fn in files:
+                    if not fn.endswith(".txt"):
+                        continue
+                    try:
+                        text = strip_comments(io.open(os.path.join(dirpath, fn), encoding="utf-8",
+                                                     errors="replace").read())
+                    except Exception:
+                        continue
+                    for m in key_re.finditer(text):
+                        n = m.group(1)
+                        if n in counts:
+                            counts[n] += 1
+    return counts
+
+
+def scripted_payload():
+    """返回脚本清单（带缓存，数据变了才重扫）"""
+    stamp = (tuple(ROOTS), len(TREES), len(EVENTS), len(IDEAS), len(TECHS))
+    if SCRIPT_CACHE["stamp"] == stamp and SCRIPT_CACHE["payload"]:
+        hit = dict(SCRIPT_CACHE["payload"])
+        hit["cached"] = True
+        return hit
+    defs = _scripted_defs()
+    counts = _script_ref_counts(set(d["name"] for d in defs))
+    items = []
+    for d in defs:
+        items.append({"name": d["name"], "kind": d["kind"], "file": d["file"],
+                      "refs": counts.get(d["name"], 0), "empty": d["empty"]})
+    items.sort(key=lambda x: (x["refs"], x["name"]))
+    unused = len([i for i in items if i["refs"] <= 1])
+    payload = {"ok": True, "items": items, "total": len(items), "unused": unused, "cached": False}
+    SCRIPT_CACHE["stamp"] = stamp
+    SCRIPT_CACHE["payload"] = payload
+    return payload
+
+
 def lint_project(limit=1500):
+
 
     """跨系统引用检查：树↔国家、历史↔树、州↔国家、事件↔事件、本地化"""
     items = []
@@ -3519,6 +3606,8 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/country_history":
             qs = parse_qs(urlparse(self.path).query)
             self._send(country_history_raw(qs.get("tag", [""])[0]))
+        elif path_only == "/api/scripted":
+            self._send(scripted_payload())
         elif path_only == "/api/lint":
             self._send(lint_project())
         elif path_only == "/api/missing_loc":
