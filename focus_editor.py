@@ -11,7 +11,7 @@
 - 拖动节点改 x/y、表单改前置/互斥、保存写回原文件（自动 .bak 备份）；
 - 导出“覆盖包”ZIP（只含改动文件，解压覆盖到 mod 目录即可）。
 """
-import io, os, re, json, zipfile, shutil, time, argparse, threading, webbrowser, sys, string, hashlib, colorsys
+import io, os, re, json, zipfile, shutil, time, argparse, threading, webbrowser, sys, string, hashlib, colorsys, zlib
 import urllib.request, urllib.error
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
@@ -698,6 +698,19 @@ def load_countries(root):
                     c["color"] = rgb
                 c["color_from"] = p
                 break
+
+    # 没写 color 的国家：按 tag 派生一个稳定色（游戏里也用引擎兜底色，这里保证不灰、不撞色）
+    for tag, c in list(COUNTRIES.items()):
+        if c.get("source") != name or c.get("color"):
+            continue
+        try:
+            hue = (zlib.crc32(tag.encode("utf-8")) % 1000) / 1000.0
+            r, g, b = colorsys.hsv_to_rgb(hue, 0.45, 0.78)
+            c["color"] = [round(r, 4), round(g, 4), round(b, 4)]
+            c["color_derived"] = True
+        except Exception:
+            c["color"] = [0.52, 0.52, 0.52]
+            c["color_derived"] = True
 
     # 开局历史
     d = os.path.join(root, "history", "countries")
