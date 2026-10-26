@@ -1176,7 +1176,7 @@
       </div>
       <div id="aiHistory"></div>
       <label>提问<textarea id="aiPrompt" style="height:80px" placeholder="例如：帮我写一个完成时加 50 政治点的国策效果"></textarea></label>
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="aiSend">发送</button><button class="btn" id="aiCopy">复制结果</button><select id="aiTarget" class="btn" style="max-width:150px"><option value="">插入到…</option><option value="edEffect">国策效果</option><option value="ideaRaw">精神原文</option><option value="equipRaw">装备原文</option><option value="techRaw">科技原文</option><option value="eventRaw">事件原文</option></select><button class="btn" id="aiInsert">插入</button><span class="k" id="aiHint"></span></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="aiSend">发送</button><button class="btn" id="aiStop" style="display:none">停止</button><button class="btn" id="aiCopy">复制结果</button><select id="aiTarget" class="btn" style="max-width:150px"><option value="">插入到…</option><option value="edEffect">国策效果</option><option value="ideaRaw">精神原文</option><option value="equipRaw">装备原文</option><option value="techRaw">科技原文</option><option value="eventRaw">事件原文</option></select><button class="btn" id="aiInsert">插入</button><span class="k" id="aiHint"></span></div>
       <div id="aiMeta"></div>
       <pre id="aiOut" class="ai-out"></pre>
     </div>
@@ -2586,6 +2586,7 @@ function aiBubbleBusy(on){
 
 /* v0.61 面板绑定 */
 document.getElementById('aiTest').onclick = aiTest;
+document.getElementById('aiStop').onclick = stopAI;
 document.getElementById('aiClearHistory').onclick = aiClearHistory;
 document.querySelectorAll('#aiTemplates .cm-chip').forEach(el=>{
   el.onclick = ()=>aiFillTemplate(el.dataset.tpl);
@@ -3044,25 +3045,75 @@ async function saveAIConfig(){
   const j = await r.json();
   status(j.msg || '', !j.ok);
 }
+/* ---------- v0.69 AI 流式 ---------- */
+let aiAbort = null;
+
 async function sendAI(){
   const out = document.getElementById('aiOut');
   const prompt = document.getElementById('aiPrompt').value.trim();
   if(!prompt){ status('先输入问题'); return; }
-  out.textContent = '请求中…';
+  out.textContent = '';
   aiUpdateMeta('请求中…');
   const t0 = Date.now();
+  aiAbort = new AbortController();
+  const stopBtn = document.getElementById('aiStop');
+  if(stopBtn) stopBtn.style.display = '';
+  let acc = '', finished = false;
   try{
     const r = await fetch('/api/ai_chat', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({prompt, context: document.getElementById('aiContext').value})});
-    const j = await r.json();
-    out.textContent = j.ok ? (j.msg || '') : ('失败：' + (j.msg || '未知错误'));
-    aiUpdateMeta((j.ok ? '✓' : '✗') + ' ' + (Date.now() - t0) + 'ms · ' + (j.ok ? '已返回' : '可点「测试」看连通性'));
-    if(j.ok) aiPushHistory(prompt, j.msg || '');
+      body: JSON.stringify({prompt, context: document.getElementById('aiContext').value, stream: true}),
+      signal: aiAbort.signal});
+    if(!r.ok || !r.body){ throw new Error('HTTP ' + r.status); }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while(true){
+      const step = await reader.read();
+      if(step.done) break;
+      buf += dec.decode(step.value, {stream: true});
+      let idx;
+      while((idx = buf.indexOf('\n\n')) >= 0){
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const line = chunk.split('\n').find(l=>l.indexOf('data:') === 0);
+        if(!line) continue;
+        let obj;
+        try{ obj = JSON.parse(line.slice(5).trim()); }catch(e){ continue; }
+        if(obj.d){
+          acc += obj.d;
+          out.textContent = acc;
+          out.scrollTop = out.scrollHeight;
+        }
+        if(obj.end){
+          finished = true;
+          if(!obj.ok){
+            out.textContent = acc || ('失败：' + (obj.msg || '未知错误'));
+            aiUpdateMeta('✗ ' + (obj.msg || ''));
+          } else {
+            aiUpdateMeta('✓ ' + (Date.now() - t0) + 'ms · 流式');
+            if(acc) aiPushHistory(prompt, acc);
+          }
+        }
+      }
+    }
+    if(!finished && acc){ aiUpdateMeta('✓ ' + (Date.now() - t0) + 'ms · 流式'); aiPushHistory(prompt, acc); }
   }catch(e){
-    out.textContent = '失败：' + e.message;
-    aiUpdateMeta('✗ 网络错误');
+    if(e.name === 'AbortError'){
+      aiUpdateMeta('已停止');
+      if(acc) aiPushHistory(prompt, acc);
+    } else {
+      out.textContent = '失败：' + e.message;
+      aiUpdateMeta('✗ 网络错误');
+    }
   }
+  if(stopBtn) stopBtn.style.display = 'none';
+  aiAbort = null;
 }
+
+function stopAI(){
+  if(aiAbort){ aiAbort.abort(); }
+}
+
 async function addEvent(){
   const id = prompt('新事件 ID（namespace.member，例如 my_ns.1）：');
   if(!id) return;
