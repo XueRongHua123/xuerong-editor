@@ -484,6 +484,30 @@
   #tbMoreMenu .tb-more-item{padding:7px 10px;border-radius:6px;font-size:12px;color:var(--text);cursor:pointer}
   #tbMoreMenu .tb-more-item:hover{background:var(--panel2);color:var(--accent)}
   /* ---------- v0.71 地图面板 ---------- */
+  /* ---------- v0.85 地图检查面板 ---------- */
+  #mapCheckModal{position:fixed;inset:0;z-index:99;display:none;place-items:center;
+    background:rgba(8,10,9,.72);backdrop-filter:blur(3px)}
+  #mapCheckModal.show{display:grid}
+  #mckCard{width:min(880px,calc(100% - 48px));height:min(680px,calc(100% - 48px));display:flex;
+    flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+  #mckHead{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line)}
+  #mckHead b{font-size:13px}
+  #mckStats{margin-left:auto;display:flex;gap:8px;font-size:11.5px}
+  #mckStats span{padding:2px 8px;border-radius:20px;border:1px solid var(--line2)}
+  #mckStats .e{color:#e08a7a;border-color:color-mix(in srgb,#e08a7a 45%,transparent)}
+  #mckStats .w{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,transparent)}
+  #mckStats .i{color:var(--t2)}
+  #mckList{flex:1;overflow:auto;padding:8px 12px}
+  .mck-row{display:flex;gap:10px;padding:9px 10px;border-bottom:1px solid var(--line);align-items:flex-start}
+  .mck-row:hover{background:var(--panel2)}
+  .mck-lv{flex:0 0 42px;font-size:10.5px;font-weight:600;padding-top:2px}
+  .mck-lv.warn{color:var(--accent)}
+  .mck-lv.info{color:var(--t2)}
+  .mck-lv.error{color:#e08a7a}
+  .mck-main{flex:1;min-width:0}
+  .mck-t{font-size:12.5px;color:var(--t1)}
+  .mck-d{font-size:11px;color:var(--t2);margin-top:3px;line-height:1.5;word-break:break-all}
+  .mck-go{flex:0 0 auto;font-size:11px}
   /* ---------- v0.83 视觉层次 ---------- */
   /* 三档文字：主（正文/数值）、次（标签/说明）、弱（辅助信息） */
   :root{--t1:var(--text);--t2:var(--muted);--t3:color-mix(in srgb,var(--muted) 72%,transparent)}
@@ -1011,6 +1035,18 @@
         <div id="lintList"></div>
       </div>
     </div>
+    <div id="mapCheckModal">
+      <div id="mckCard">
+        <div id="mckHead">
+          <b>地图检查</b>
+          <span class="k" id="mckHint">连通性 · 州/战略区 · 十字交叉 · 铁路 · 无主省</span>
+          <div id="mckStats"></div>
+          <button class="btn" id="mckRun">重新检查</button>
+          <button class="btn" id="mckClose">关闭</button>
+        </div>
+        <div id="mckList"><div class="cm-empty">点「重新检查」开始</div></div>
+      </div>
+    </div>
     <div id="scriptModal">
       <div class="cm-card" style="width:min(1000px,calc(100% - 60px));height:min(760px,calc(100% - 56px));display:flex;flex-direction:column">
         <div class="cm-head">
@@ -1045,6 +1081,7 @@
           <input id="mapSearch" placeholder="省 / 州 / 战略区号，回车定位" style="width:200px;height:28px">
           <div class="map-actions">
             <button class="btn" id="mapFit">适应</button>
+            <button class="btn" id="mapOne" title="1:1 原始像素">1:1</button>
             <button class="btn" id="mapBuild">构建图层</button>
             <button class="btn" id="mapClose">关闭</button>
           </div>
@@ -1055,13 +1092,16 @@
           <button class="map-tool" data-mode="state" title="改州归属（S）">🏷</button>
           <button class="map-tool" data-mode="paint" title="涂色改省界（P）— 开发中" disabled>🖌</button>
           <button class="map-tool" data-mode="pick" title="吸管（I）— 开发中" disabled>💧</button>
+          <button class="map-tool" id="mapCheckBtn" title="地图检查（连通性/州/铁路/十字）">🔍</button>
         </div>
         <div id="mapStageWrap">
           <div id="mapStack">
             <img id="mapBase" alt="">
             <img id="mapProv" alt="">
             <img id="mapPolit" alt="">
-            <img id="mapRegion" alt="">
+            <img id="mapTerrain" alt="">
+      <img id="mapContinent" alt="">
+      <img id="mapRegion" alt="">
             <img id="mapState" alt="">
             <img id="mapEdges" alt="">
           </div>
@@ -1073,6 +1113,8 @@
               <label><input type="checkbox" id="mapLProv" checked>省色块</label>
               <label><input type="checkbox" id="mapLPolit">政治（按国家）</label>
               <label><input type="checkbox" id="mapLRegion">战略区</label>
+              <label><input type="checkbox" id="mapLTerrain">地形</label>
+              <label><input type="checkbox" id="mapLContinent">大洲</label>
               <label><input type="checkbox" id="mapLState">州</label>
             </div>
             <div class="lt-group"><div class="lt-title">基础</div>
@@ -4748,6 +4790,61 @@ function initNarrowMore(){
 /* ---------- v0.71 地图面板 ---------- */
 const MAP = {x: 0, y: 0, k: 0.24, w: 5632, h: 2048, meta: null, ready: false, idCanvas: null, idx: null, centers: null};
 
+/* ---------- v0.85 地图检查 ---------- */
+function mapFocusProvince(pid){
+  // 注意：MAP 是 const 声明，不会挂到 window 上，这里只能用词法变量
+  if(typeof MAP === 'undefined' || !MAP.ready){ status('图层未就绪，先构建图层', true); return false; }
+  const c = MAP.centers && MAP.centers[String(pid)];
+  if(!c){ status('省 ' + pid + ' 没有中心点（可能不在当前地图上）', true); return false; }
+  mapGoto(c[0], c[1], 1.2);
+  mapSelectProvince(pid);
+  status('已定位到省 ' + pid);
+  return true;
+}
+
+async function mapRunCheck(){
+  const list = document.getElementById('mckList');
+  const stats = document.getElementById('mckStats');
+  document.getElementById('mapCheckModal').classList.add('show');
+  list.innerHTML = '<div class="cm-empty">检查中…（约 10–20 秒）</div>';
+  stats.innerHTML = '';
+  try{
+    const r = await (await fetch('/api/map_integrity', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root: (typeof MAP !== 'undefined' && MAP.root) || ''})})).json();
+    if(!r.ok){ list.innerHTML = '<div class="cm-empty">' + escapeHtml(r.msg || '检查失败') + '</div>'; return; }
+    const st = r.stats || {};
+    stats.innerHTML = '<span class="e">错误 ' + (st.error || 0) + '</span>' +
+      '<span class="w">警告 ' + (st.warn || 0) + '</span>' +
+      '<span class="i">提示 ' + (st.info || 0) + '</span>';
+    const items = r.items || [];
+    if(!items.length){
+      list.innerHTML = '<div class="cm-empty">没有发现问题（' + (r.sizes ? r.sizes.provinces + ' 省，' + r.ms + ' ms' : '') + '）</div>';
+      return;
+    }
+    list.innerHTML = items.map((it, i)=>{
+      const lv = it.level === 'error' ? '错误' : (it.level === 'warn' ? '警告' : '提示');
+      return '<div class="mck-row" data-i="' + i + '">' +
+        '<span class="mck-lv ' + it.level + '">' + lv + '</span>' +
+        '<span class="mck-main"><div class="mck-t">' + escapeHtml(it.title) + '</div>' +
+        (it.detail ? '<div class="mck-d">' + escapeHtml(it.detail) + '</div>' : '') + '</span>' +
+        (it.provinces && it.provinces.length
+          ? '<button class="btn mck-go" data-p="' + it.provinces[0] + '">定位</button>' : '') +
+        '</div>';
+    }).join('');
+    list.querySelectorAll('.mck-go').forEach(b=>{
+      b.onclick = e=>{
+        e.stopPropagation();
+        const pid = Number(b.dataset.p);
+        document.getElementById('mapCheckModal').classList.remove('show');
+        mapFocusProvince(pid);
+      };
+    });
+  }catch(e){
+    list.innerHTML = '<div class="cm-empty">检查失败：' + escapeHtml(e.message) + '</div>';
+  }
+}
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -4954,6 +5051,8 @@ async function mapLoadAssets(){
   set('mapBase', 'base.png', 1);
   set('mapPolit', 'political.png', 0.9);
   set('mapRegion', 'region.png', 0.72);
+  set('mapTerrain', 'terrain.png', 0.8);
+  set('mapContinent', 'continent.png', 0.8);
   set('mapProv', 'province.png', 0.85);
   set('mapState', 'state.png', 0.62);
   set('mapEdges', 'edges.png', 0.35);
@@ -4977,6 +5076,8 @@ async function mapLoadAssets(){
 function mapApplyLayers(){
   const onPolit = document.getElementById('mapLPolit').checked;
   const onRegion = document.getElementById('mapLRegion').checked;
+  const onTerrain = document.getElementById('mapLTerrain').checked;
+  const onContinent = document.getElementById('mapLContinent').checked;
   const onProv = document.getElementById('mapLProv').checked;
   const onState = document.getElementById('mapLState').checked;
   const onEdges = document.getElementById('mapLEdges').checked;
@@ -4984,10 +5085,18 @@ function mapApplyLayers(){
   const op = Number(document.getElementById('mapOpacity').value) / 100;
   const polit = document.getElementById('mapPolit');
   const region = document.getElementById('mapRegion');
+  const terrain = document.getElementById('mapTerrain');
+  const continent = document.getElementById('mapContinent');
   const prov = document.getElementById('mapProv');
   const state = document.getElementById('mapState');
   const edges = document.getElementById('mapEdges');
   const base = document.getElementById('mapBase');
+  terrain.style.display = onTerrain ? '' : 'none';
+  terrain.style.opacity = op;
+  continent.style.display = onContinent ? '' : 'none';
+  continent.style.opacity = op;
+  // 地形/大洲与省色块互斥，避免叠三层
+  if(onTerrain || onContinent){ prov.style.opacity = 0; }
   region.style.display = onRegion ? '' : 'none';
   region.style.opacity = onRegion ? Math.min(0.85, op) : 0;
   polit.style.display = onPolit ? '' : 'none';
@@ -5102,7 +5211,8 @@ function mapInfo(pid){
     if(st) stName = ' · ' + (st.name || ('州 ' + sid));
   }
   return '省 ' + pid + ' · 州 ' + (sid || '无') + stName +
-    ' · 地区 ' + (rec.region || '无') + ' · ' + (rec.type || '');
+    ' · 地区 ' + (rec.region || '无') + (rec.terrain ? ' · ' + rec.terrain : '') +
+    (rec.continent ? ' · 洲 ' + rec.continent : '');
 }
 
 function mapReadyHint(){
@@ -5452,11 +5562,20 @@ document.getElementById('mapEntry').onclick = ()=>{ openMap(); mapBindEvents(); 
 document.getElementById('mapClose').onclick = ()=>{ document.getElementById('mapModal').classList.remove('show'); };
 document.getElementById('mapSource').addEventListener('change', e=>mapSwitchSource(e.target.value));
 document.getElementById('mapFit').onclick = mapFit;
+document.getElementById('mapOne').onclick = ()=>{
+  const wrap = document.getElementById('mapStageWrap').getBoundingClientRect();
+  const cx = (wrap.width / 2 - MAP.x) / MAP.k, cy = (wrap.height / 2 - MAP.y) / MAP.k;
+  mapGoto(cx, cy, 1);
+  status('1:1 原始像素（' + MAP.w + '×' + MAP.h + '）');
+};
 document.getElementById('mapBuild').onclick = mapBuild;
 document.getElementById('mapClear').onclick = mapClearCache;
+document.getElementById('mapCheckBtn').onclick = mapRunCheck;
+document.getElementById('mckRun').onclick = mapRunCheck;
+document.getElementById('mckClose').onclick = ()=>{ document.getElementById('mapCheckModal').classList.remove('show'); };
 
 document.getElementById('mapSearch').addEventListener('keydown', e=>{ if(e.key === 'Enter') mapSearchGo(); });
-['mapLProv','mapLState','mapLEdges','mapLBase','mapLPolit','mapLRegion'].forEach(id=>{  const el = document.getElementById(id); if(el) el.addEventListener('change', mapApplyLayers); });
+['mapLProv','mapLState','mapLEdges','mapLBase','mapLPolit','mapLRegion','mapLTerrain','mapLContinent'].forEach(id=>{  const el = document.getElementById(id); if(el) el.addEventListener('change', mapApplyLayers); });
 const mapOpEl = document.getElementById('mapOpacity'); if(mapOpEl) mapOpEl.addEventListener('input', mapApplyLayers);
 document.getElementById('scriptClose').onclick = ()=>{ document.getElementById('scriptModal').classList.remove('show'); };
 document.getElementById('scriptReload').onclick = ()=>openScriptCheck(true);
