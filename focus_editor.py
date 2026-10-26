@@ -2113,11 +2113,55 @@ def _map_dir(root):
     return os.path.join(MAP_CACHE_DIR, hashlib.md5(key.encode("utf-8")).hexdigest()[:12]), key, base
 
 
-def map_meta():
-    root = ROOTS[0] if ROOTS else GAME
-    b, d, base = _map_files(root)
+# v0.73 地图多来源
+def map_sources():
+    """列出所有可用于地图的来源：已加载的 mod（有无 map 都列出）+ 原版"""
+    out = []
+    seen = set()
+    for r in ROOTS:
+        p = os.path.abspath(r)
+        if p in seen:
+            continue
+        seen.add(p)
+        has = (os.path.exists(os.path.join(p, "map", "provinces.bmp"))
+               and os.path.exists(os.path.join(p, "map", "definition.csv")))
+        out.append({"path": p, "name": os.path.basename(p.rstrip("\\/")) or p,
+                    "has_map": has, "readonly": is_under_game(p), "is_game": False})
+    if GAME:
+        g = os.path.abspath(GAME)
+        out.append({"path": g, "name": "原版（游戏本体）",
+                    "has_map": os.path.exists(os.path.join(g, "map", "provinces.bmp")),
+                    "readonly": True, "is_game": True})
+    return out
+
+
+def _map_pick(root=None):
+    """指定 root 就用它；否则第一个带地图的 mod；最后原版"""
+    if root:
+        return root
+    for r in ROOTS:
+        if os.path.exists(os.path.join(r, "map", "provinces.bmp")):
+            return r
+    return GAME
+
+
+def _map_files_strict(root):
+    """严格模式：指定来源没有地图就返回 None，不偷偷回退到原版"""
+    if not root:
+        return None, None, None
+    b = os.path.join(root, "map", "provinces.bmp")
+    d = os.path.join(root, "map", "definition.csv")
+    if os.path.exists(b) and os.path.exists(d):
+        return b, d, root
+    return None, None, None
+
+
+def map_meta(root=None):
+    root = _map_pick(root)
+    b, d, base = _map_files_strict(root)
     if not b:
-        return {"ok": False, "msg": "找不到 map/provinces.bmp 或 definition.csv"}
+        return {"ok": False, "msg": "这个来源没有 map/provinces.bmp 或 definition.csv",
+                "sources": map_sources(), "picked": root}
     dirp, key, base = _map_dir(root)
     built = bool(dirp and os.path.exists(os.path.join(dirp, "meta.json")))
     meta = {}
@@ -2126,8 +2170,8 @@ def map_meta():
             meta = json.loads(io.open(os.path.join(dirp, "meta.json"), encoding="utf-8").read())
         except Exception:
             meta = {}
-    return {"ok": True, "built": built, "dir": dirp, "source": base,
-            "stamp": key, "meta": meta}
+    return {"ok": True, "built": built, "dir": dirp, "source": base, "stamp": key,
+            "meta": meta, "picked": root, "sources": map_sources()}
 
 
 MAP_PALETTE = ((196, 112, 92), (96, 138, 186), (150, 158, 96),
@@ -2142,14 +2186,15 @@ def _hsv_hex(i, sat=0.52, val=0.88):
     return bytes(max(10, min(246, c + d)) for c in base)
 
 
-def map_build(force=False):
-    """生成地图图层（首次约 5-8 秒），返回 meta。"""
-    root = ROOTS[0] if ROOTS else GAME
+def map_build(force=False, root=None):
+    """生成地图图层（首次约 13 秒），返回 meta。可按 root 指定来源。"""
+    root = _map_pick(root)
     if not root:
         return {"ok": False, "msg": "还没有加载任何 mod"}
-    bmp, csv, base = _map_files(root)
+    bmp, csv, base = _map_files_strict(root)
     if not bmp:
-        return {"ok": False, "msg": "找不到 map/provinces.bmp 或 definition.csv"}
+        return {"ok": False, "msg": "这个来源没有 map/provinces.bmp 或 definition.csv",
+                "sources": map_sources(), "picked": root}
     dirp, key, base = _map_dir(root)
     if not dirp:
         return {"ok": False, "msg": "无法创建缓存目录"}
@@ -2293,11 +2338,11 @@ def map_build(force=False):
     return {"ok": True, "cached": False, "meta": meta}
 
 
-def map_asset(name):
+def map_asset(name, root=None):
     """返回缓存目录里的资产路径（白名单，防路径穿越）"""
     if name not in MAP_ASSETS:
         return None
-    root = ROOTS[0] if ROOTS else GAME
+    root = _map_pick(root)
     dirp, _, _ = _map_dir(root) if root else (None, None, None)
     if not dirp:
         return None
@@ -4062,11 +4107,12 @@ class Handler(SimpleHTTPRequestHandler):
             qs = parse_qs(urlparse(self.path).query)
             self._send(country_history_raw(qs.get("tag", [""])[0]))
         elif path_only == "/api/map_meta":
-            self._send(map_meta())
+            qs3 = parse_qs(urlparse(self.path).query)
+            self._send(map_meta((qs3.get("root", [""])[0] or None)))
         elif path_only == "/api/map_asset":
             qs2 = parse_qs(urlparse(self.path).query)
             name = (qs2.get("name", [""])[0] or "")
-            p = map_asset(name)
+            p = map_asset(name, (qs2.get("root", [""])[0] or None))
             if not p:
                 self._send({"ok": False, "msg": "没有这个图块"}, 404)
             else:
@@ -4205,7 +4251,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._send(tech_move(body.get("root", ""), body.get("rel", ""),
                                  body.get("tid", ""), body.get("x", 0), body.get("y", 0)))
         elif self.path == "/api/map_build":
-            self._send(map_build(bool(body.get("force"))))
+            self._send(map_build(bool(body.get("force")), (body.get("root") or None)))
         elif self.path == "/api/country_variant":
             act = (body.get("action") or "add").lower()
             if act == "del":
