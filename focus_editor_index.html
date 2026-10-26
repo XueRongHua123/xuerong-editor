@@ -4361,7 +4361,7 @@ search.addEventListener('keydown', e=>{
   }
 });
 /* ---------- v0.51 指挥台 ---------- */
-const CP_CAT_ORDER = ['操作','国策树','焦点','国家精神','装备','科技','事件'];
+const CP_CAT_ORDER = ['最近使用','操作','国策树','焦点','国家精神','装备','科技','事件'];
 const CP_KEYS = [
   ['Ctrl+K', '命令面板（搜命令 / 焦点 / 内容）'],
   ['Ctrl+S', '保存全部改动'],
@@ -4462,6 +4462,23 @@ function cpBuild(){
   });
   return list;
 }
+/* ---------- v0.70 命令面板最近使用 ---------- */
+const CP_RECENT_KEY = 'fe_cmd_recent';
+
+function cpRecentList(){
+  try{
+    const a = JSON.parse(localStorage.getItem(CP_RECENT_KEY) || '[]');
+    return Array.isArray(a) ? a.filter(x=>x && x.cat && x.label) : [];
+  }catch(e){ return []; }
+}
+
+function cpRecentPush(cat, label){
+  if(!cat || !label) return;
+  const list = cpRecentList().filter(x=>!(x.cat === cat && x.label === label));
+  list.unshift({cat, label});
+  try{ localStorage.setItem(CP_RECENT_KEY, JSON.stringify(list.slice(0, 8))); }catch(e){}
+}
+
 function cpScore(q, s){
   if(!q) return 1;
   const i = s.indexOf(q);
@@ -4489,8 +4506,20 @@ function closeCmd(){ document.getElementById('cmdPalette').classList.remove('sho
 function cpRender(){
   const input = document.getElementById('cpInput');
   const q = (input.value || '').trim().toLowerCase();
-  const all = cpCache || (cpCache = cpBuild());
+  let all = cpCache || (cpCache = cpBuild());
   const curId = (curTree() || {}).id;
+  if(!q){
+    const seen = {};
+    const rec = [];
+    cpRecentList().forEach(r=>{
+      const key = r.cat + '\u0001' + r.label;
+      if(seen[key]) return;
+      seen[key] = 1;
+      const it = all.find(x=>x.cat === r.cat && x.label === r.label);
+      if(it) rec.push(Object.assign({}, it, {cat: '最近使用', hint: it.cat}));
+    });
+    if(rec.length) all = rec.concat(all);
+  }
   const scored = [];
   for(let i = 0; i < all.length; i++){
     const it = all[i];
@@ -4553,6 +4582,7 @@ function cpMove(step){
 }
 function cpRun(i){
   const it = cpItems[i]; if(!it) return;
+  cpRecentPush(it.cat === '最近使用' ? (it.hint || '操作') : it.cat, it.label);
   closeCmd();
   setTimeout(()=>{
     try { it.run(); } catch(e){ status('执行失败：' + (e && e.message || e), true); }
