@@ -1101,6 +1101,7 @@
           </div>
         </div><!-- /mapStageWrap -->
         <div id="mapSide" class="empty">
+          <div id="selBox">
           <h4>选中省份</h4>
           <div class="mp-row"><b class="mp-v" id="msId">—</b><span class="mp-k" id="msType"></span></div>
           <div class="mp-sep"></div>
@@ -1113,6 +1114,25 @@
             <button class="btn" id="msMoveProv">移入目标州</button>
             <button class="btn" id="msDetachProv">移出当前州</button>
             <button class="btn" id="msOpenState">在州面板打开</button>
+          </div>
+          </div><!-- /selBox -->
+          <div id="paintBox" style="display:none">
+            <h4>涂色改省界</h4>
+            <div class="mp-row"><span class="mp-k">目标省</span><b class="mp-v" id="paintPid">—</b></div>
+            <div class="mp-acts">
+              <input id="paintTarget" placeholder="目标省号（涂成这个省）" style="height:28px">
+              <label class="mp-k" style="padding:4px 0">笔刷半径 <b id="paintRVal">4</b> px
+                <input type="range" id="paintR" min="1" max="30" value="4" style="width:100%">
+              </label>
+              <button class="btn" id="paintApply">应用（写盘）</button>
+              <button class="btn" id="paintUndo">撤销上一笔</button>
+              <button class="btn" id="paintRedo">重做</button>
+            </div>
+            <div class="mp-row" style="padding-top:0"><span class="mp-k" id="paintStat">待涂 0 像素</span></div>
+            <h4>提示</h4>
+            <div class="mp-row" style="padding-top:0"><span class="mp-k" style="line-height:1.6">
+              只写当前 mod 自己的 provinces.bmp；原版与父 mod 只读。应用后可撤销，撤销是区块级恢复。
+            </span></div>
           </div>
         </div>
         </div><!-- /mapBody -->
@@ -4841,6 +4861,116 @@ async function mapRunCheck(){
   }
 }
 
+// v0.94 涂色交互（前端逻辑）
+(function(){
+  let pending = 0, painting = false, lastDab = 0;
+
+  async function paintCall(body){
+    try{
+      const r = await (await fetch('/api/map_paint', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})).json();
+      return r;
+    }catch(e){ return {ok:false, msg:e.message}; }
+  }
+
+  function targetPid(){
+    const v = (document.getElementById('paintTarget').value || '').trim();
+    return /^\d+$/.test(v) ? Number(v) : 0;
+  }
+
+  function paintStat(msg){
+    const el = document.getElementById('paintStat');
+    if(el && msg) el.textContent = msg;
+  }
+
+  async function paintBegin(){
+    const r = await paintCall({act:'begin', root: MAP.root || ''});
+    if(!r.ok){ status(r.msg || '无法开始涂色', true); return false; }
+    pending = 0;
+    paintStat('待涂 0 像素');
+    status('涂色就绪：可在地图上拖动');
+    return true;
+  }
+
+  async function paintDab(imgX, imgY){
+    const pid = targetPid();
+    if(!pid){ status('先在右侧填目标省号', true); return; }
+    const radius = Number(document.getElementById('paintR').value || 4);
+    const r = await paintCall({act:'dab', x: Math.round(imgX), y: Math.round(imgY), r: radius, pid: pid});
+    if(r.ok){
+      pending += r.pixels || 0;
+      paintStat('待涂 ' + pending + ' 像素');
+      const tp = document.getElementById('paintPid');
+      if(tp) tp.textContent = String(pid);
+    }
+  }
+
+  async function paintApply(){
+    if(!pending){ status('还没有涂抹', true); return; }
+    const r = await paintCall({act:'commit'});
+    if(!r.ok){ status(r.msg || '写入失败', true); return; }
+    pending = 0;
+    paintStat('已写盘（撤销栈 ' + (r.undo_depth || 0) + '）');
+    status('已写入 ' + (r.pixels || 0) + ' 像素，正在重建图层…');
+    // 地图变了，缓存键虽未变但像素变了 → 强制重建
+    try{ await mapBuild(true); }catch(e){}
+  }
+
+  async function paintUndo(){
+    const r = await paintCall({act:'undo'});
+    status(r.ok ? ('已撤销（剩 ' + (r.undo_depth || 0) + ' 步）') : (r.msg || '没有可撤销'), !r.ok);
+    if(r.ok){ try{ await mapBuild(true); }catch(e){} }
+  }
+
+  async function paintRedo(){
+    const r = await paintCall({act:'redo'});
+    status(r.ok ? '已重做' : (r.msg || '没有可重做'), !r.ok);
+    if(r.ok){ try{ await mapBuild(true); }catch(e){} }
+  }
+
+  function bindPaint(){
+    const applyBtn = document.getElementById('paintApply');
+    if(!applyBtn || applyBtn.dataset.bound) return;
+    applyBtn.dataset.bound = '1';
+    applyBtn.onclick = paintApply;
+    document.getElementById('paintUndo').onclick = paintUndo;
+    document.getElementById('paintRedo').onclick = paintRedo;
+    document.getElementById('paintR').oninput = e=>{
+      document.getElementById('paintRVal').textContent = e.target.value;
+    };
+    const wrap = document.getElementById('mapStageWrap');
+    wrap.addEventListener('pointerdown', async e=>{
+      if(MAP.mode !== 'paint') return;
+      if(e.button !== 0) return;
+      if(e.target.closest('#mapTools') || e.target.closest('#mapSide')) return;
+      const ok = await paintBegin();
+      if(!ok) return;
+      painting = true;
+      wrap.classList.add('dragging');
+      const p = mapScreenToImage(e.clientX, e.clientY);
+      lastDab = Date.now();
+      paintDab(p.x, p.y);
+    }, true);
+    wrap.addEventListener('pointermove', e=>{
+      if(!painting || MAP.mode !== 'paint') return;
+      const now = Date.now();
+      if(now - lastDab < 40) return;   // 节流
+      lastDab = now;
+      const p = mapScreenToImage(e.clientX, e.clientY);
+      paintDab(p.x, p.y);
+    }, true);
+    window.addEventListener('pointerup', ()=>{
+      if(painting){
+        painting = false;
+        wrap.classList.remove('dragging');
+        paintStat('待涂 ' + pending + ' 像素（点「应用」写盘）');
+      }
+    }, true);
+  }
+
+  window.mapBindPaint = bindPaint;
+})();
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -4895,7 +5025,22 @@ MAP.lastState = null;
 const MAP_MODE_TEXT = {view: '浏览', state: '改州归属', paint: '涂色（开发中）', pick: '吸管（开发中）'};
 
 function mapSetMode(mode){
-  if(mode === 'paint' || mode === 'pick'){ status('这个工具还在开发中'); return; }
+  if(mode === 'pick'){ status('吸管还在开发中'); return; }
+  if(mode === 'paint'){
+    MAP.mode = 'paint';
+    document.querySelectorAll('#mapRail .map-tool').forEach(b=>{
+      b.classList.toggle('on', b.dataset.mode === 'paint');
+    });
+    const el = document.getElementById('msMode');
+    if(el) el.textContent = '涂色';
+    const hint = document.getElementById('msHint');
+    if(hint) hint.textContent = '填目标省号 → 在地图上按住拖动涂抹 → 应用';
+    const side = document.getElementById('mapSide');
+    if(side) side.classList.remove('empty');
+    document.getElementById('paintBox').style.display = '';
+    document.getElementById('selBox').style.display = 'none';
+    return;
+  }
   MAP.mode = mode;
   document.querySelectorAll('#mapRail .map-tool').forEach(b=>{
     b.classList.toggle('on', b.dataset.mode === mode);
@@ -4908,6 +5053,10 @@ function mapSetMode(mode){
       ? '单击省份后在右侧改归属'
       : '滚轮缩放 · 拖动平移 · 单击选省';
   }
+  const pb = document.getElementById('paintBox');
+  if(pb) pb.style.display = 'none';
+  const sb2 = document.getElementById('selBox');
+  if(sb2) sb2.style.display = '';
   // 浏览模式下，未选省时属性面板保持收起
   if(mode === 'view' && !MAP.lastPid){
     const side = document.getElementById('mapSide');
@@ -4974,6 +5123,7 @@ function mapBindV081(){
     document.getElementById('mapModal').classList.remove('show');
     if(typeof openStates === 'function') openStates(sid);
   };
+  if(window.mapBindPaint) window.mapBindPaint();
   mapSetMode('view');
 }
 

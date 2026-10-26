@@ -2497,6 +2497,31 @@ def bmp_write_rect(path, x0, y0, w, h, pixels):
     return True
 
 
+PROV_RGB = {}   # 省 id -> (r,g,b)，来自 definition.csv
+
+
+def _ensure_prov_rgb(root=None):
+    """按需从 definition.csv 加载省颜色（只在涂色时才需要，避免启动变慢）"""
+    if PROV_RGB:
+        return PROV_RGB
+    try:
+        _root = _map_pick(root or None)
+        _layers = mod_layers(_root)
+        csvp, _prov = _layers_find("map/definition.csv", _layers)
+        if not csvp or not os.path.exists(csvp):
+            return PROV_RGB
+        with io.open(csvp, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                parts = line.strip().split(";")
+                if len(parts) < 4:
+                    continue
+                try:
+                    PROV_RGB[int(parts[0])] = (int(parts[1]), int(parts[2]), int(parts[3]))
+                except Exception:
+                    continue
+    except Exception as e:
+        print("加载 definition.csv 颜色失败:", e)
+    return PROV_RGB
 MAP_EDIT = {"pending": [], "undo": [], "redo": [], "file": "", "touched": set()}
 MAP_UNDO_DIR = os.path.join(WORK, "mapundo")
 
@@ -2783,6 +2808,12 @@ def map_build(force=False, root=None):
             cnts[pid] = cnts.get(pid, 0) + 1
 
     # 4.5) 地图定义一致性（definition.csv ↔ provinces.bmp）
+    try:
+        PROV_RGB.clear()
+        for _rgb, _pid in color2prov.items():
+            PROV_RGB[int(_pid)] = _rgb
+    except Exception:
+        pass
     csv_ids = set(color2prov.values())
     bmp_ids = set(cnts)
     ghost = sorted(csv_ids - bmp_ids)          # 定义了但地图上没有像素
@@ -5510,11 +5541,33 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path == "/api/map_paint":
             act = body.get("act") or ""
             if act == "begin":
-                r = {"ok": map_edit_begin(body.get("bmp") or MAP_EDIT.get("file") or "")}
+                _bp = body.get("bmp") or MAP_EDIT.get("file") or ""
+                if not _bp:
+                    _root = _map_pick(body.get("root") or None)
+                    _layers = mod_layers(_root)
+                    _top = _layers[-1] if _layers else ""
+                    _bp = os.path.join(_top, "map", "provinces.bmp")
+                    # 写操作只落链顶；链顶没 bmp 就不能涂（避免写到父 mod）
+                    if not os.path.exists(_bp):
+                        self._send({"ok": False,
+                                    "msg": "链顶 mod 没有自己的 provinces.bmp（地图来自父 mod），"
+                                           "不能直接涂色；请对提供地图的那个 mod 操作"})
+                        return
+                if is_under_game(_bp):
+                    self._send({"ok": False, "msg": "原版目录只读，不能涂色"})
+                    return
+                r = {"ok": map_edit_begin(_bp), "bmp": _bp}
             elif act == "dab":
+                _rgb = body.get("rgb")
+                if not _rgb and body.get("pid") is not None:
+                    _ensure_prov_rgb(body.get("root") or None)
+                    _rgb = PROV_RGB.get(int(body.get("pid")))
+                    if not _rgb:
+                        self._send({"ok": False, "msg": "省 %s 没有颜色定义" % body.get("pid")})
+                        return
                 nx = map_edit_dab(MAP_EDIT.get("file") or body.get("bmp"), int(body.get("x", 0)),
                                   int(body.get("y", 0)), int(body.get("r", 2)),
-                                  tuple(body.get("rgb") or (255, 0, 255)))
+                                  tuple(_rgb or (255, 0, 255)))
                 r = {"ok": True, "pixels": nx}
             elif act == "commit":
                 r = map_edit_commit()
