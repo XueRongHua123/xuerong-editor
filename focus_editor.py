@@ -2412,6 +2412,150 @@ def map_cache_clear():
             "msg": "已清理 %d 个来源的缓存，释放 %.1f MB" % (n, total / 1e6)}
 
 
+def _set_state_provinces(body, pids):
+    """重建 state 文件里的 provinces = { ... } 列表"""
+    pids = sorted(set(int(p) for p in pids))
+    inner = "\n" + "".join("\t\t%d\n" % p for p in pids) + "\t"
+    m = re.search(r'(?m)^[ \t]*provinces\s*=\s*\{', body)
+    if m:
+        b = body.find('{', m.end() - 1)
+        e = brace_match(body, b)
+        if e > b:
+            return body[:b + 1] + inner + body[e - 1:]
+    line = "provinces={\n" + "".join("\t\t%d\n" % p for p in pids) + "\t}"
+    nm = re.search(r'(?m)^[ \t]*name\s*=\s*"[^"]*"', body)
+    if nm:
+        return body[:nm.end()] + "\n\t" + line + body[nm.end():]
+    return body.rstrip() + "\n\t" + line + "\n"
+
+
+def _parse_state_provinces(body):
+    """从 state 块文本里读出 provinces 列表（不依赖内存 STATES）"""
+    m = re.search(r'(?m)^[ \t]*provinces\s*=\s*\{', body)
+    if not m:
+        return []
+    b = body.find('{', m.end() - 1)
+    e = brace_match(body, b)
+    if e <= b:
+        return []
+    return [int(x) for x in re.findall(r'\d+', body[b + 1:e - 1])]
+
+
+def _find_state_of_prov(pid):
+    """扫 state 文件，找出哪个州包含这个省"""
+    for root in ROOTS:
+        d = os.path.join(root, "history", "states")
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+            p = os.path.join(d, fn)
+            try:
+                text = _read_text(p)
+            except Exception:
+                continue
+            m = re.search(r'(?m)^[ \t]*id\s*=\s*(\d+)', text)
+            if not m:
+                continue
+            loc = _state_locate(text)
+            if not loc:
+                continue
+            b, e = loc
+            if int(pid) in _parse_state_provinces(text[b + 1:e - 1]):
+                return int(m.group(1))
+    return None
+
+
+def _state_file_for(sid):
+    """按州 id 找文件路径：(root, rel, path)"""
+    for root in ROOTS:
+        d = os.path.join(root, "history", "states")
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+            p = os.path.join(d, fn)
+            try:
+                text = _read_text(p)
+            except Exception:
+                continue
+            m = re.search(r'(?m)^[ \t]*id\s*=\s*(\d+)', text)
+            if m and int(m.group(1)) == int(sid):
+                return root, os.path.join("history", "states", fn), p
+    return None, None, None
+
+
+def state_province_edit(pid, target_sid=None):
+    """把省 pid 移到 target_sid 州；target_sid 为空表示移出当前州"""
+    try:
+        pid = int(pid)
+    except Exception:
+        return {"ok": False, "msg": "省 id 不合法"}
+    if pid <= 0:
+        return {"ok": False, "msg": "省 id 不合法"}
+    target = None
+    if target_sid not in (None, "", 0, "0"):
+        try:
+            target = int(target_sid)
+        except Exception:
+            return {"ok": False, "msg": "目标州 id 不合法"}
+
+    cur_sid = _find_state_of_prov(pid)
+    if target is not None and cur_sid == target:
+        return {"ok": True, "msg": "省 %d 已经在州 %d 里了" % (pid, target), "noop": True}
+
+    diff = []
+    if cur_sid is not None:
+        root, rel, path = _state_file_for(cur_sid)
+        if not path:
+            return {"ok": False, "msg": "找不到州 %s 的文件" % cur_sid}
+        if is_under_game(root):
+            return {"ok": False, "msg": "州 %d 在原版目录里，只读" % cur_sid}
+        text, has_bom = _read_bom_text(path)
+        loc = _state_locate(text)
+        if not loc:
+            return {"ok": False, "msg": "州 %d 文件里找不到 state 块" % cur_sid}
+        _b, _e = loc
+        body = text[_b + 1:_e - 1]
+        old = _parse_state_provinces(body)
+        new = [p for p in old if p != pid]
+        new_text = text[:_b + 1] + _set_state_provinces(body, new) + text[_e - 1:]
+        snapshot(path)
+        _write_bom_text(path, new_text, has_bom)
+        diff.append({"key": "st_%d" % cur_sid, "label": "州 %d 省份" % cur_sid,
+                     "old": "%d 个省" % len(old), "new": "%d 个省" % len(new)})
+        CHANGED[path] = rel
+
+    if target is not None:
+        root, rel, path = _state_file_for(target)
+        if not path:
+            return {"ok": False, "msg": "找不到州 %d 的文件" % target}
+        if is_under_game(root):
+            return {"ok": False, "msg": "州 %d 在原版目录里，只读" % target}
+        text, has_bom = _read_bom_text(path)
+        loc = _state_locate(text)
+        if not loc:
+            return {"ok": False, "msg": "州 %d 文件里找不到 state 块" % target}
+        _b, _e = loc
+        body = text[_b + 1:_e - 1]
+        old = _parse_state_provinces(body)
+        new = sorted(set(old) | {pid})
+        new_text = text[:_b + 1] + _set_state_provinces(body, new) + text[_e - 1:]
+        snapshot(path)
+        _write_bom_text(path, new_text, has_bom)
+        diff.append({"key": "st_%d" % target, "label": "州 %d 省份" % target,
+                     "old": "%d 个省" % len(old), "new": "%d 个省" % len(new)})
+        CHANGED[path] = rel
+
+    reload_data()
+    link_countries()
+    if target is None:
+        msg = "省 %d 已从州 %s 移出" % (pid, cur_sid)
+    elif cur_sid:
+        msg = "省 %d：州 %s → 州 %d" % (pid, cur_sid, target)
+    else:
+        msg = "省 %d 已加入州 %d" % (pid, target)
+    return {"ok": True, "msg": msg, "diff": diff, "from": cur_sid, "to": target}
+
+
 def map_asset(name, root=None):
     """返回缓存目录里的资产路径（白名单，防路径穿越）"""
     if name not in MAP_ASSETS:
@@ -4324,6 +4468,8 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path == "/api/tech_move":
             self._send(tech_move(body.get("root", ""), body.get("rel", ""),
                                  body.get("tid", ""), body.get("x", 0), body.get("y", 0)))
+        elif self.path == "/api/state_province":
+            self._send(state_province_edit(body.get("pid"), body.get("target")))
         elif self.path == "/api/map_cache_clear":
             self._send(map_cache_clear())
         elif self.path == "/api/map_build":
