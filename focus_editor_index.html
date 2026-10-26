@@ -484,6 +484,18 @@
   #tbMoreMenu .tb-more-item{padding:7px 10px;border-radius:6px;font-size:12px;color:var(--text);cursor:pointer}
   #tbMoreMenu .tb-more-item:hover{background:var(--panel2);color:var(--accent)}
   /* ---------- v0.71 地图面板 ---------- */
+  /* ---------- v0.82 选择与拖拽防护 ---------- */
+  /* 界面整体不可选中：拖动地图/SVG 时不会选中文字，也不会把文字拖出浏览器窗口 */
+  html, body{user-select:none;-webkit-user-select:none}
+  /* 需要复制/编辑的地方恢复 */
+  input, textarea, select, pre, code, [contenteditable="true"],
+  .selectable, #aiOut, #lintList, #scriptBody, #cpList{user-select:text;-webkit-user-select:text}
+  /* 所有图片都不可拖拽（防止拖到标签栏被当成新页面打开） */
+  img{-webkit-user-drag:none;user-drag:none}
+  /* 地图画布：不显示文本光标，右键不弹菜单由脚本拦截 */
+  #mapStageWrap, #mapStageWrap *{cursor:default}
+  #mapStageWrap{cursor:grab}
+  #mapStageWrap.dragging{cursor:grabbing}
   /* ---------- v0.81 地图界面重构 ---------- */
   #mapCard{display:flex;flex-direction:column}
   #mapHead{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
@@ -4680,6 +4692,52 @@ function initNarrowMore(){
 /* ---------- v0.71 地图面板 ---------- */
 const MAP = {x: 0, y: 0, k: 0.24, w: 5632, h: 2048, meta: null, ready: false, idCanvas: null, idx: null, centers: null};
 
+/* ---------- v0.82 选择与拖拽防护 ---------- */
+(function(){
+  // 1) 图片一律不可拖拽（包括后加入 DOM 的）
+  const killDrag = el=>{ if(el && el.tagName === 'IMG') el.draggable = false; };
+  document.querySelectorAll('img').forEach(killDrag);
+  const mo = new MutationObserver(list=>{
+    list.forEach(rec=>{
+      rec.addedNodes && rec.addedNodes.forEach(n=>{
+        if(n.nodeType !== 1) return;
+        if(n.tagName === 'IMG') killDrag(n);
+        else if(n.querySelectorAll) n.querySelectorAll('img').forEach(killDrag);
+      });
+    });
+  });
+  mo.observe(document.body, {childList: true, subtree: true});
+
+  // 2) 任何 dragstart 都拦掉：不让浏览器把选中的文本/图片拖成新页面
+  document.addEventListener('dragstart', e=>{
+    const t = e.target;
+    if(t && (t.tagName === 'IMG' || t.closest && t.closest('#mapModal, #aiBubble, .mascot-float, svg'))){
+      e.preventDefault();
+      return;
+    }
+    // 其它元素上的拖拽也一并禁止（界面上没有需要拖放的功能）
+    e.preventDefault();
+  }, true);
+
+  // 3) 右键菜单：输入框/可复制区域保留，其余拦掉
+  document.addEventListener('contextmenu', e=>{
+    const t = e.target;
+    if(t && t.closest && t.closest('input, textarea, select, [contenteditable="true"], pre, code, #aiOut, #lintList, #scriptBody, #cpList')){
+      return;
+    }
+    e.preventDefault();
+  }, true);
+
+  // 4) 长按选中：把 body 上的 mousedown 默认行为也限制住（拖动地图时）
+  document.addEventListener('selectstart', e=>{
+    const t = e.target;
+    if(t && t.closest && t.closest('input, textarea, select, [contenteditable="true"], pre, code, #aiOut, #lintList, #scriptBody, #cpList')){
+      return;
+    }
+    e.preventDefault();
+  }, true);
+})();
+
 /* ---------- v0.81 地图界面 ---------- */
 MAP.mode = 'view';
 MAP.lastPid = null;
@@ -5035,6 +5093,7 @@ function mapBindEvents(){
   let drag = null;
   wrap.addEventListener('pointerdown', e=>{
     if(e.target.closest('#mapTools')) return;
+    e.preventDefault();
     drag = {x: e.clientX, y: e.clientY, ox: MAP.x, oy: MAP.y, moved: false};
     wrap.classList.add('dragging');
     try{ wrap.setPointerCapture(e.pointerId); }catch(err){}
