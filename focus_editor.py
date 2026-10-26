@@ -2187,8 +2187,8 @@ def scripted_payload():
 
 # v0.71 地图图层构建（Pillow，无需 numpy）
 MAP_CACHE_DIR = os.path.join(WORK, "cache", "map")
-MAP_ASSETS = ("base.png", "province.png", "edges.png", "state.png", "political.png", "prov_id.png",
-              "prov_index.json", "centers.json", "meta.json")
+MAP_ASSETS = ("base.png", "province.png", "edges.png", "state.png", "political.png", "region.png", "prov_id.png",
+              "prov_index.json", "centers.json", "regions.json", "meta.json")
 
 
 def _map_files(root):
@@ -2372,6 +2372,9 @@ def map_build(force=False, root=None):
             tag_color[tag] = bytes((132, 132, 132))
     neutral = bytes((46, 50, 46))
 
+    # 3.6) 战略区
+    prov2region, region_list = _strategic_regions(root)
+
     # 4) 一遍像素：ids、质心累加
     n = w * h
     ids = [0] * n
@@ -2394,10 +2397,12 @@ def map_build(force=False, root=None):
     provbuf = bytearray(n * 3)
     statebuf = bytearray(n * 3)
     polbuf = bytearray(n * 3)
+    regbuf = bytearray(n * 3)
     edgebuf = bytearray(n * 3)
     idbuf = bytearray(n * 3)
     prov_color = {}
     state_color = {}
+    reg_color = {}
     for i in range(n):
         pid = ids[i]
         c = prov_color.get(pid)
@@ -2417,6 +2422,12 @@ def map_build(force=False, root=None):
         if pcb is None:
             pcb = neutral
         polbuf[o:o + 3] = pcb
+        rid = prov2region.get(pid, 0)
+        rc = reg_color.get(rid)
+        if rc is None:
+            rc = _hsv_hex(rid + 3, 0.38, 0.72) if rid else bytes((28, 32, 30))
+            reg_color[rid] = rc
+        regbuf[o:o + 3] = rc
         idbuf[o] = (pid >> 16) & 0xFF
         idbuf[o + 1] = (pid >> 8) & 0xFF
         idbuf[o + 2] = pid & 0xFF
@@ -2469,6 +2480,7 @@ def map_build(force=False, root=None):
     Image.frombytes("RGB", (w, h), bytes(statebuf)).save(os.path.join(dirp, "state.png"))
     Image.frombytes("RGB", (w, h), bytes(edgebuf)).save(os.path.join(dirp, "edges.png"))
     Image.frombytes("RGB", (w, h), bytes(polbuf)).save(os.path.join(dirp, "political.png"))
+    Image.frombytes("RGB", (w, h), bytes(regbuf)).save(os.path.join(dirp, "region.png"))
     Image.frombytes("RGB", (w, h), bytes(idbuf)).save(os.path.join(dirp, "prov_id.png"))
     im.resize((max(1, w // 2), max(1, h // 2)), Image.BILINEAR).save(os.path.join(dirp, "base.png"))
 
@@ -2479,12 +2491,15 @@ def map_build(force=False, root=None):
 
     index = {}
     for pid, cnt in counts.items():
-        index[str(pid)] = {"state": prov2state.get(pid, 0), "type": prov2type.get(pid, ""), "px": cnt}
+        index[str(pid)] = {"state": prov2state.get(pid, 0), "type": prov2type.get(pid, ""),
+                           "region": prov2region.get(pid, 0), "px": cnt}
 
     io.open(os.path.join(dirp, "centers.json"), "w", encoding="utf-8", newline="").write(
         json.dumps(centers, ensure_ascii=False))
     io.open(os.path.join(dirp, "prov_index.json"), "w", encoding="utf-8", newline="").write(
         json.dumps(index, ensure_ascii=False))
+    io.open(os.path.join(dirp, "regions.json"), "w", encoding="utf-8", newline="").write(
+        json.dumps(region_list, ensure_ascii=False))
 
     meta = {"w": w, "h": h, "provinces": len(counts), "source": base,
             "ms": int((time.time() - t_all) * 1000), "built": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -2661,7 +2676,48 @@ def state_province_edit(pid, target_sid=None):
     return {"ok": True, "msg": msg, "diff": diff, "from": cur_sid, "to": target}
 
 
+# v0.80 战略区图层
+def _strategic_regions(root):
+    """读 map/strategicregions/*.txt，返回 {province: region_id} 与 region 列表"""
+    prov2region = {}
+    regions = []
+    for base in (root, GAME):
+        d = os.path.join(base or "", "map", "strategicregions")
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+            try:
+                text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
+            except Exception:
+                continue
+            for m in re.finditer(r'strategic_region\s*=\s*\{', text):
+                b = text.find('{', m.end() - 1)
+                e = brace_match(text, b)
+                if e <= b:
+                    continue
+                body = text[b + 1:e - 1]
+                rid = _first(body, r'(?m)^[ \t]*id\s*=\s*(\d+)')
+                if not rid:
+                    continue
+                rid = int(rid)
+                nm = _first(body, r'(?m)^[ \t]*name\s*=\s*"?([^"\r\n]+)"?') or ("地区 %d" % rid)
+                pm = re.search(r'(?m)^[ \t]*provinces\s*=\s*\{', body)
+                pids = []
+                if pm:
+                    pb = body.find('{', pm.end() - 1)
+                    pe = brace_match(body, pb)
+                    if pe > pb:
+                        pids = [int(x) for x in re.findall(r'\d+', body[pb + 1:pe - 1])]
+                for p in pids:
+                    prov2region[p] = rid
+                regions.append({"id": rid, "name": nm, "count": len(pids)})
+        if regions:
+            break
+    return prov2region, regions
+
+
 def map_asset(name, root=None):
+
     """返回缓存目录里的资产路径（白名单，防路径穿越）"""
     if name not in MAP_ASSETS:
         return None

@@ -952,6 +952,7 @@
             <img id="mapBase" alt="">
             <img id="mapProv" alt="">
             <img id="mapPolit" alt="">
+            <img id="mapRegion" alt="">
             <img id="mapState" alt="">
             <img id="mapEdges" alt="">
           </div>
@@ -966,6 +967,7 @@
           <div id="mapTools">
             <label><input type="checkbox" id="mapLProv" checked>省色块</label>
             <label><input type="checkbox" id="mapLPolit">政治（按国家）</label>
+            <label><input type="checkbox" id="mapLRegion">战略区</label>
             <label><input type="checkbox" id="mapLState">州</label>
             <label><input type="checkbox" id="mapLEdges" checked>省界</label>
             <label><input type="checkbox" id="mapLBase" checked>底图</label>
@@ -4632,6 +4634,7 @@ function mapSwitchSource(path){
   MAP.idCanvas = null;
   MAP.idx = null;
   MAP.centers = null;
+  MAP.regions = null;
   mapHideOps();
   document.getElementById('mapMeta').textContent = '切换来源…';
   mapLoadMeta(path);
@@ -4677,6 +4680,7 @@ async function mapLoadAssets(){
   };
   set('mapBase', 'base.png', 1);
   set('mapPolit', 'political.png', 0.9);
+  set('mapRegion', 'region.png', 0.72);
   set('mapProv', 'province.png', 0.85);
   set('mapState', 'state.png', 0.62);
   set('mapEdges', 'edges.png', 0.35);
@@ -4690,22 +4694,29 @@ async function mapLoadAssets(){
   if(!MAP.centers){
     try{ MAP.centers = await (await fetch(mapAssetUrl('centers.json'))).json(); }catch(e){ MAP.centers = {}; }
   }
+  if(!MAP.regions){
+    try{ MAP.regions = await (await fetch(mapAssetUrl('regions.json'))).json(); }catch(e){ MAP.regions = []; }
+  }
   MAP.ready = true;
   mapApplyLayers();
 }
 
 function mapApplyLayers(){
   const onPolit = document.getElementById('mapLPolit').checked;
+  const onRegion = document.getElementById('mapLRegion').checked;
   const onProv = document.getElementById('mapLProv').checked;
   const onState = document.getElementById('mapLState').checked;
   const onEdges = document.getElementById('mapLEdges').checked;
   const onBase = document.getElementById('mapLBase').checked;
   const op = Number(document.getElementById('mapOpacity').value) / 100;
   const polit = document.getElementById('mapPolit');
+  const region = document.getElementById('mapRegion');
   const prov = document.getElementById('mapProv');
   const state = document.getElementById('mapState');
   const edges = document.getElementById('mapEdges');
   const base = document.getElementById('mapBase');
+  region.style.display = onRegion ? '' : 'none';
+  region.style.opacity = onRegion ? Math.min(0.85, op) : 0;
   polit.style.display = onPolit ? '' : 'none';
   polit.style.opacity = op;
   prov.style.display = (onProv && !onPolit) ? '' : 'none';
@@ -4714,6 +4725,7 @@ function mapApplyLayers(){
   base.style.display = onBase ? '' : 'none';
   prov.style.opacity = onState ? Math.min(0.35, op) : op;
   if(onPolit) prov.style.opacity = 0;
+  if(onRegion && !onPolit) prov.style.opacity = Math.min(prov.style.opacity || op, 0.3);
   state.style.opacity = op;
   edges.style.opacity = Math.max(0.2, op * 0.5);
 }
@@ -4808,7 +4820,8 @@ function mapInfo(pid){
     const st = Object.values(STATES || {}).find(x=>Number(x.id) === sid);
     if(st) stName = ' · ' + (st.name || ('州 ' + sid));
   }
-  return '省 ' + pid + ' · 州 ' + (sid || '无') + stName + ' · ' + (rec.type || '');
+  return '省 ' + pid + ' · 州 ' + (sid || '无') + stName +
+    ' · 地区 ' + (rec.region || '无') + ' · ' + (rec.type || '');
 }
 
 function mapReadyHint(){
@@ -4838,6 +4851,13 @@ function mapSearchGo(){
     return;
   }
   const sid = Number(q);
+  // 战略区号
+  if(MAP.regions && MAP.regions.some(r=>Number(r.id) === sid)){
+    const provs2 = Object.keys(MAP.idx || {}).filter(pid=>Number((MAP.idx[pid] || {}).region) === sid);
+    let sx2 = 0, sy2 = 0, n2 = 0;
+    provs2.forEach(pid=>{ const c = MAP.centers && MAP.centers[pid]; if(c){ sx2 += c[0]; sy2 += c[1]; n2++; } });
+    if(n2){ mapGoto(sx2 / n2, sy2 / n2, 0.85); hud.textContent = '定位到战略区 ' + sid + ' · ' + provs2.length + ' 块'; return; }
+  }
   const provs = Object.keys(MAP.idx || {}).filter(pid=>Number((MAP.idx[pid] || {}).state) === sid);
   if(!provs.length){ hud.textContent = '没找到省或州：' + q; return; }
   let sx = 0, sy = 0, n = 0;
@@ -5155,7 +5175,7 @@ document.getElementById('mapClear').onclick = mapClearCache;
 document.getElementById('mapMoveProv').onclick = ()=>mapMoveProv(false);
 document.getElementById('mapDetachProv').onclick = ()=>mapMoveProv(true);
 document.getElementById('mapSearch').addEventListener('keydown', e=>{ if(e.key === 'Enter') mapSearchGo(); });
-['mapLProv','mapLState','mapLEdges','mapLBase','mapLPolit'].forEach(id=>{  const el = document.getElementById(id); if(el) el.addEventListener('change', mapApplyLayers); });
+['mapLProv','mapLState','mapLEdges','mapLBase','mapLPolit','mapLRegion'].forEach(id=>{  const el = document.getElementById(id); if(el) el.addEventListener('change', mapApplyLayers); });
 const mapOpEl = document.getElementById('mapOpacity'); if(mapOpEl) mapOpEl.addEventListener('input', mapApplyLayers);
 document.getElementById('scriptClose').onclick = ()=>{ document.getElementById('scriptModal').classList.remove('show'); };
 document.getElementById('scriptReload').onclick = ()=>openScriptCheck(true);
