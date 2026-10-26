@@ -3550,7 +3550,106 @@ def _post_json(url, payload, headers, timeout=90):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8", "replace"))
 
+# v0.69 AI 流式输出
+def ai_chat_stream(cfg, prompt, context, emit):
+    """逐块把模型输出交给 emit(chunk)。返回 (ok, 错误信息)。
+
+    OpenAI 兼容 / Ollama / Anthropic / Gemini 都支持；解析失败时退回一次性返回。
+    """
+    provider = (cfg.get("provider") or "openai").lower()
+    base = (cfg.get("base_url") or "").rstrip("/")
+    key = cfg.get("api_key") or ""
+    model = cfg.get("model") or ""
+    system = cfg.get("system") or DEFAULT_AI["system"]
+    text = prompt if not context else (context + "\n\n---\n\n" + prompt)
+    if not base:
+        return False, "请填写 Base URL"
+
+    def _open(url, payload, headers):
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
+                                     headers=dict({"Content-Type": "application/json"}, **headers))
+        return urllib.request.urlopen(req, timeout=180)
+
+    try:
+        if provider in ("openai", "deepseek", "ollama", "custom"):
+            body = {"model": model, "temperature": 0.3, "stream": True,
+                    "messages": [{"role": "system", "content": system},
+                                 {"role": "user", "content": text}]}
+            with _open(base + "/chat/completions", body,
+                       {"Authorization": "Bearer " + key} if key else {}) as r:
+                for raw in r:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(data)
+                    except Exception:
+                        continue
+                    choices = obj.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+                    piece = delta.get("content") or ""
+                    if piece:
+                        emit(piece)
+            return True, ""
+
+        if provider == "anthropic":
+            body = {"model": model, "max_tokens": 2000, "system": system, "stream": True,
+                    "messages": [{"role": "user", "content": text}]}
+            with _open(base + "/messages", body,
+                       {"x-api-key": key, "anthropic-version": "2023-06-01"}) as r:
+                for raw in r:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        obj = json.loads(line[5:].strip())
+                    except Exception:
+                        continue
+                    if obj.get("type") == "content_block_delta":
+                        piece = (obj.get("delta") or {}).get("text") or ""
+                        if piece:
+                            emit(piece)
+            return True, ""
+
+        if provider == "gemini":
+            url = base + "/models/" + model + ":streamGenerateContent?alt=sse&key=" + key
+            body = {"contents": [{"parts": [{"text": system + "\n\n" + text}]}]}
+            with _open(url, body, {}) as r:
+                for raw in r:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        obj = json.loads(line[5:].strip())
+                    except Exception:
+                        continue
+                    cands = obj.get("candidates") or []
+                    if not cands:
+                        continue
+                    parts = (cands[0].get("content") or {}).get("parts") or []
+                    piece = "".join(p.get("text", "") for p in parts)
+                    if piece:
+                        emit(piece)
+            return True, ""
+
+        return False, "未知的提供商: " + provider
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            detail = ""
+        return False, "HTTP %s: %s" % (e.code, detail)
+    except Exception as e:
+        return False, "请求失败: %s" % e
+
+
 def ai_chat(cfg, prompt, context=""):
+
     provider = (cfg.get("provider") or "openai").lower()
     base = (cfg.get("base_url") or "").rstrip("/")
     key = cfg.get("api_key") or ""
@@ -3683,6 +3782,30 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _ai_stream(self, cfg, prompt, context):
+        """SSE 流式输出：每个片段一行 data: {"d": "..."}，结束时 data: {"end": true}"""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        def emit(piece):
+            self.wfile.write(("data: " + json.dumps({"d": piece}, ensure_ascii=False) + "\n\n").encode("utf-8"))
+            self.wfile.flush()
+
+        try:
+            ok, err = ai_chat_stream(cfg, prompt, context, emit)
+        except Exception as e:
+            ok, err = False, "流式中断: %s" % e
+        try:
+            self.wfile.write(("data: " + json.dumps({"end": True, "ok": ok, "msg": err},
+                                                    ensure_ascii=False) + "\n\n").encode("utf-8"))
+            self.wfile.flush()
+        except Exception:
+            pass
+        self.close_connection = True
 
     def do_GET(self):
         path_only = self.path.split("?")[0]
@@ -3983,8 +4106,12 @@ class Handler(SimpleHTTPRequestHandler):
             self._send({"ok": ok, "msg": (msg or "")[:200],
                         "ms": int((time.time() - t0) * 1000)})
         elif self.path == "/api/ai_chat":
-            ok, msg = ai_chat(load_ai(), body.get("prompt") or "", body.get("context") or "")
-            self._send({"ok": ok, "msg": msg})
+            _cfg = load_ai()
+            if body.get("stream"):
+                self._ai_stream(_cfg, body.get("prompt") or "", body.get("context") or "")
+            else:
+                ok, msg = ai_chat(_cfg, body.get("prompt") or "", body.get("context") or "")
+                self._send({"ok": ok, "msg": msg})
         elif self.path == "/api/shared_add":
             ok, msg = add_shared_focus(body.get("root"), body.get("id"))
             self._send({"ok": ok, "msg": msg})
