@@ -2989,7 +2989,131 @@ def map_asset(name, root=None):
 
 
 
+# v0.86 游戏日志检查（error.log）
+LOG_PATTERNS = [
+    ("railway", "warn", r"Railway level .*MAX_RAILWAY_LEVEL", "铁路等级超过上限",
+     "把 railways.txt 里对应线路的 level 降到 5 以内"),
+    ("trigger", "warn", r"Invalid trigger", "无效的 trigger",
+     "多为拼错或 1.19 已改名的 trigger，对照语法参考改"),
+    ("deprecated", "warn", r"Using deprecated property", "使用了已弃用的属性",
+     "旧写法仍能跑但会在日志刷屏，建议按提示改名"),
+    ("gfx", "info", r"GFX referenced .* does not exist", "引用了不存在的 GFX",
+     "装备/单位图标缺图，检查 gfx 定义或图标名拼写"),
+    ("entity", "info", r"Failed to find entity", "缺少 3D 实体（模型）",
+     "多为模型文件缺失，纯视觉问题，不影响逻辑"),
+    ("sound", "info", r"Could not load sound file|already added", "音效缺失或重复",
+     "声音定义文件里有重复项或文件不存在"),
+    ("version", "info", r"Invalid supported_version", "descriptor 的 supported_version 写法不对",
+     "改成 \"1.19.*\" 或与玩家版本一致"),
+    ("loc", "warn", r"Unknown loc key|Missing localisation|Localisation key", "本地化缺失",
+     "补 loc key，注意 .yml 必须是 UTF-8 带 BOM"),
+    ("syntax", "error", r"Unexpected token|Expecting .* but got|Error parsing", "脚本语法错误",
+     "括号/引号/赋值写错，按日志里的 file:line 定位"),
+]
+
+
+def _log_paths():
+    """候选 error.log 位置"""
+    out = []
+    home = os.path.expanduser("~")
+    for p in (os.path.join(home, "Documents", "Paradox Interactive", "Hearts of Iron IV", "logs", "error.log"),
+              os.path.join(home, "OneDrive", "Documents", "Paradox Interactive", "Hearts of Iron IV", "logs", "error.log")):
+        if os.path.exists(p):
+            out.append(p)
+    return out
+
+
+# v0.86 铁路等级静态检查
+def _rail_over_level(root, max_level=5):
+    """返回 level 超过上限的铁路条数（HOI4 默认上限 5，日志里会刷 Railway level > MAX）"""
+    for base in (root, GAME):
+        p = os.path.join(base or "", "map", "railways.txt")
+        if not os.path.exists(p):
+            continue
+        try:
+            text = strip_comments(io.open(p, encoding="utf-8", errors="replace").read())
+        except Exception:
+            return 0, 0
+        over = 0
+        total = 0
+        # 格式一：railway = { level = N provinces = { ... } }
+        for m in re.finditer(r'railway\s*=\s*\{', text):
+            b = text.find('{', m.end() - 1)
+            e = brace_match(text, b)
+            if e <= b:
+                continue
+            total += 1
+            lv = re.search(r'level\s*=\s*(\d+)', text[b + 1:e - 1])
+            if lv and int(lv.group(1)) > max_level:
+                over += 1
+        # 格式二（MUVLUV 等老 mod）：每行 "level count p1 p2 ..."
+        if not total:
+            for ln in text.splitlines():
+                parts = ln.split()
+                if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
+                    total += 1
+                    if int(parts[0]) > max_level:
+                        over += 1
+        return over, total
+    return 0, 0
+
+
+def read_error_log(path=None, limit_files=40):
+    """解析 error.log：按类别聚合，给出计数、样例与涉及文件"""
+    cand = [path] if path else _log_paths()
+    if not cand or not os.path.exists(cand[0]):
+        return {"ok": False, "msg": "没找到 error.log（先运行一次游戏）"}
+    p = cand[0]
+    try:
+        text = io.open(p, encoding="utf-8", errors="replace").read()
+    except Exception as e:
+        return {"ok": False, "msg": "读取日志失败：%s" % e}
+    lines = text.splitlines()
+    pat = re.compile(r"^\[(\d\d:\d\d:\d\d)\]\[([^\]]*)\]\[([^\]]+)\]:\s*(.*)$")
+    buckets = {}
+    unmatched = 0
+    files = {}
+    for ln in lines:
+        ln = ln.strip()
+        if not ln:
+            continue
+        m = pat.match(ln)
+        if not m:
+            unmatched += 1
+            continue
+        _t, _d, where, msg = m.groups()
+        hit = None
+        for key, level, rx, title, hint in LOG_PATTERNS:
+            if re.search(rx, msg):
+                hit = (key, level, title, hint)
+                break
+        if not hit:
+            continue
+        key, level, title, hint = hit
+        b = buckets.setdefault(key, {"key": key, "level": level, "title": title, "hint": hint,
+                                     "count": 0, "samples": [], "files": {}})
+        b["count"] += 1
+        if len(b["samples"]) < 3:
+            b["samples"].append(msg[:160])
+        fm = re.search(r"file:\s*([^\s]+)(?:\s+line:\s*(\d+))?", msg)
+        if fm:
+            f = fm.group(1)
+            b["files"][f] = b["files"].get(f, 0) + 1
+            files[f] = files.get(f, 0) + 1
+    items = []
+    for key, b in sorted(buckets.items(), key=lambda kv: -kv[1]["count"]):
+        top_files = sorted(b["files"].items(), key=lambda kv: -kv[1])[:4]
+        detail = "；".join("%s ×%d" % (f, n) for f, n in top_files) or "（日志未给出文件名）"
+        items.append({"level": b["level"], "kind": "log",
+                      "title": "%s（%d 条）" % (b["title"], b["count"]),
+                      "detail": detail + "　建议：" + b["hint"],
+                      "samples": b["samples"]})
+    return {"ok": True, "path": p, "lines": len(lines), "unmatched": unmatched,
+            "items": items, "files": sorted(files.items(), key=lambda kv: -kv[1])[:limit_files]}
+
+
 def lint_project(limit=1500):
+
 
 
     """跨系统引用检查：树↔国家、历史↔树、州↔国家、事件↔事件、本地化"""
@@ -3059,6 +3183,25 @@ def lint_project(limit=1500):
         if r["id"] not in EVENTS:
             add("warn", "focus", "国策 %s 触发了不存在的事件 %s" % (r["focus"], r["id"]),
                 r["file"], {"type": "tree", "id": r["tree"]})
+
+    # v0.86 铁路等级（静态，不必跑游戏）
+    try:
+        _over, _total = _rail_over_level(ROOTS[0] if ROOTS else GAME)
+        if _over:
+            add("warn", "rail", "铁路有 %d 条等级超过上限（共 %d 条）" % (_over, _total),
+                "游戏日志会刷 Railway level > MAX_RAILWAY_LEVEL，把 level 降到 5 以内", "",
+                {"type": "log", "id": ""})
+    except Exception as e:
+        print("铁路检查失败:", e)
+
+    # v0.86 游戏日志
+    try:
+        _log = read_error_log()
+        if _log.get("ok"):
+            for it in _log.get("items", []):
+                add(it["level"], "log", it["title"], it["detail"], {"type": "log", "id": ""})
+    except Exception as e:
+        print("error.log 读取失败:", e)
 
     # v0.66 全局 flag 配对
     try:
@@ -4759,6 +4902,9 @@ class Handler(SimpleHTTPRequestHandler):
                            ("application/json; charset=utf-8" if p.endswith(".json") else "application/octet-stream"))
         elif path_only == "/api/scripted":
             self._send(scripted_payload())
+        elif path_only == "/api/log":
+            _q = parse_qs(urlparse(self.path).query)
+            self._send(read_error_log((_q.get("path", [""])[0] or None)))
         elif path_only == "/api/lint":
             self._send(lint_project())
         elif path_only == "/api/missing_loc":
