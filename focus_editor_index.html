@@ -494,8 +494,8 @@
   #mapStack{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
   #mapStack img{position:absolute;left:0;top:0;image-rendering:pixelated;pointer-events:none}
   #mapHud{position:absolute;left:10px;top:10px;z-index:3;background:rgba(12,14,12,.82);border:1px solid var(--line);
-    border-radius:8px;padding:6px 10px;font-size:11.5px;color:var(--text);line-height:1.6;pointer-events:none;
-    min-width:150px}
+    border-radius:8px;padding:7px 11px;font-size:11.5px;color:var(--text);line-height:1.6;pointer-events:auto;
+    min-width:170px}
   #mapTools{position:absolute;right:10px;top:10px;z-index:3;display:flex;flex-direction:column;gap:6px;
     background:rgba(10,12,10,.94);border:1px solid var(--line2);border-radius:10px;padding:9px 11px;
     font-size:11.5px;backdrop-filter:blur(6px);box-shadow:0 6px 20px rgba(0,0,0,.45)}
@@ -955,7 +955,14 @@
             <img id="mapState" alt="">
             <img id="mapEdges" alt="">
           </div>
-          <div id="mapHud">把鼠标移到地图上看看</div>
+          <div id="mapHud">
+            <div id="mapHudText">把鼠标移到地图上看看</div>
+            <div id="mapProvOps" style="display:none;margin-top:6px;display:none">
+              <input id="mapTargetState" placeholder="目标州号" style="width:74px;height:24px;font-size:11px">
+              <button class="btn" id="mapMoveProv" style="padding:2px 8px;font-size:11px">移入州</button>
+              <button class="btn" id="mapDetachProv" style="padding:2px 8px;font-size:11px">移出州</button>
+            </div>
+          </div>
           <div id="mapTools">
             <label><input type="checkbox" id="mapLProv" checked>省色块</label>
             <label><input type="checkbox" id="mapLPolit">政治（按国家）</label>
@@ -4625,6 +4632,7 @@ function mapSwitchSource(path){
   MAP.idCanvas = null;
   MAP.idx = null;
   MAP.centers = null;
+  mapHideOps();
   document.getElementById('mapMeta').textContent = '切换来源…';
   mapLoadMeta(path);
 }
@@ -4752,6 +4760,45 @@ function mapBuildIdCanvas(){
   idImg.src = mapAssetUrl('prov_id.png');
 }
 
+let MAP_LAST_PID = null, MAP_LAST_STATE = null;
+
+function mapShowOps(pid, sid){
+  MAP_LAST_PID = pid;
+  MAP_LAST_STATE = sid || null;
+  const box = document.getElementById('mapProvOps');
+  const inp = document.getElementById('mapTargetState');
+  if(!box) return;
+  box.style.display = 'block';
+  inp.value = sid ? String(sid) : '';
+  document.getElementById('mapDetachProv').disabled = !sid;
+}
+
+function mapHideOps(){
+  const box = document.getElementById('mapProvOps');
+  if(box) box.style.display = 'none';
+}
+
+async function mapMoveProv(detach){
+  if(!MAP_LAST_PID) return;
+  const target = detach ? null : (document.getElementById('mapTargetState').value || '').trim();
+  if(!detach && !/^\d+$/.test(target)){ status('填一个目标州号', true); return; }
+  const pided = MAP_LAST_PID;
+  const verb = detach ? '移出州' : ('移入州 ' + target);
+  if(!confirm('把省 ' + pided + ' ' + verb + '？会直接改 history/states 的 provinces 列表，可用备份回滚。')) return;
+  try{
+    const r = await (await fetch('/api/state_province', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pid: pided, target: detach ? null : Number(target)})})).json();
+    if(!r.ok){ status(r.msg || '失败', true); return; }
+    status(r.msg + '（州色块需要重新构建图层才会更新）');
+    const rec = (MAP.idx && MAP.idx[String(pided)]) || {};
+    const newSid = detach ? 0 : Number(target);
+    if(MAP.idx && MAP.idx[String(pided)]) MAP.idx[String(pided)].state = newSid;
+    mapShowOps(pided, newSid);
+    document.getElementById('mapHudText').textContent = '省 ' + pided + ' · 州 ' + (newSid || '无');
+  }catch(e){ status('失败：' + e.message, true); }
+}
+
 function mapInfo(pid){
   if(!pid) return '空白（海域或未定义）';
   const rec = (MAP.idx && MAP.idx[String(pid)]) || {};
@@ -4838,9 +4885,12 @@ function mapBindEvents(){
     const pid = mapProvAt(p.x, p.y);
     if(!pid) return;
     const rec = (MAP.idx && MAP.idx[String(pid)]) || {};
+    mapShowOps(pid, rec.state || 0);
     if(rec.state){
       status('省 ' + pid + ' → 州 ' + rec.state + '，双击可打开州面板');
       MAP.lastState = rec.state;
+    } else {
+      status('省 ' + pid + ' 不属于任何州');
     }
   });
   wrap.addEventListener('dblclick', e=>{
@@ -5102,6 +5152,8 @@ document.getElementById('mapSource').addEventListener('change', e=>mapSwitchSour
 document.getElementById('mapFit').onclick = mapFit;
 document.getElementById('mapBuild').onclick = mapBuild;
 document.getElementById('mapClear').onclick = mapClearCache;
+document.getElementById('mapMoveProv').onclick = ()=>mapMoveProv(false);
+document.getElementById('mapDetachProv').onclick = ()=>mapMoveProv(true);
 document.getElementById('mapSearch').addEventListener('keydown', e=>{ if(e.key === 'Enter') mapSearchGo(); });
 ['mapLProv','mapLState','mapLEdges','mapLBase','mapLPolit'].forEach(id=>{  const el = document.getElementById(id); if(el) el.addEventListener('change', mapApplyLayers); });
 const mapOpEl = document.getElementById('mapOpacity'); if(mapOpEl) mapOpEl.addEventListener('input', mapApplyLayers);
