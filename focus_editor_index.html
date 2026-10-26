@@ -499,11 +499,13 @@
   #mapBuild.primary:hover{background:var(--accent)}
 
   /* 图层面板：分「基础 / 数据」两组，组标题小一号 */
-  .lt-group{margin:2px 0 8px}
-  .lt-group .lt-title{font-size:10px;letter-spacing:1px;color:var(--t3);margin:0 0 4px}
-  .lt-group label{display:flex;gap:6px;align-items:center;padding:2px 0;font-size:11.5px;color:var(--t2)}
-  .lt-group label.on{color:var(--t1)}
-  .lt-group input[type=range]{width:100%;margin:4px 0 0}
+  .lt-group{margin:2px 0 10px}
+  .lt-group .lt-title{font-size:10.5px;letter-spacing:1px;color:var(--t2);margin:0 0 5px;
+    padding-bottom:3px;border-bottom:1px solid var(--line)}
+  .lt-group label{display:flex;gap:7px;align-items:center;padding:3px 0;font-size:12px;color:var(--t1)}
+  .lt-group label.on{color:var(--accent)}
+  .lt-group input[type=checkbox]{accent-color:var(--accent);width:13px;height:13px}
+  .lt-group input[type=range]{width:100%;margin:5px 0 0;accent-color:var(--accent)}
 
   /* 属性面板：数值是主角，标签退到第二档 */
   #mapSide h4{padding:12px 12px 4px;font-size:10.5px;letter-spacing:1.2px;color:var(--t3)}
@@ -548,7 +550,9 @@
   .map-tool.on{border-color:var(--accent);color:var(--accent);
     background:color-mix(in srgb,var(--accent) 14%,transparent)}
   .map-tool[disabled]{opacity:.35;cursor:not-allowed}
-  #mapStageWrap{flex:1;position:relative;overflow:hidden;background:#12150f}
+  #mapStageWrap{flex:1;position:relative;overflow:hidden;background:#191d1a;
+    background-image:radial-gradient(circle at 1px 1px, rgba(255,255,255,.045) 1px, transparent 0);
+    background-size:22px 22px}
   #mapSide{width:236px;flex:0 0 236px;border-left:1px solid var(--line);display:flex;flex-direction:column;
     background:var(--panel);overflow:auto}
   #mapSide.empty{display:none}
@@ -559,22 +563,26 @@
   .mp-row span{color:var(--muted);font-variant-numeric:tabular-nums}
   .mp-acts{display:flex;flex-direction:column;gap:6px;padding:10px 12px 14px}
   .mp-acts input{height:28px}
-  .mp-acts .btn{justify-content:center;min-width:0;width:100%;height:32px;
-    background:var(--input);border:1px solid var(--line2);color:var(--t1);font-size:12px}
-  .mp-acts .btn:hover{border-color:var(--accent);color:var(--accent)}
-  .mp-acts .btn:disabled{color:var(--t3);border-color:var(--line);cursor:not-allowed}
+  /* 全局 .btn 是"幽灵按钮"（透明+!important），这里要显式覆盖成实心按钮 */
+  #mapSide .mp-acts .btn{background:var(--panel2)!important;border:1px solid var(--line2)!important;
+    color:var(--text)!important;height:32px!important;width:100%;min-width:0;justify-content:center;font-size:12px}
+  #mapSide .mp-acts .btn:hover{background:var(--input)!important;border-color:var(--accent)!important;
+    color:var(--accent)!important}
+  #mapSide .mp-acts .btn:disabled{background:transparent!important;border-color:var(--line)!important;
+    color:var(--t3)!important;cursor:not-allowed}
   #mapSide .btn{height:30px}
   #mapStatus{display:flex;align-items:center;gap:14px;padding:6px 14px;border-top:1px solid var(--line);
     font-size:11px;color:var(--muted);background:color-mix(in srgb,var(--panel2) 50%,var(--panel))}
   #mapStatus .st-mode{color:var(--accent)}
   #mapTools{position:absolute;right:10px;bottom:40px;top:auto;left:auto;margin:0;
-    width:172px;height:fit-content;max-height:calc(100% - 90px);border-radius:10px;
-    background:rgba(10,12,10,.92);overflow:auto;z-index:4;
-    box-shadow:0 6px 20px rgba(0,0,0,.45);display:block}
-  #mapTools h4{margin:0 0 4px;font-size:10.5px;letter-spacing:1px;color:var(--muted);text-transform:uppercase;
+    width:182px;height:fit-content;max-height:calc(100% - 90px);border-radius:10px;
+    background:var(--panel);border:1px solid var(--line2);overflow:auto;z-index:4;
+    box-shadow:var(--shadow);display:block}
+  #mapTools h4{margin:0 0 6px;font-size:11px;letter-spacing:1.2px;color:var(--t2);text-transform:uppercase;
     display:flex;justify-content:space-between;align-items:center}
   #mapTools.min .lt-body{display:none}
-  #mapTools .lt-toggle{background:none;border:0;color:var(--muted);cursor:pointer;font-size:11px}
+  #mapTools .lt-toggle{background:none;border:0;color:var(--t2);cursor:pointer;font-size:14px;line-height:1;
+    padding:0 2px}
   #mapTools .lt-toggle:hover{color:var(--accent)}
   #mapHud{display:none}
   #mapModal{position:fixed;inset:0;z-index:97;display:none;place-items:center;background:rgba(8,10,9,.72);
@@ -589,9 +597,9 @@
   #mapHud{position:absolute;left:10px;top:10px;z-index:3;background:rgba(12,14,12,.82);border:1px solid var(--line);
     border-radius:8px;padding:7px 11px;font-size:11.5px;color:var(--text);line-height:1.6;pointer-events:auto;
     min-width:170px}
-  #mapTools{position:absolute;right:10px;top:10px;z-index:3;display:flex;flex-direction:column;gap:6px;
-    background:rgba(10,12,10,.94);border:1px solid var(--line2);border-radius:10px;padding:9px 11px;
-    font-size:11.5px;backdrop-filter:blur(6px);box-shadow:0 6px 20px rgba(0,0,0,.45)}
+  #mapTools{display:flex;flex-direction:column;gap:6px;padding:9px 11px;
+    background:var(--panel);border:1px solid var(--line2);border-radius:10px;
+    font-size:11.5px;box-shadow:var(--shadow)}
   #mapTools label{color:var(--text)}
   #mapTools .k{color:var(--muted)}
   #mapTools label{display:flex;gap:6px;align-items:center;color:var(--text);cursor:pointer}

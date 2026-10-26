@@ -212,3 +212,31 @@ input, textarea, select, pre, code, [contenteditable="true"],
 - 眯眼（失焦）看：能不能一眼找到"下一步该点哪"
 - 巡检脚本的 `lowContrast` 只能保证"看得见"，保证不了"分得清"，层次需要人眼复核
 
+### 8. 深色浮层必须用主题令牌，不要硬编码颜色
+
+图层面板一度写成 `background: rgba(10,12,10,.94)`（固定深色），文字却用主题的 `--muted`。
+在浅色的「纸页」主题下变成"浅灰字压深灰底"，几乎看不清；在深色主题下也不够亮。
+
+**规则**：浮层的背景与文字必须来自同一套令牌（`var(--panel)` + `var(--t1/--t2)`），
+不要出现"写死深色底 + 主题色字"的组合。如果确实需要半透明，用
+`color-mix(in srgb, var(--panel) 92%, transparent)`，让两种主题各自成立。
+
+### 9. 全局 `!important` 的幽灵按钮与局部实心按钮
+
+项目的主按钮是"幽灵"风格（透明底、hover 才显底），这组规则带 `!important`。
+在地图属性面板里想要实心按钮时，只写 `.mp-acts .btn{background:...}` **不会生效**，
+而且同名的 `#mapTools` 选择器在多处重复定义，后定义的会整体覆盖前面的。
+
+**规则**：
+
+- 需要偏离全局样式的局部按钮，用「ID 前缀 + `!important`」显式覆盖，并写明注释为什么
+- 同一个选择器（如 `#mapTools`）**只允许出现一次**；要改样式就改原处，不要在后面再写一遍
+- 改完用 `getComputedStyle` 抽查 `backgroundColor / borderTopColor`，不能只看截图
+
+### 10. 验收补充
+
+```js
+getComputedStyle(el).backgroundColor  // 不能是 rgba(0,0,0,0) 除非设计如此
+getComputedStyle(el).color            // 与背景的对比度 ≥ 4.5:1
+```
+
