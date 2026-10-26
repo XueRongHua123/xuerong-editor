@@ -958,6 +958,7 @@
             <label><input type="checkbox" id="mapLEdges" checked>省界</label>
             <label><input type="checkbox" id="mapLBase" checked>底图</label>
             <label>透明度<input type="range" id="mapOpacity" min="20" max="100" value="85"></label>
+            <button class="btn" id="mapClear" style="margin-top:4px;font-size:11px" title="删除已生成的图层缓存，源文件不动">清理地图缓存</button>
           </div>
         </div>
       </div>
@@ -4849,6 +4850,20 @@ function mapBindEvents(){
   }, {passive: false});
 }
 
+async function mapClearCache(){
+  if(!confirm('清理已生成的地图图层缓存？源文件不会动，下次打开需要重新构建约 13 秒。')) return;
+  try{
+    const r = await (await fetch('/api/map_cache_clear', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+    MAP.ready = false;
+    MAP.idCanvas = null;
+    MAP.idx = null;
+    MAP.centers = null;
+    document.getElementById('mapMeta').textContent = '缓存已清理（点「构建图层」重建）';
+    status(r.msg || '已清理地图缓存');
+  }catch(e){ status('清理失败：' + e.message, true); }
+}
+
 async function mapBuild(){
   const metaEl = document.getElementById('mapMeta');
   metaEl.textContent = '构建中…（约 15 秒）';
@@ -5075,6 +5090,7 @@ document.getElementById('mapClose').onclick = ()=>{ document.getElementById('map
 document.getElementById('mapSource').addEventListener('change', e=>mapSwitchSource(e.target.value));
 document.getElementById('mapFit').onclick = mapFit;
 document.getElementById('mapBuild').onclick = mapBuild;
+document.getElementById('mapClear').onclick = mapClearCache;
 document.getElementById('mapSearch').addEventListener('keydown', e=>{ if(e.key === 'Enter') mapSearchGo(); });
 ['mapLProv','mapLState','mapLEdges','mapLBase'].forEach(id=>{  const el = document.getElementById(id); if(el) el.addEventListener('change', mapApplyLayers); });
 const mapOpEl = document.getElementById('mapOpacity'); if(mapOpEl) mapOpEl.addEventListener('input', mapApplyLayers);
