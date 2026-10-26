@@ -670,23 +670,33 @@ def load_countries(root):
                                   "states_owned": [], "states_core": [], "has_def": False}
 
     # 国家定义文件（颜色 / graphical_culture）
+    # mod 的覆盖文件可能只写 graphical_culture 而没有 color，这时要继续往原版找
     for tag, c in list(COUNTRIES.items()):
         if c.get("source") != name:
             continue
         rel = (c.get("def_file") or "").replace("/", os.sep)
         for base in (root, GAME):
             p = os.path.join(base, "common", rel) if rel else ""
-            if p and os.path.exists(p):
-                text = _read_text(p)
+            if not (p and os.path.exists(p)):
+                continue
+            text = _read_text(p)
+            if not c.get("has_def"):
                 c["has_def"] = True
-                c["def_path"] = os.path.join(base, rel)
-                cm = re.search(r'(?m)^\s*color\s*=\s*(?:\{)?\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)', text)
-                if cm:
-                    rgb = [float(cm.group(1)), float(cm.group(2)), float(cm.group(3))]
+                c["def_path"] = p
+                c["graphical_culture"] = _first(text, r'(?m)^\s*graphical_culture\s*=\s*(\w+)')
+            cm = re.search(r'(?m)^\s*color\s*=\s*(rgb|hsv)?\s*\{?\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)', text)
+            if cm:
+                mode = (cm.group(1) or "").lower()
+                a, b2, c3 = float(cm.group(2)), float(cm.group(3)), float(cm.group(4))
+                if mode == "hsv":
+                    r, g, bl = colorsys.hsv_to_rgb(a, b2, c3)
+                    c["color"] = [round(r, 4), round(g, 4), round(bl, 4)]
+                else:
+                    rgb = [a, b2, c3]
                     if max(rgb) > 1.0:
                         rgb = [round(v / 255.0, 4) for v in rgb]
                     c["color"] = rgb
-                c["graphical_culture"] = _first(text, r'(?m)^\s*graphical_culture\s*=\s*(\w+)')
+                c["color_from"] = p
                 break
 
     # 开局历史
