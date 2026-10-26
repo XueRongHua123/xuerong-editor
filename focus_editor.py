@@ -750,6 +750,92 @@ def load_countries(root):
     return len(COUNTRIES)
 
 
+START_DATE = (1936, 1, 1)      # 开局日期，load 时从 bookmarks 刷新
+START_DATE_TEXT = "1936.1.1"
+
+
+_START_DATE_CACHE = {}
+
+
+def _start_date_for(root):
+    """读某个 mod（或原版）的 bookmarks 得到开局日期；读不到回退 1936.1.1"""
+    key = os.path.abspath(root or "")
+    if key in _START_DATE_CACHE:
+        return _START_DATE_CACHE[key]
+    dates = []
+    for base in (root, GAME):
+        d = os.path.join(base or "", "common", "bookmarks")
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+            try:
+                text = _read_text(os.path.join(d, fn))
+            except Exception:
+                continue
+            for m in re.finditer(r'(?m)^[ \t]*date\s*=\s*"?(\d{4})\.(\d{1,2})\.(\d{1,2})', text):
+                dates.append((int(m.group(1)), int(m.group(2)), int(m.group(3))))
+        if dates:
+            break
+    val = min(dates) if dates else (1936, 1, 1)
+    _START_DATE_CACHE[key] = val
+    print("开局日期 %s -> %d.%d.%d" % (os.path.basename(key), val[0], val[1], val[2]))
+    return val
+
+
+def refresh_start_date(roots):
+    """从 bookmarks 找最早的开局日期（mod 常用 1999.8.7 这种）"""
+    global START_DATE, START_DATE_TEXT
+    dates = []
+    for base in list(roots) + [GAME]:
+        d = os.path.join(base or "", "common", "bookmarks")
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+            try:
+                text = _read_text(os.path.join(d, fn))
+            except Exception:
+                continue
+            for m in re.finditer(r'(?m)^[ \t]*date\s*=\s*"?(\d{4})\.(\d{1,2})\.(\d{1,2})', text):
+                dates.append((int(m.group(1)), int(m.group(2)), int(m.group(3))))
+    if dates:
+        START_DATE = min(dates)
+        START_DATE_TEXT = "%d.%d.%d" % START_DATE
+    return START_DATE
+
+
+def _state_owner_effective(body, hb, he, dep, start=None):
+    """按游戏语义取生效的 owner：日期块（<= 开局，最晚者）优先，否则 history 里的直接子级"""
+    owner = ""
+    if hb > 0:
+        dated = []
+        for m in re.finditer(r'(?m)^[ \t]*(\d{4})\.(\d{1,2})\.(\d{1,2})\s*=\s*\{', body[hb:he]):
+            bpos = body.find('{', hb + m.end() - 1)
+            epos = brace_match(body, bpos)
+            if epos <= bpos:
+                continue
+            dm = re.search(r'(?m)^[ \t]*owner\s*=\s*([A-Z0-9]{2,4})', body[bpos + 1:epos - 1])
+            if dm:
+                dated.append((int(m.group(1)), int(m.group(2)), int(m.group(3)), dm.group(1).strip()))
+        dated.sort()
+        _sd = start or START_DATE
+        eff = [d for d in dated if (d[0], d[1], d[2]) <= _sd]
+        if eff:
+            owner = eff[-1][3]
+        if not owner:
+            for m in re.finditer(r'(?m)^[ \t]*owner\s*=\s*([A-Z0-9]{2,4})', body[hb:he]):
+                pos = hb + m.start()
+                if pos < len(dep) and dep[pos] == 1:
+                    owner = m.group(1).strip()
+                    break
+    if not owner:
+        for m in re.finditer(r'(?m)^[ \t]*owner\s*=\s*([A-Z0-9]{2,4})', body):
+            pos = m.start()
+            if pos < len(dep) and dep[pos] == 0:
+                owner = m.group(1).strip()
+                break
+    return owner
+
+
 def load_states(root):
     """history/states：id / 名称 / 人力 / 类别 / owner / cores / 省份 / 建筑 / 胜利点"""
     root = os.path.abspath(root)
@@ -758,6 +844,7 @@ def load_states(root):
     if not os.path.isdir(d):
         return 0
     n = 0
+    _start = _start_date_for(root)
     for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
         rel = os.path.join("history", "states", fn)
         text = _read_text(os.path.join(d, fn))
@@ -785,13 +872,7 @@ def load_states(root):
                         return m.group(1).strip()
                 return ""
 
-            owner = ""
-            if hb > 0:
-                owner = first_at(r'(?m)^[ \t]*owner\s*=\s*([A-Z0-9]{2,4})', 1, hb, he)
-                if not owner:
-                    owner = first_at(r'(?m)^[ \t]*owner\s*=\s*([A-Z0-9]{2,4})', 2, hb, he)
-            if not owner:
-                owner = first_at(r'(?m)^[ \t]*owner\s*=\s*([A-Z0-9]{2,4})', 0)
+            owner = _state_owner_effective(body, hb, he, dep, _start)
 
             cores = []
             for m in re.finditer(r'(?m)^[ \t]*add_core_of\s*=\s*([A-Z0-9]{2,4})', body):
@@ -1285,6 +1366,7 @@ def state_save(sid, fields):
     new_text = text[:b + 1] + body + text[e - 1:]
     snapshot(p)
     _write_bom_text(p, new_text, has_bom)
+    refresh_start_date(ROOTS)
     reload_data()
     link_countries()
     return {"ok": True, "msg": "已写入 " + rel, "diff": diff}
@@ -4790,7 +4872,10 @@ def main():
         if r not in ROOTS:
             ROOTS.append(r)
             total += load_mod(r)
+    refresh_start_date(ROOTS)
+    reload_data()
     link_countries()
+    print("开局日期:", START_DATE_TEXT, "| STATES:", len(STATES))
     if ROOTS:
         build_icons(ROOTS, GAME)
     else:
