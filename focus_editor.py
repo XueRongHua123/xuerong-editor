@@ -653,21 +653,22 @@ def load_countries(root):
     root = os.path.abspath(root)
     name = os.path.basename(root.rstrip("\\/")) or root
 
-    d = os.path.join(root, "common", "country_tags")
-    if os.path.isdir(d):
-        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
-            rel = os.path.join("common", "country_tags", fn)
-            for m in re.finditer(r'(?m)^\s*([A-Z0-9]{2,4})\s*=\s*"([^"]+)"', _read_text(os.path.join(d, fn))):
-                tag, defrel = m.group(1), m.group(2)
-                cur = COUNTRIES.get(tag)
-                if not _prefer(cur, root):
-                    continue
-                COUNTRIES[tag] = {"tag": tag, "def_file": defrel, "tag_file": rel,
-                                  "root": root, "source": name, "color": None,
-                                  "history_file": "", "capital": "", "political_power": "",
-                                  "stability": "", "war_support": "", "ruling_party": "",
-                                  "ideas": [], "techs": [], "focus_trees": [], "oob": "",
-                                  "states_owned": [], "states_core": [], "has_def": False}
+    _layers_c = mod_layers(root)
+    tag_files, _tag_replaced = _layer_files("common/country_tags", _layers_c)
+    for path in tag_files:
+        fn = os.path.basename(path)
+        rel = os.path.join("common", "country_tags", fn)
+        for m in re.finditer(r'(?m)^\s*([A-Z0-9]{2,4})\s*=\s*"([^"]+)"', _read_text(path)):
+            tag, defrel = m.group(1), m.group(2)
+            cur = COUNTRIES.get(tag)
+            if not _prefer(cur, root):
+                continue
+            COUNTRIES[tag] = {"tag": tag, "def_file": defrel, "tag_file": rel,
+                              "root": root, "source": name, "color": None,
+                              "history_file": "", "capital": "", "political_power": "",
+                              "stability": "", "war_support": "", "ruling_party": "",
+                              "ideas": [], "techs": [], "focus_trees": [], "oob": "",
+                              "states_owned": [], "states_core": [], "has_def": False}
 
     # 国家定义文件（颜色 / graphical_culture）
     # mod 的覆盖文件可能只写 graphical_culture 而没有 color，这时要继续往原版找
@@ -863,14 +864,16 @@ def load_states(root):
     """history/states：id / 名称 / 人力 / 类别 / owner / cores / 省份 / 建筑 / 胜利点"""
     root = os.path.abspath(root)
     name = os.path.basename(root.rstrip("\\/")) or root
-    d = os.path.join(root, "history", "states")
-    if not os.path.isdir(d):
+    layers = mod_layers(root)
+    files, _replaced = _layer_files("history/states", layers)
+    if not files:
         return 0
     n = 0
     _start = _start_date_for(root)
-    for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+    for path in files:
+        fn = os.path.basename(path)
         rel = os.path.join("history", "states", fn)
-        text = _read_text(os.path.join(d, fn))
+        text = _read_text(path)
         for s, e, body in find_blocks(text, "state"):
             sid = _first(body, r'(?m)^\s*id\s*=\s*(-?\d+)')
             if not sid:
@@ -2399,6 +2402,37 @@ def _layers_find(rel, layers):
     return None, None
 
 
+def _layer_files(rel_dir, layers, exts=(".txt",)):
+    """按叠加链收集某个目录下的文件。
+    - 某层声明了 replace_path 覆盖该目录时：只看那一层（整目录替换，不合并）
+    - 否则从链尾往链首收集，同名文件子层优先
+    返回 (文件路径列表, 是否被 replace_path 接管)"""
+    from collections import OrderedDict
+    rel_n = rel_dir.replace(chr(92), "/").strip("/")
+    repl = None
+    for r in reversed(layers or []):
+        for rp in _mod_descriptor(r)["replace"]:
+            if rp.replace(chr(92), "/").strip("/") == rel_n:
+                repl = r
+                break
+        if repl:
+            break
+    scan = [repl] if repl else list(reversed(layers or []))
+    seen = OrderedDict()
+    for r in scan:
+        dpath = os.path.join(r, rel_n.replace("/", os.sep))
+        if not os.path.isdir(dpath):
+            continue
+        try:
+            names = sorted(os.listdir(dpath))
+        except Exception:
+            continue
+        for fn in names:
+            if fn.lower().endswith(exts) and fn not in seen:
+                seen[fn] = os.path.join(dpath, fn)
+    return list(seen.values()), bool(repl)
+
+
 def _map_files_layered(root):
     """在叠加链里找 provinces.bmp / definition.csv，返回 (bmp, csv, 提供地图的 root, layers)"""
     layers = mod_layers(root)
@@ -2579,16 +2613,38 @@ def map_build(force=False, root=None):
     sumy = {}
     cnts = {}
     lookup = color2prov
+    unset_px = 0          # 颜色在 definition.csv 里找不到的像素
     for i in range(n):
         o = i * 3
         pid = lookup.get((raw[o], raw[o + 1], raw[o + 2]))
         if pid is None:
             pid = 0
+            unset_px += 1
         ids[i] = pid
         if pid:
             sumx[pid] = sumx.get(pid, 0) + (i % w)
             sumy[pid] = sumy.get(pid, 0) + (i // w)
             cnts[pid] = cnts.get(pid, 0) + 1
+
+    # 4.5) 地图定义一致性（definition.csv ↔ provinces.bmp）
+    csv_ids = set(color2prov.values())
+    bmp_ids = set(cnts)
+    ghost = sorted(csv_ids - bmp_ids)          # 定义了但地图上没有像素
+    # 同色多个省（后写覆盖前写，前面的 id 永远不会出现）
+    rgb_count = {}
+    for _rgb, _pid in color2prov.items():
+        rgb_count.setdefault(_rgb, []).append(_pid)
+    dup_rgb = {k: v for k, v in rgb_count.items() if len(v) > 1}
+    consistency = {
+        "csv_ids": len(csv_ids),
+        "bmp_ids": len(bmp_ids),
+        "ghost": len(ghost),
+        "ghost_sample": ghost[:20],
+        "unset_pixels": unset_px,
+        "unset_ratio": round(unset_px * 100.0 / max(1, n), 3),
+        "dup_rgb": len(dup_rgb),
+        "dup_rgb_sample": [{"rgb": list(k), "ids": v[:5]} for k, v in list(dup_rgb.items())[:10]],
+    }
 
     # 5) 图层缓冲
     provbuf = bytearray(n * 3)
@@ -2721,6 +2777,7 @@ def map_build(force=False, root=None):
 
     meta = {"w": w, "h": h, "provinces": len(counts), "source": base,
             "ms": int((time.time() - t_all) * 1000), "built": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "consistency": consistency,
             "assets": {a: os.path.getsize(os.path.join(dirp, a)) for a in MAP_ASSETS
                        if os.path.exists(os.path.join(dirp, a))}}
     io.open(meta_path, "w", encoding="utf-8", newline="").write(json.dumps(meta, ensure_ascii=False))
@@ -3116,6 +3173,27 @@ def map_integrity(root=None, limit=200):
     # 无主省 / 超大省
     no_state = [pid for pid in known if pid not in prov2state and px.get(pid, 0) > 0]
     big = sorted(((pid, c) for pid, c in px.items() if c > 2000), key=lambda x: -x[1])[:30]
+
+    # 地图定义一致性（读缓存里的 meta）
+    try:
+        _mp = os.path.join(dirp, "meta.json")
+        if os.path.exists(_mp):
+            _m = json.loads(io.open(_mp, encoding="utf-8").read())
+            _c = _m.get("consistency") or {}
+            if _c.get("ghost"):
+                add("warn", "definition.csv 里有 %d 个省在地图上没有像素" % _c["ghost"],
+                    "例如省 " + ", ".join(str(x) for x in (_c.get("ghost_sample") or [])[:12]) +
+                    "；可能是删省后没清 definition.csv", (_c.get("ghost_sample") or [])[:20])
+            if _c.get("unset_pixels"):
+                add("warn", "%.2f%% 的像素颜色在 definition.csv 里找不到（%d 像素）" %
+                    (_c.get("unset_ratio", 0), _c["unset_pixels"]),
+                    "这些像素会被当成无主地；通常是 bmp 与 csv 不同步，或父子 mod 的 csv/bmp 混用", [])
+            if _c.get("dup_rgb"):
+                add("error", "%d 组省在 definition.csv 里用了同一个 RGB" % _c["dup_rgb"],
+                    "同色会让后定义的省永远不出现；例如 " + json.dumps(
+                        (_c.get("dup_rgb_sample") or [])[:3], ensure_ascii=False)[:160], [])
+    except Exception as _e:
+        print("一致性检查读取失败:", _e)
 
     # 汇总条目
     if bad_comp:
