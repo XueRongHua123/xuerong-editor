@@ -2192,13 +2192,16 @@ MAP_ASSETS = ("base.png", "province.png", "edges.png", "state.png", "political.p
 
 
 def _map_files(root):
-    for base in (root, GAME):
-        if not base:
-            continue
-        b = os.path.join(base, "map", "provinces.bmp")
-        d = os.path.join(base, "map", "definition.csv")
+    """沿叠加链找地图（子 mod → 父 mod → 原版），返回 (bmp, csv, 提供者)"""
+    if root:
+        b, d, provider, _layers = _map_files_layered(root)
+        if b and d:
+            return b, d, (provider or root)
+    if GAME:
+        b = os.path.join(GAME, "map", "provinces.bmp")
+        d = os.path.join(GAME, "map", "definition.csv")
         if os.path.exists(b) and os.path.exists(d):
-            return b, d, base
+            return b, d, GAME
     return None, None, None
 
 
@@ -2226,10 +2229,12 @@ def _map_key(root):
     b, d, base = _map_files(root)
     if not b:
         return None, None
-    key = "%s|%d|%d|%d|%d|%d" % (
-        os.path.abspath(base), os.path.getmtime(b), os.path.getsize(b), os.path.getmtime(d),
-        _dir_mtime(os.path.join(base, "history", "states")),
-        _dir_mtime(os.path.join(base, "map", "strategicregions")))
+    layers = mod_layers(root)
+    layer_sig = "|".join("%s:%d:%d" % (os.path.abspath(x), _dir_mtime(os.path.join(x, "history", "states")),
+                                       _dir_mtime(os.path.join(x, "map", "strategicregions")))
+                         for x in layers)
+    key = "%s|%d|%d|%d|%s" % (
+        os.path.abspath(base), os.path.getmtime(b), os.path.getsize(b), os.path.getmtime(d), layer_sig)
     return key, base
 
 
@@ -2263,24 +2268,148 @@ def map_sources():
 
 
 def _map_pick(root=None):
-    """指定 root 就用它；否则第一个带地图的 mod；最后原版"""
+    """指定 root 就用它；否则第一个在叠加链里能找到地图的 mod；最后原版。
+    注意：submod 自己可能没有 provinces.bmp（由父 mod 提供），所以判断要走整条链。"""
     if root:
         return root
     for r in ROOTS:
-        if os.path.exists(os.path.join(r, "map", "provinces.bmp")):
+        try:
+            b, d, _provider, _layers = _map_files_layered(r)
+        except Exception:
+            b = d = None
+        if b and d:
             return r
     return GAME
 
 
+# v0.91 mod 叠加链（submod 支持）
+def _mod_descriptor(root):
+    """读 mod 根目录的 descriptor.mod（或 .mod 描述文件），返回 name / dependencies / replace_path"""
+    info = {"name": "", "deps": [], "replace": [], "path": ""}
+    for fn in ("descriptor.mod",):
+        p = os.path.join(root, fn)
+        if not os.path.exists(p):
+            continue
+        try:
+            text = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        except Exception:
+            continue
+        m = re.search(r'(?m)^\s*name\s*=\s*"([^"]*)"', text)
+        if m:
+            info["name"] = m.group(1)
+        m = re.search(r'dependencies\s*=\s*\{([^}]*)\}', text, re.S)
+        if m:
+            info["deps"] = re.findall(r'"([^"]+)"', m.group(1))
+        info["replace"] = re.findall(r'replace_path\s*=\s*"([^"]*)"', text)
+        break
+    return info
+
+
+def _find_mod_by_name(name, extra_roots=()):
+    """按 mod 名（descriptor 里的 name）在已知位置找目录"""
+    cands = []
+    # 1) 已加载的 roots
+    for r in list(ROOTS) + list(extra_roots):
+        if not r:
+            continue
+        cands.append(os.path.abspath(r))
+    # 2) workshop 目录
+    ws = r"E:\SteamLibrary\steamapps\workshop\content\394360"
+    if os.path.isdir(ws):
+        for d in os.listdir(ws):
+            p = os.path.join(ws, d)
+            if os.path.isdir(p):
+                cands.append(p)
+    # 3) 常见 mod 目录
+    for base in (r"E:\HOI4\mod", os.path.join(os.path.expanduser("~"), "Documents", "Paradox Interactive",
+                                                 "Hearts of Iron IV", "mod")):
+        if os.path.isdir(base):
+            for d in os.listdir(base):
+                p = os.path.join(base, d)
+                if os.path.isdir(p):
+                    cands.append(p)
+    for p in cands:
+        d = _mod_descriptor(p)
+        if d["name"] and d["name"].lower() == name.lower():
+            return p
+        # 也允许目录名直接等于 mod 名
+        if os.path.basename(p.rstrip("\\/")).lower() == name.lower():
+            return p
+    return None
+
+
+def mod_layers(root=None, depth=3):
+    """返回叠加链，从最父到最子：[原版, 父 mod, 子 mod]
+    HOI4 语义：后加载的覆盖先加载的；replace_path 的目录是整体替换。"""
+    root = _map_pick(root)
+    chain = []
+    cur = root
+    guard = 0
+    while cur and guard < depth:
+        guard += 1
+        ab = os.path.abspath(cur)
+        if ab not in chain:
+            chain.append(ab)
+        desc = _mod_descriptor(ab)
+        if not desc["deps"]:
+            break
+        # 取第一个能定位到的父依赖
+        nxt = None
+        for dep in desc["deps"]:
+            p = _find_mod_by_name(dep, extra_roots=[root] if root else [])
+            if p and os.path.abspath(p) not in chain:
+                nxt = p
+                break
+        cur = nxt
+    chain.reverse()          # 父在前
+    if GAME and os.path.abspath(GAME) not in chain:
+        chain.insert(0, os.path.abspath(GAME))
+    return chain
+
+
+def _layers_find(rel, layers):
+    """按 HOI4 语义在叠加链里找文件：replace_path 的目录整体替换，其余逐文件覆盖。
+    返回 (绝对路径 or None, 来源 root)。"""
+    if not layers:
+        return None, None
+    rel_n = rel.replace(chr(92), "/").lstrip("/")
+    # 判断这条路径是否落在某个 mod 的 replace_path 目录下
+    replace_at = None
+    for r in reversed(layers):
+        for rp in _mod_descriptor(r)["replace"]:
+            rp_n = rp.replace("\\", "/").strip("/")
+            if rp_n and (rel_n == rp_n or rel_n.startswith(rp_n + "/")):
+                replace_at = r
+                break
+        if replace_at:
+            break
+    search = [replace_at] if replace_at else list(reversed(layers))
+    for r in search:
+        p = os.path.join(r, rel_n.replace("/", os.sep))
+        if os.path.exists(p):
+            return p, r
+    return None, None
+
+
+def _map_files_layered(root):
+    """在叠加链里找 provinces.bmp / definition.csv，返回 (bmp, csv, 提供地图的 root, layers)"""
+    layers = mod_layers(root)
+    b, rb = _layers_find("map/provinces.bmp", layers)
+    d, rd = _layers_find("map/definition.csv", layers)
+    if b and d:
+        return b, d, (rb or rd), layers
+    return None, None, None, layers
+
+
 def _map_files_strict(root):
-    """严格模式：指定来源没有地图就返回 None，不偷偷回退到原版"""
+    """严格模式：沿叠加链找地图（子 mod 没有地图时用父 mod 的），整条链都没有才返回 None。
+    返回的地图 bmp 可能来自父 mod，但 base 仍报请求的 root，便于界面区分"数据来自哪里"。"""
     if not root:
         return None, None, None
-    b = os.path.join(root, "map", "provinces.bmp")
-    d = os.path.join(root, "map", "definition.csv")
-    if os.path.exists(b) and os.path.exists(d):
-        return b, d, root
-    return None, None, None
+    b, d, provider, layers = _map_files_layered(root)
+    if not b or not d:
+        return None, None, None
+    return b, d, provider
 
 
 def map_meta(root=None):
@@ -2308,8 +2437,11 @@ def map_meta(root=None):
             prev = {}
     if not built and prev.get("root") and os.path.abspath(prev.get("root")) == os.path.abspath(base or ""):
         stale = prev.get("key") != key
+    layers = mod_layers(root)
     return {"ok": True, "built": built, "stale": stale, "dir": dirp, "source": base, "stamp": key,
-            "prev_built": prev.get("built"), "meta": meta, "picked": root, "sources": map_sources()}
+            "prev_built": prev.get("built"), "meta": meta, "picked": root,
+            "layers": [{"path": x, "name": os.path.basename(x.replace("\\", "/").rstrip("/")) or x} for x in layers],
+            "sources": map_sources()}
 
 
 MAP_PALETTE = ((196, 112, 92), (96, 138, 186), (150, 158, 96),
