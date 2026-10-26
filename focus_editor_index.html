@@ -497,7 +497,10 @@
     border-radius:8px;padding:6px 10px;font-size:11.5px;color:var(--text);line-height:1.6;pointer-events:none;
     min-width:150px}
   #mapTools{position:absolute;right:10px;top:10px;z-index:3;display:flex;flex-direction:column;gap:6px;
-    background:rgba(12,14,12,.82);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:11.5px}
+    background:rgba(10,12,10,.94);border:1px solid var(--line2);border-radius:10px;padding:9px 11px;
+    font-size:11.5px;backdrop-filter:blur(6px);box-shadow:0 6px 20px rgba(0,0,0,.45)}
+  #mapTools label{color:var(--text)}
+  #mapTools .k{color:var(--muted)}
   #mapTools label{display:flex;gap:6px;align-items:center;color:var(--text);cursor:pointer}
   #mapTools input[type=range]{width:80px}
   #mapSearchWrap{display:flex;gap:6px;align-items:center;margin-left:auto}
@@ -948,12 +951,14 @@
           <div id="mapStack">
             <img id="mapBase" alt="">
             <img id="mapProv" alt="">
+            <img id="mapPolit" alt="">
             <img id="mapState" alt="">
             <img id="mapEdges" alt="">
           </div>
           <div id="mapHud">把鼠标移到地图上看看</div>
           <div id="mapTools">
             <label><input type="checkbox" id="mapLProv" checked>省色块</label>
+            <label><input type="checkbox" id="mapLPolit">政治（按国家）</label>
             <label><input type="checkbox" id="mapLState">州</label>
             <label><input type="checkbox" id="mapLEdges" checked>省界</label>
             <label><input type="checkbox" id="mapLBase" checked>底图</label>
@@ -4663,6 +4668,7 @@ async function mapLoadAssets(){
     el.style.opacity = opacity;
   };
   set('mapBase', 'base.png', 1);
+  set('mapPolit', 'political.png', 0.9);
   set('mapProv', 'province.png', 0.85);
   set('mapState', 'state.png', 0.62);
   set('mapEdges', 'edges.png', 0.35);
@@ -4681,20 +4687,25 @@ async function mapLoadAssets(){
 }
 
 function mapApplyLayers(){
+  const onPolit = document.getElementById('mapLPolit').checked;
   const onProv = document.getElementById('mapLProv').checked;
   const onState = document.getElementById('mapLState').checked;
   const onEdges = document.getElementById('mapLEdges').checked;
   const onBase = document.getElementById('mapLBase').checked;
   const op = Number(document.getElementById('mapOpacity').value) / 100;
+  const polit = document.getElementById('mapPolit');
   const prov = document.getElementById('mapProv');
   const state = document.getElementById('mapState');
   const edges = document.getElementById('mapEdges');
   const base = document.getElementById('mapBase');
-  prov.style.display = onProv ? '' : 'none';
+  polit.style.display = onPolit ? '' : 'none';
+  polit.style.opacity = op;
+  prov.style.display = (onProv && !onPolit) ? '' : 'none';
   state.style.display = onState ? '' : 'none';
   edges.style.display = onEdges ? '' : 'none';
   base.style.display = onBase ? '' : 'none';
   prov.style.opacity = onState ? Math.min(0.35, op) : op;
+  if(onPolit) prov.style.opacity = 0;
   state.style.opacity = op;
   edges.style.opacity = Math.max(0.2, op * 0.5);
 }
@@ -5092,7 +5103,7 @@ document.getElementById('mapFit').onclick = mapFit;
 document.getElementById('mapBuild').onclick = mapBuild;
 document.getElementById('mapClear').onclick = mapClearCache;
 document.getElementById('mapSearch').addEventListener('keydown', e=>{ if(e.key === 'Enter') mapSearchGo(); });
-['mapLProv','mapLState','mapLEdges','mapLBase'].forEach(id=>{  const el = document.getElementById(id); if(el) el.addEventListener('change', mapApplyLayers); });
+['mapLProv','mapLState','mapLEdges','mapLBase','mapLPolit'].forEach(id=>{  const el = document.getElementById(id); if(el) el.addEventListener('change', mapApplyLayers); });
 const mapOpEl = document.getElementById('mapOpacity'); if(mapOpEl) mapOpEl.addEventListener('input', mapApplyLayers);
 document.getElementById('scriptClose').onclick = ()=>{ document.getElementById('scriptModal').classList.remove('show'); };
 document.getElementById('scriptReload').onclick = ()=>openScriptCheck(true);
