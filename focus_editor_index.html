@@ -27,9 +27,6 @@
   #mascotImg{width:100%;display:block;border-radius:8px}
   #main{flex:1;position:relative;overflow:hidden}
   #svg{width:100%;height:100%;display:block;background:radial-gradient(circle at 1px 1px,var(--panel2) 1px,transparent 0) 0 0/24px 24px,var(--input);cursor:default}
-  .node rect{fill:var(--panel2);stroke:var(--line2);stroke-width:1.5;rx:8}
-  .node:hover rect{stroke:var(--accent-2)}
-  .node.sel rect{stroke:var(--accent);fill:var(--panel2)}
   .node.multi rect{stroke:var(--accent);stroke-width:2.4}
   .node.dirty rect{stroke:var(--accent);stroke-dasharray:4 3}
   .node.cycle rect{stroke:#d16a6a}
@@ -40,7 +37,6 @@
   .edge.cycle{stroke:#d16a6a;stroke-width:2.4}
   .toolbar{position:absolute;top:10px;left:10px;display:flex;gap:6px;flex-wrap:wrap;z-index:5}
   .btn{background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:4px 8px;border-radius:5px;cursor:pointer;font-size:12px;user-select:none}
-  .btn:hover{background:var(--panel2)}
   .btn.on{background:#3a4a3d;border-color:var(--accent-2)}
   .btn.link.on{background:#4a3b2e;border-color:#b98a5a}
   .panel{position:absolute;top:56px;right:10px;width:320px;max-height:calc(100% - 70px);overflow:auto;
@@ -51,7 +47,7 @@
   .fxgrid{display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;font-size:11px}
   .fxgrid label{display:flex;flex-direction:column;gap:2px;color:var(--muted)}
   .fxgrid input{margin:0!important}
-  .k{color:var(--muted)}.v{color:var(--text)}
+.v{color:var(--text)}
   #ideaModal input[type=text],#ideaModal textarea{width:100%;box-sizing:border-box;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px 8px;font-size:13px;margin:2px 0 8px}
   #ideaModal textarea{font-family:Consolas,monospace;line-height:1.55}
   #ideaModal input[type=text]:focus,#ideaModal textarea:focus{border-color:var(--accent-2);outline:none}
@@ -103,10 +99,8 @@
   .fpv-node text{fill:var(--text);font-size:14px}
   .fpv-node text.cost{fill:var(--text);font-size:12px}
   .fpv-edge{stroke:var(--accent);stroke-width:2;fill:none;opacity:.85}
-  .warn{color:var(--warn)}.ok{color:var(--ok)}.muted{color:var(--muted)}
+.ok{color:var(--ok)}.muted{color:var(--muted)}
   #treeList div{padding:5px 8px;border-radius:6px;cursor:pointer;font-size:12px;margin-bottom:2px;border-left:2px solid transparent}
-  #treeList div:hover{background:var(--panel2)}
-  #treeList div.on{background:var(--panel2);border-left-color:var(--accent);color:var(--text)}
   .tabbtn{padding:6px 9px;background:var(--panel);border:1px solid var(--line);border-radius:6px;cursor:pointer;font-size:12px;color:var(--text);margin-bottom:4px;border-left:2px solid transparent}
   .tabbtn:hover{background:var(--panel2);border-left-color:var(--accent-2)}
   #ideaList div{padding:4px 6px;border-radius:5px;cursor:pointer;font-size:12px;margin-bottom:2px}
@@ -132,7 +126,6 @@
 .wc-item img{width:28px;height:28px;border-radius:50%;object-fit:cover;border:1px solid var(--line)}
   .welcome-body p{margin:0;color:var(--text);font-size:13px;line-height:1.7}
   .welcome-btns{display:flex;gap:10px;margin-top:4px;flex-wrap:wrap}
-  .btn.primary{background:var(--accent-2);border-color:var(--accent-2);color:var(--text)}
   .btn.primary:hover{background:var(--accent-2)}
   .welcome-tip{font-size:12px;color:var(--muted)}
   .welcome-tip code{background:var(--input);border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:var(--text)}
@@ -253,28 +246,15 @@
   #tsCountry{width:100%;box-sizing:border-box;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px 8px;font-size:12.5px}
   .ts-foot{display:flex;justify-content:flex-end;padding:10px 12px;border-top:1px solid var(--line)}
   /* ---------- 主题：雪夜 / 纸页 ---------- */
-  :root{--bg:#1a1d1c;--panel:#222624;--panel2:#272b29;--input:#1d211f;--line:#3a403c;--line2:#4a524c;--text:#cfc9bc;--muted:#8f8a7e;--accent:#c9a86a;--node:#252a27;--svg:#181c1a}
-  body.theme-paper{--bg:#f3f1ec;--panel:#fbfaf7;--panel2:#f2efe8;--input:#ffffff;--line:#d8d3c8;--line2:#c5bfb2;--text:#2c2a26;--muted:#6f6a60;--accent:#8a6a2f;--node:#fbfaf7;--svg:#f6f3ed}
-  html,body,#main{background:var(--bg)!important;color:var(--text)!important}
-  #side,.toolbar{background:var(--panel)!important;border-color:var(--line)!important}
-  #svg{background:var(--svg)!important}
-  .btn{background:var(--panel2)!important;color:var(--text)!important;border-color:var(--line)!important}
-  .btn:hover{border-color:var(--accent)!important;color:var(--text)!important}
+  body.theme-paper{--bg:#f3f1ec;--panel:#fbfaf7;--panel2:#f2efe8;--input:#ffffff;--line:#d8d3c8;--line2:#c5bfb2;--text:#2c2a26;--muted:#6f6a60;--accent:#8a6a2f;--node:#fbfaf7;--svund:var(--panel2)!important;color:var(--text)!important;border-color:var(--line)!important}
   .btn.primary{background:var(--accent)!important;color:var(--on-accent)!important;border-color:var(--accent)!important}
   input,textarea,select{background:var(--input)!important;color:var(--text)!important;border-color:var(--line)!important}
   .k,summary,.welcome-tip,.welcome-body p{color:var(--muted)!important}
   #welcome .welcome-card,div[id$="Modal"],.ts-card,.fp-card,.tt-card,.ai-card,.fpv-card,.diff-card{background:var(--panel)!important;border-color:var(--line)!important}
   #welcome .welcome-card{box-shadow:none!important}
-  .node rect{fill:var(--node)!important;stroke:var(--line2)!important}
-  .node.sel rect{stroke:var(--accent)!important}
-  .node text{fill:var(--text)!important}
-  .edge{stroke:var(--muted)!important}
   .welcome-sub{color:var(--accent)!important}
   .welcome-body h1{color:var(--text)!important}
   .tabbtn{background:var(--panel2)!important;color:var(--text)!important;border-color:var(--line)!important}
-  .tabbtn:hover{background:var(--input)!important}
-  #treeList div:hover{background:var(--panel2)!important}
-  #treeList div.on{background:var(--panel2)!important;color:var(--text)!important;border-left-color:var(--accent)!important}
   .mascot-float{background:var(--panel)!important;border-color:var(--line)!important}
   .mf-tip,.mf-head{color:var(--muted)!important}
   .fxgrid label,.diff-body,.tt-detail{color:var(--text)!important}
@@ -296,12 +276,14 @@
     --accent:#d0ad72;--accent-2:#8fa06a;--dot:#202623;
     --r-sm:8px;--r-md:10px;--r-lg:16px;
     --shadow:0 18px 50px rgba(0,0,0,.42);
+    --node:#252a27;--svg:#181c1a;
   }
   body.theme-paper{
     --bg:#f3f1ea;--panel:#fbfaf6;--panel2:#f0ede4;--input:#ffffff;
     --line:#ded8cc;--line2:#c9c1b2;--text:#2b2924;--muted:#6f6a60;
     --accent:#7c5d24;--accent-2:#2f6f5e;--dot:#e7e2d7;
     --shadow:0 18px 50px rgba(60,50,30,.12);
+    --node:#fbfaf7;--svg:#f6f3ed;
   }
   html,body{font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;font-size:13px;letter-spacing:.1px}
   #side{width:288px;min-width:260px;padding:0!important;background:var(--panel)!important;border-right:1px solid var(--line)!important}
@@ -470,7 +452,6 @@
   .hist-diff .row .new{color:var(--accent)}
   .hist-warn{color:var(--warn);font-size:11.5px;margin-top:6px;line-height:1.5}
   /* ---------- v0.72 节点密度与窄屏 ---------- */
-  .toolbar .tb-narrow{display:none}
   @media (max-width: 1100px){
     .toolbar{flex-wrap:wrap;gap:4px}
     .toolbar .tb-wide{display:none}
@@ -532,7 +513,6 @@
   .lt-group input[type=range]{width:100%;margin:5px 0 0;accent-color:var(--accent)}
 
   /* 属性面板：数值是主角，标签退到第二档 */
-  #mapSide h4{padding:12px 12px 4px;font-size:10.5px;letter-spacing:1.2px;color:var(--t3)}
   .mp-row{padding:5px 12px;align-items:baseline}
   .mp-row .mp-k{font-size:11px;color:var(--t2)}
   .mp-row .mp-v{font-size:14px;font-weight:600;color:var(--t1);font-variant-numeric:tabular-nums}
@@ -541,7 +521,6 @@
   .mp-sep{height:1px;background:var(--line);margin:6px 12px}
 
   /* 状态栏：模式是锚点，坐标等宽弱化，提示最弱 */
-  #mapStatus{font-size:11px}
   #msMode{font-size:11.5px;font-weight:600;letter-spacing:.4px;color:var(--accent);
     padding:1px 8px;border:1px solid color-mix(in srgb,var(--accent) 45%,transparent);
     border-radius:20px}
@@ -558,10 +537,7 @@
   img{-webkit-user-drag:none;user-drag:none}
   /* 地图画布：不显示文本光标，右键不弹菜单由脚本拦截 */
   #mapStageWrap, #mapStageWrap *{cursor:default}
-  #mapStageWrap{cursor:grab}
-  #mapStageWrap.dragging{cursor:grabbing}
   /* ---------- v0.81 地图界面重构 ---------- */
-  #mapCard{display:flex;flex-direction:column}
   #mapHead{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
   #mapHead b{font-size:13px}
   #mapHead .map-grow{flex:1}
@@ -624,7 +600,6 @@
   #mapTools{display:flex;flex-direction:column;gap:6px;padding:9px 11px;
     background:var(--panel);border:1px solid var(--line2);border-radius:10px;
     font-size:11.5px;box-shadow:var(--shadow)}
-  #mapTools label{color:var(--text)}
   #mapTools .k{color:var(--muted)}
   #mapTools label{display:flex;gap:6px;align-items:center;color:var(--text);cursor:pointer}
   #mapTools input[type=range]{width:80px}
@@ -662,12 +637,9 @@
   .sc-row.unused .sc-refs{color:var(--warn);font-weight:600}
   .sc-row.empty .sc-refs{color:var(--muted)}
   /* ---------- v0.63 缩放适配与面板定位 ---------- */
-  #aiBubble.open{transform:none}
   #aiBubble img{transition:transform .28s cubic-bezier(.2,.8,.2,1)}
   #aiBubble.open img{transform:rotate(45deg)}
   #aiModal{z-index:120!important}
-  .ai-card{max-height:none!important}
-  .ai-body{overflow:auto}
   /* ---------- v0.62 环形菜单与浮窗 ---------- */
   #aiModal{width:min(430px,calc(100vw - 28px))!important;right:20px;bottom:170px;left:auto;top:auto;
     max-height:calc(100vh - 60px)}
@@ -700,8 +672,6 @@
   #mascotResize{position:absolute;right:2px;bottom:2px;width:14px;height:14px;cursor:nwse-resize;
     border-right:2px solid var(--line2);border-bottom:2px solid var(--line2);border-bottom-right-radius:6px}
   #mascotResize:hover{border-color:var(--accent)}
-  .cm-card{width:min(1040px,calc(100% - 48px))!important;height:min(740px,calc(100% - 48px))!important;
-    border-radius:18px!important}
   #countryModal,#stateModal,#lintModal,#historyModal,#unloadModal,#keysModal{background:rgba(8,10,9,.62)!important;
     backdrop-filter:blur(3px)}
   /* ---------- v0.61 AI 面板与悬浮球 ---------- */
@@ -5021,11 +4991,17 @@ async function mapLoadMeta(root){
     if(d.sources) mapFillSources(d.sources, MAP.root);
     if(!d.ok){ metaEl.textContent = d.msg || '没有地图数据'; return; }
     if(!d.built){
-      metaEl.textContent = '图层未构建';
       const bb = document.getElementById('mapBuild');
       if(bb) bb.classList.add('primary');
+      if(d.stale){
+        metaEl.textContent = '图层缓存已过期（' + (d.prev_built || '上次构建') + ' 的数据或版本有变），点「构建图层」重建';
+        metaEl.style.color = 'var(--accent)';
+      } else {
+        metaEl.textContent = '图层未构建（首次约 20 秒）';
+      }
       return;
     }
+    metaEl.style.color = '';
     MAP.meta = d.meta || {};
     MAP.w = MAP.meta.w || MAP.w;
     MAP.h = MAP.meta.h || MAP.h;
