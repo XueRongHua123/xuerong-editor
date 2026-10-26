@@ -36,6 +36,11 @@ def build(python):
         # 只用 Image.open/convert/frombytes/save/resize，不需要 AVIF 等特殊解码器（省 ~8MB 解压体积）
         "--exclude-module", "PIL._avif",
         "--exclude-module", "PIL._avif_cffi",
+        # Pillow 的 hook 会把机器上装了的 numpy 一并收进来（+11MB 压缩体积），本项目不用
+        "--exclude-module", "numpy",
+        "--exclude-module", "scipy",
+        "--exclude-module", "pandas",
+        "--exclude-module", "matplotlib",
         "--distpath", os.path.join(HERE, "dist"),
         "--workpath", os.path.join(HERE, "build"),
         os.path.join(WORK, "focus_editor.py"),
