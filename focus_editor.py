@@ -2294,8 +2294,24 @@ def _map_pick(root=None):
 
 
 # v0.91 mod 叠加链（submod 支持）
+_DESC_CACHE = {}
+
+
 def _mod_descriptor(root):
-    """读 mod 根目录的 descriptor.mod（或 .mod 描述文件），返回 name / dependencies / replace_path"""
+    """读 mod 根目录的 descriptor.mod，返回 name / dependencies / replace_path。
+    带 mtime 缓存：这个函数会被叠加链、图层查找反复调用，不缓存会拖慢所有接口。"""
+    try:
+        _abs = os.path.abspath(root or "")
+        _dp = os.path.join(_abs, "descriptor.mod")
+        _sig = None
+        if os.path.exists(_dp):
+            _st = os.stat(_dp)
+            _sig = (_st.st_mtime, _st.st_size)
+        _hit = _DESC_CACHE.get(_abs)
+        if _hit is not None and _hit[0] == _sig:
+            return dict(_hit[1])
+    except Exception:
+        _abs, _sig = "", None
     info = {"name": "", "deps": [], "replace": [], "path": ""}
     for fn in ("descriptor.mod",):
         p = os.path.join(root, fn)
@@ -2313,6 +2329,11 @@ def _mod_descriptor(root):
             info["deps"] = re.findall(r'"([^"]+)"', m.group(1))
         info["replace"] = re.findall(r'replace_path\s*=\s*"([^"]*)"', text)
         break
+    try:
+        if _abs:
+            _DESC_CACHE[_abs] = (_sig, dict(info))
+    except Exception:
+        pass
     return info
 
 
@@ -2349,10 +2370,20 @@ def _find_mod_by_name(name, extra_roots=()):
     return None
 
 
+_LAYERS_CACHE = {}
+
+
 def mod_layers(root=None, depth=3):
     """返回叠加链，从最父到最子：[原版, 父 mod, 子 mod]
     HOI4 语义：后加载的覆盖先加载的；replace_path 的目录是整体替换。"""
     root = _map_pick(root)
+    try:
+        _ck = (os.path.abspath(root or ""), tuple(os.path.abspath(r) for r in ROOTS))
+        _hit = _LAYERS_CACHE.get(_ck)
+        if _hit:
+            return list(_hit)
+    except Exception:
+        _ck = None
     chain = []
     cur = root
     guard = 0
@@ -2375,6 +2406,11 @@ def mod_layers(root=None, depth=3):
     chain.reverse()          # 父在前
     if GAME and os.path.abspath(GAME) not in chain:
         chain.insert(0, os.path.abspath(GAME))
+    try:
+        if _ck:
+            _LAYERS_CACHE[_ck] = list(chain)
+    except Exception:
+        pass
     return chain
 
 
@@ -2465,10 +2501,20 @@ def bmp_info(path):
 
 
 def bmp_read_rect(path, x0, y0, w, h):
-    """读矩形区域的原始像素（RGB 三元组列表，行优先）"""
+    """读矩形区域的原始像素（RGB 三元组列表，行优先）。
+    走 Pillow 的 C 实现；逐行手工解析在 1100 万像素时要 7 秒以上。"""
     info = bmp_info(path)
     if not info or info["bpp"] != 24:
         return None
+    try:
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None
+        with Image.open(path) as im:
+            box = im.convert("RGB").crop((x0, y0, x0 + w, y0 + h))
+            raw = box.tobytes()
+        return [(raw[i], raw[i + 1], raw[i + 2]) for i in range(0, len(raw), 3)]
+    except Exception:
+        pass
     out = []
     with open(path, "rb") as f:
         for y in range(y0, y0 + h):
@@ -2476,7 +2522,7 @@ def bmp_read_rect(path, x0, y0, w, h):
             f.seek(info["offset"] + row_idx * info["row"] + x0 * 3)
             data = f.read(w * 3)
             for i in range(0, len(data), 3):
-                out.append((data[i + 2], data[i + 1], data[i]))   # BGR -> RGB
+                out.append((data[i + 2], data[i + 1], data[i]))
     return out
 
 
@@ -2486,8 +2532,11 @@ def bmp_write_rect(path, x0, y0, w, h, pixels):
     if not info or info["bpp"] != 24:
         return False
     buf = bytearray()
-    for (r, g, b) in pixels:
-        buf += bytes((b, g, r))
+    if pixels and isinstance(pixels[0], (list, tuple)) and len(pixels[0]) == 3:
+        for (r, g, b) in pixels:
+            buf += bytes((b, g, r))
+    else:
+        buf = bytearray(pixels)
     with open(path, "r+b") as f:
         stride = w * 3
         for row in range(h):
@@ -2618,7 +2667,190 @@ def map_edit_redo():
     return {"ok": True, "undo_depth": len(MAP_EDIT["undo"])}
 
 
+# v0.99 省份合并 / 删除
+def map_merge_preview(src, dst, root=None):
+    """预览合并：返回源省像素数、受影响的州/战略区，不写盘"""
+    src, dst = int(src), int(dst)
+    if src == dst:
+        return {"ok": False, "msg": "源省和目标省相同"}
+    root = _map_pick(root)
+    _ensure_prov_rgb(root)
+    if src not in PROV_RGB:
+        return {"ok": False, "msg": "省 %d 在 definition.csv 里没有定义" % src}
+    if dst not in PROV_RGB:
+        return {"ok": False, "msg": "省 %d 在 definition.csv 里没有定义" % dst}
+    layers = mod_layers(root)
+    bmp, _prov = _layers_find("map/provinces.bmp", layers)
+    if not bmp:
+        return {"ok": False, "msg": "找不到 provinces.bmp"}
+    info = bmp_info(bmp)
+    if not info:
+        return {"ok": False, "msg": "只支持 24 位 BMP"}
+    src_rgb = PROV_RGB[src]
+    # 预览只需计数：优先读图层缓存里的 prov_index.json（构建时已算好每省像素数），零遍历成本
+    _n = 0
+    try:
+        _d, _key, _b = _map_dir(root)
+        _idx = os.path.join(_d or "", "prov_index.json")
+        if os.path.exists(_idx):
+            _j = json.loads(io.open(_idx, encoding="utf-8").read())
+            _n = int((_j.get(str(src)) or {}).get("px") or 0)
+    except Exception:
+        _n = 0
+    if not _n:
+        try:
+            from PIL import Image
+            Image.MAX_IMAGE_PIXELS = None
+            with Image.open(bmp) as _im:
+                _cols = _im.convert("RGB").getcolors(maxcolors=200000) or []
+            _n = next((c for c, col in _cols if tuple(col) == tuple(src_rgb)), 0)
+        except Exception:
+            allpx = bmp_read_rect(bmp, 0, 0, info["w"], info["h"])
+            _n = sum(1 for px in allpx if px == src_rgb)
+    hit = [0] * _n
+    states_hit = []
+    for sid, st in STATES.items():
+        if src in (st.get("provinces") or []):
+            states_hit.append(sid)
+    prov2region, _rl = _strategic_regions(root)
+    region_hit = [prov2region.get(src)] if prov2region.get(src) else []
+    # 合并后源省的州会不会变空
+    empty_after = []
+    for sid in states_hit:
+        st = STATES.get(sid) or {}
+        rest = [p for p in (st.get("provinces") or []) if p != src]
+        if not rest:
+            empty_after.append(sid)
+    return {"ok": True, "src": src, "dst": dst, "pixels": len(hit),
+            "src_rgb": list(src_rgb), "dst_rgb": list(PROV_RGB[dst]),
+            "states": states_hit, "states_empty_after": empty_after,
+            "regions": region_hit, "bmp": bmp, "w": info["w"], "h": info["h"]}
+
+
+def map_merge_apply(src, dst, root=None):
+    """合并：把 src 的所有像素涂成 dst 的颜色，并把 src 从州列表里改成 dst"""
+    pv = map_merge_preview(src, dst, root)
+    if not pv.get("ok"):
+        return pv
+    src, dst = pv["src"], pv["dst"]
+    root = _map_pick(root)
+    layers = mod_layers(root)
+    bmp = pv["bmp"]
+    if is_under_game(bmp):
+        return {"ok": False, "msg": "原版目录只读"}
+    src_rgb = tuple(pv["src_rgb"])
+    dst_rgb = tuple(pv["dst_rgb"])
+    w, h = pv["w"], pv["h"]
+    allpx = bmp_read_rect(bmp, 0, 0, w, h)
+    changed = 0
+    newpx = list(allpx)
+    for i, px in enumerate(allpx):
+        if px == src_rgb:
+            newpx[i] = dst_rgb
+            changed += 1
+    if not changed:
+        return {"ok": False, "msg": "省 %d 在地图上没有像素" % src}
+    # 备份整幅原像素（合并影响面可能很大，用整幅更稳，33MB 一次性）
+    os.makedirs(MAP_UNDO_DIR, exist_ok=True)
+    seq = int(time.time() * 1000)
+    fn = os.path.join(MAP_UNDO_DIR, "merge%d.bin" % seq)
+    with open(fn, "wb") as f:
+        for (r, g, b) in allpx:
+            f.write(bytes((r, g, b)))
+    bmp_write_rect(bmp, 0, 0, w, h, newpx)
+    # 州：src → dst
+    touched_states = []
+    for sid in pv["states"]:
+        st = STATES.get(sid) or {}
+        fpath = st.get("path") or st.get("file")
+        if not fpath or not os.path.exists(fpath):
+            continue
+        try:
+            _text, _bom = _read_bom_text(fpath)
+            _loc = _state_locate(_text)
+            if not _loc:
+                continue
+            _b, _e = _loc
+            _body = _text[_b + 1:_e - 1]
+            _old = _parse_state_provinces(_body)
+            _new = [p for p in _old if p != src]
+            if dst not in _new:
+                _new.append(dst)
+            _new_text = _text[:_b + 1] + _set_state_provinces(_body, _new) + _text[_e - 1:]
+            snapshot(fpath)
+            _write_bom_text(fpath, _new_text, _bom)
+            CHANGED[fpath] = os.path.relpath(fpath, root)
+            touched_states.append(os.path.relpath(fpath, root))
+        except Exception as _e2:
+            print("合并时写州失败:", fpath, _e2)
+    # 内存里的 STATES 也更新
+    for sid in pv["states"]:
+        st = STATES.get(sid)
+        if not st:
+            continue
+        lst = [p for p in (st.get("provinces") or []) if p != src]
+        if dst not in lst:
+            lst.append(dst)
+        st["provinces"] = sorted(lst)
+    MAP_EDIT["undo"].append({"file": fn, "bmp": bmp, "x": 0, "y": 0, "w": w, "h": h,
+                             "count": changed, "kind": "merge", "src": src, "dst": dst,
+                             "states": touched_states})
+    MAP_EDIT["redo"] = []
+    return {"ok": True, "src": src, "dst": dst, "pixels": changed,
+            "states": touched_states, "undo_depth": len(MAP_EDIT["undo"]),
+            "note": "definition.csv 未改动（省 %d 仍保留定义，可后续手工清理或用「删除省」）" % src}
+
+
+_NB_CACHE = {}
+
+
+def map_prov_neighbors(pid, root=None):
+    """返回某省的相邻省（按共享边像素数排序）。整幅扫描约 5 秒，按 bmp mtime 缓存结果。"""
+    root = _map_pick(root)
+    try:
+        _layers0 = mod_layers(root)
+        _b0, _p0 = _layers_find("map/provinces.bmp", _layers0)
+        _sig = (os.path.abspath(_b0 or ""), int(os.path.getmtime(_b0)) if _b0 and os.path.exists(_b0) else 0, int(pid))
+        if _sig in _NB_CACHE:
+            return dict(_NB_CACHE[_sig])
+    except Exception:
+        _sig = None
+    _ensure_prov_rgb(root)
+    layers = mod_layers(root)
+    bmp, _prov = _layers_find("map/provinces.bmp", layers)
+    if not bmp:
+        return {"ok": False, "msg": "找不到 provinces.bmp"}
+    info = bmp_info(bmp)
+    w, h = info["w"], info["h"]
+    if pid not in PROV_RGB:
+        return {"ok": False, "msg": "省 %d 没有颜色定义" % pid}
+    rgb = PROV_RGB[pid]
+    allpx = bmp_read_rect(bmp, 0, 0, w, h)
+    idx = {v: k for k, v in PROV_RGB.items()}
+    nb = {}
+    for i, px in enumerate(allpx):
+        if px != rgb:
+            continue
+        x, y = i % w, i // w
+        for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+            if 0 <= nx < w and 0 <= ny < h:
+                other = allpx[ny * w + nx]
+                if other != rgb:
+                    npid = idx.get(other)
+                    if npid:
+                        nb[npid] = nb.get(npid, 0) + 1
+    out = sorted(nb.items(), key=lambda kv: -kv[1])[:12]
+    res = {"ok": True, "pid": pid, "neighbors": [{"pid": p, "share": c} for p, c in out]}
+    try:
+        if _sig:
+            _NB_CACHE[_sig] = dict(res)
+    except Exception:
+        pass
+    return res
+
+
 def map_edit_state():
+
     return {"ok": True, "undo": len(MAP_EDIT["undo"]), "redo": len(MAP_EDIT["redo"]),
             "pending": len(MAP_EDIT.get("pending") or []), "file": MAP_EDIT.get("file") or ""}
 
@@ -3139,8 +3371,31 @@ def state_province_edit(pid, target_sid=None):
 
 
 # v0.80 战略区图层
+_REGION_CACHE = {}
+
+
 def _strategic_regions(root):
-    """读 map/strategicregions/*.txt，返回 {province: region_id} 与 region 列表"""
+    """读 map/strategicregions/*.txt，返回 {province: region_id} 与 region 列表。
+    带 mtime 缓存：合并预览/涂色都要用，不缓存每次白花 1.5 秒。"""
+    try:
+        _sig = None
+        for _b in (root, GAME):
+            _d = os.path.join(_b or "", "map", "strategicregions")
+            if os.path.isdir(_d):
+                _mt = 0
+                try:
+                    for _fn in os.listdir(_d):
+                        _mt = max(_mt, int(os.path.getmtime(os.path.join(_d, _fn))))
+                except Exception:
+                    pass
+                _sig = (os.path.abspath(_b or ""), _mt)
+                break
+        _hit = _REGION_CACHE.get(_sig)
+        if _hit:
+            return dict(_hit[0]), list(_hit[1])
+    except Exception:
+        _sig = None
+    _orig_note = None
     prov2region = {}
     regions = []
     for base in (root, GAME):
@@ -3175,6 +3430,11 @@ def _strategic_regions(root):
                 regions.append({"id": rid, "name": nm, "count": len(pids)})
         if regions:
             break
+    try:
+        if _sig:
+            _REGION_CACHE[_sig] = (dict(prov2region), list(regions))
+    except Exception:
+        pass
     return prov2region, regions
 
 
@@ -5660,6 +5920,17 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 r = map_edit_state()
             self._send(r)
+        elif self.path == "/api/map_merge":
+            act = (body.get("act") or "preview")
+            _src = int(body.get("src", 0))
+            _dst = int(body.get("dst", 0))
+            _rt = body.get("root") or None
+            if act == "preview":
+                self._send(map_merge_preview(_src, _dst, _rt))
+            elif act == "neighbors":
+                self._send(map_prov_neighbors(_src, _rt))
+            else:
+                self._send(map_merge_apply(_src, _dst, _rt))
         elif self.path == "/api/map_integrity":
             self._send(map_integrity(body.get("root") or None))
         elif self.path == "/api/map_cache_clear":

@@ -1133,6 +1133,17 @@
             <div class="mp-row" style="padding-top:0"><span class="mp-k" style="line-height:1.6">
               只写当前 mod 自己的 provinces.bmp；原版与父 mod 只读。应用后可撤销，撤销是区块级恢复。
             </span></div>
+            <h4>省份合并</h4>
+            <div class="mp-row"><span class="mp-k">源省</span><b class="mp-v" id="mgSrc">—</b></div>
+            <div class="mp-acts">
+              <input id="mgSrcPid" placeholder="要合并掉的省号" style="height:28px">
+              <button class="btn" id="mgNeighbors">看相邻省</button>
+              <div id="mgNbList" style="font-size:11px;color:var(--t2);line-height:1.7"></div>
+              <input id="mgDstPid" placeholder="并入哪个省" style="height:28px">
+              <button class="btn" id="mgPreview">预览影响</button>
+              <button class="btn" id="mgApply">执行合并</button>
+            </div>
+            <div class="mp-row" style="padding-top:0"><span class="mp-k" id="mgStat">—</span></div>
           </div>
         </div>
         </div><!-- /mapBody -->
@@ -4971,6 +4982,85 @@ async function mapRunCheck(){
   window.mapBindPaint = bindPaint;
 })();
 
+// v0.99 省份合并 UI
+(function(){
+  function mgStat(msg, isErr){
+    const el = document.getElementById('mgStat');
+    if(el){ el.textContent = msg; el.style.color = isErr ? 'var(--warn)' : ''; }
+  }
+
+  async function call(d){
+    try{
+      const r = await (await fetch('/api/map_merge', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify(d)})).json();
+      return r;
+    }catch(e){ return {ok:false, msg:e.message}; }
+  }
+
+  function num(id){
+    const v = (document.getElementById(id).value || '').trim();
+    return /^\d+$/.test(v) ? Number(v) : 0;
+  }
+
+  async function showNeighbors(){
+    const src = num('mgSrcPid');
+    if(!src){ mgStat('先填源省号', true); return; }
+    const list = document.getElementById('mgNbList');
+    list.textContent = '读取中…';
+    const r = await call({act:'neighbors', src: src, root: MAP.root || ''});
+    if(!r.ok){ list.textContent = ''; mgStat(r.msg || '读取失败', true); return; }
+    if(!r.neighbors.length){ list.textContent = '没有相邻省（孤立省）'; return; }
+    document.getElementById('mgSrc').textContent = String(src);
+    list.innerHTML = r.neighbors.map(n=>
+      '<span style="display:inline-block;margin:2px 6px 2px 0;cursor:pointer;border-bottom:1px dotted var(--line2)" ' +
+      'data-pid="' + n.pid + '">' + n.pid + '<span style="color:var(--t3)">(' + n.share + ')</span></span>'
+    ).join('');
+    list.querySelectorAll('[data-pid]').forEach(el=>{
+      el.onclick = ()=>{
+        document.getElementById('mgDstPid').value = el.dataset.pid;
+        mgStat('已选目标省 ' + el.dataset.pid);
+      };
+    });
+    mgStat('点一个相邻省作为目标');
+  }
+
+  async function preview(){
+    const src = num('mgSrcPid'), dst = num('mgDstPid');
+    if(!src || !dst){ mgStat('源省和目标省都要填', true); return; }
+    const r = await call({act:'preview', src: src, dst: dst, root: MAP.root || ''});
+    if(!r.ok){ mgStat(r.msg || '预览失败', true); return; }
+    const parts = ['省 ' + src + ' → ' + dst, r.pixels + ' 像素'];
+    if(r.states && r.states.length) parts.push('州 ' + r.states.join(','));
+    if(r.regions && r.regions.length) parts.push('战略区 ' + r.regions.join(','));
+    if(r.states_empty_after && r.states_empty_after.length)
+      parts.push('⚠ 州 ' + r.states_empty_after.join(',') + ' 会变空');
+    mgStat(parts.join(' · '));
+  }
+
+  async function apply(){
+    const src = num('mgSrcPid'), dst = num('mgDstPid');
+    if(!src || !dst){ mgStat('源省和目标省都要填', true); return; }
+    if(!confirm('把省 ' + src + ' 合并进省 ' + dst + '？\n\n会改写 provinces.bmp 与相关州文件的省份列表，可用「撤销上一笔」回退。')) return;
+    mgStat('执行中…');
+    const r = await call({act:'apply', src: src, dst: dst, root: MAP.root || ''});
+    if(!r.ok){ mgStat(r.msg || '合并失败', true); return; }
+    mgStat('已合并 ' + r.pixels + ' 像素，改动 ' + (r.states || []).length + ' 个州文件；重建图层中…');
+    try{ await mapBuild(true); }catch(e){}
+    mgStat('合并完成：省 ' + r.src + ' → ' + r.dst + '（撤销栈 ' + r.undo_depth + '）');
+  }
+
+  function bindMerge(){
+    const b = document.getElementById('mgApply');
+    if(!b || b.dataset.bound) return;
+    b.dataset.bound = '1';
+    document.getElementById('mgNeighbors').onclick = showNeighbors;
+    document.getElementById('mgPreview').onclick = preview;
+    b.onclick = apply;
+  }
+
+  window.mapBindMerge = bindMerge;
+})();
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -5124,6 +5214,7 @@ function mapBindV081(){
     if(typeof openStates === 'function') openStates(sid);
   };
   if(window.mapBindPaint) window.mapBindPaint();
+  if(window.mapBindMerge) window.mapBindMerge();
   mapSetMode('view');
 }
 
