@@ -2478,6 +2478,96 @@ def update_apply(launch=False):
         return {"ok": False, "msg": "解压失败：%s" % str(e)[:160]}
 
 
+def _csv_path_for(root):
+    layers = mod_layers(root)
+    csvp, prov = _layers_find("map/definition.csv", layers)
+    return csvp, prov
+
+
+def map_repair_preview(root=None):
+    """列出能自动修的问题及其影响面（不改文件）"""
+    root = _map_pick(root)
+    dirp, key, base = _map_dir(root)
+    idx_path = os.path.join(dirp or "", "prov_index.json")
+    if not os.path.exists(idx_path):
+        return {"ok": False, "msg": "请先构建图层"}
+    try:
+        idx = json.loads(io.open(idx_path, encoding="utf-8").read())
+    except Exception as e:
+        return {"ok": False, "msg": "读取索引失败：%s" % e}
+    have = set()
+    for k, v in idx.items():
+        try:
+            if int(v.get("px") or 0) > 0:
+                have.add(int(k))
+        except Exception:
+            continue
+    csvp, prov = _csv_path_for(root)
+    if not csvp:
+        return {"ok": False, "msg": "找不到 definition.csv"}
+    ghost = []
+    total = 0
+    try:
+        for line in io.open(csvp, encoding="utf-8", errors="replace"):
+            parts = line.strip().split(";")
+            if len(parts) < 4 or not parts[0].isdigit():
+                continue
+            total += 1
+            pid = int(parts[0])
+            if pid == 0:
+                continue
+            if pid not in have:
+                ghost.append(pid)
+    except Exception as e:
+        return {"ok": False, "msg": "读 csv 失败：%s" % e}
+    return {"ok": True, "csv": csvp, "csv_from": prov, "csv_rows": total,
+            "ghost": sorted(ghost)[:500], "ghost_count": len(ghost),
+            "repairable": {"ghost": len(ghost)}}
+
+
+def map_repair_ghost(root=None):
+    """删除 definition.csv 里在地图上没有像素的省（省 0 保留）。
+    改的是链顶 mod 的 csv；原版只读时拒绝。"""
+    pv = map_repair_preview(root)
+    if not pv.get("ok"):
+        return pv
+    csvp = pv["csv"]
+    if is_under_game(csvp):
+        return {"ok": False, "msg": "definition.csv 来自原版，只读，不能修"}
+    ghost = set(pv["ghost"])
+    if not ghost:
+        return {"ok": True, "removed": 0, "msg": "没有幽灵省，不需要修"}
+    try:
+        raw = io.open(csvp, "rb").read()
+        has_bom = raw[:3] == bytes((0xEF, 0xBB, 0xBF))
+        text = raw.decode("utf-8-sig", errors="replace")
+    except Exception as e:
+        return {"ok": False, "msg": "读 csv 失败：%s" % e}
+    keep = []
+    removed = []
+    for line in text.splitlines():
+        parts = line.strip().split(";")
+        if len(parts) >= 4 and parts[0].isdigit():
+            pid = int(parts[0])
+            if pid in ghost:
+                removed.append(pid)
+                continue
+        keep.append(line)
+    new_text = chr(10).join(keep)
+    if text.endswith(chr(10)):
+        new_text += chr(10)
+    snapshot(csvp)
+    try:
+        with io.open(csvp, "w", encoding="utf-8-sig" if has_bom else "utf-8", newline="") as f:
+            f.write(new_text)
+    except Exception as e:
+        return {"ok": False, "msg": "写 csv 失败：%s" % e}
+    CHANGED[csvp] = os.path.relpath(csvp, os.path.dirname(os.path.dirname(csvp)))
+    PROV_RGB.clear()
+    return {"ok": True, "removed": len(removed), "ids": removed[:30], "csv": csvp,
+            "msg": "已删除 %d 个幽灵省，图层需要重建" % len(removed)}
+
+
 def map_analysis(root=None, limit=60, min_px=800, only_land=True):
 
     """省份排名：按面积（像素数）列出大省，附州/战略区/地形。
@@ -6195,6 +6285,13 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/log":
             _q = parse_qs(urlparse(self.path).query)
             self._send(read_error_log((_q.get("path", [""])[0] or None)))
+        elif path_only == "/api/map_repair":
+            _q = parse_qs(urlparse(self.path).query)
+            _act = _q.get("act", ["preview"])[0]
+            if _act == "ghost":
+                self._send(map_repair_ghost(_q.get("root", [None])[0]))
+            else:
+                self._send(map_repair_preview(_q.get("root", [None])[0]))
         elif path_only == "/api/map_analysis":
             _q = parse_qs(urlparse(self.path).query)
             try:
