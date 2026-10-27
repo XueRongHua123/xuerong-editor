@@ -2350,6 +2350,61 @@ def app_info():
             "exe": sys.executable if FROZEN else ""}
 
 
+def map_analysis(root=None, limit=60, min_px=800, only_land=True):
+    """省份排名：按面积（像素数）列出大省，附州/战略区/地形。
+    数据直接来自图层缓存的 prov_index.json，不重新扫像素。"""
+    root = _map_pick(root)
+    if not root:
+        return {"ok": False, "msg": "还没有加载 mod"}
+    dirp, key, base = _map_dir(root)
+    idx_path = os.path.join(dirp or "", "prov_index.json")
+    if not os.path.exists(idx_path):
+        return {"ok": False, "msg": "请先构建图层（缺少 prov_index.json）"}
+    try:
+        idx = json.loads(io.open(idx_path, encoding="utf-8").read())
+    except Exception as e:
+        return {"ok": False, "msg": "读取索引失败：%s" % e}
+
+    rows = []
+    total_px = 0
+    for pid_s, rec in idx.items():
+        try:
+            px = int(rec.get("px") or 0)
+            pid = int(pid_s)
+        except Exception:
+            continue
+        if pid <= 0 or px <= 0:
+            continue
+        _type = rec.get("type") or ""
+        if only_land and _type and _type != "land":
+            continue          # 海省湖省不需要细化，默认排除
+        total_px += px
+        rows.append({"pid": pid, "px": px, "state": rec.get("state") or 0,
+                     "region": rec.get("region") or 0, "terrain": rec.get("terrain") or "",
+                     "continent": rec.get("continent") or 0, "type": rec.get("type") or ""})
+    if not rows:
+        return {"ok": False, "msg": "索引里没有有效省份"}
+    rows.sort(key=lambda r: -r["px"])
+    px_all = sorted(r["px"] for r in rows)
+    n = len(px_all)
+    median = px_all[n // 2] if n else 0
+    mean = total_px / n if n else 0
+    big = [r for r in rows if r["px"] >= min_px]
+    st_agg = {}
+    for r in rows:
+        sid = r["state"]
+        a = st_agg.setdefault(sid, {"state": sid, "n": 0, "px": 0, "max": 0})
+        a["n"] += 1
+        a["px"] += r["px"]
+        a["max"] = max(a["max"], r["px"])
+    st_rows = sorted(st_agg.values(), key=lambda a: -(a["px"] / max(1, a["n"])))[:20]
+    for a in st_rows:
+        a["avg"] = round(a["px"] / max(1, a["n"]))
+    return {"ok": True, "count": n, "total_px": total_px, "mean": round(mean),
+            "median": median, "min_px": min_px, "big_count": len(big),
+            "top": rows[:limit], "big": big[:limit], "states": st_rows, "source": base}
+
+
 def map_sources():
     """列出所有可用于地图的来源：已加载的 mod（有无 map 都列出）+ 原版"""
     out = []
@@ -6011,6 +6066,15 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/log":
             _q = parse_qs(urlparse(self.path).query)
             self._send(read_error_log((_q.get("path", [""])[0] or None)))
+        elif path_only == "/api/map_analysis":
+            _q = parse_qs(urlparse(self.path).query)
+            try:
+                _lim = int(_q.get("limit", ["60"])[0])
+                _minpx = int(_q.get("min_px", ["800"])[0])
+            except Exception:
+                _lim, _minpx = 60, 800
+            _ol = _q.get("only_land", ["1"])[0] not in ("0", "false", "")
+            self._send(map_analysis(_q.get("root", [None])[0], _lim, _minpx, _ol))
         elif path_only == "/api/update":
             _f = parse_qs(urlparse(self.path).query).get("force", [""])[0]
             self._send(check_update(force=bool(_f)))
