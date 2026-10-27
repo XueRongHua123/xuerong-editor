@@ -7,6 +7,7 @@
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.request
@@ -70,15 +71,23 @@ def main():
     upload_url = rel.get("upload_url", "").split("{")[0]
 
     have = {a.get("name") for a in (rel.get("assets") or [])}
+    tag = rel.get("tag_name") or ""
     for f in files:
-        name = os.path.basename(f)
+        local = os.path.basename(f)
+        # GitHub 的 upload API 会把 URL 里的中文名压成 default/下划线，导致用户下载到 "default.exe"。
+        # 统一用 ASCII 资产名：xuerong-editor-vX.Y.Z.exe / .zip
+        ext = os.path.splitext(local)[1].lower()
+        if ext in (".exe", ".zip"):
+            name = "xuerong-editor-%s%s" % (tag or "latest", ext)
+        else:
+            name = re.sub(r"[^A-Za-z0-9._-]", "_", local)
         if name in have:
             print("已存在，跳过：", name)
             continue
         data = open(f, "rb").read()
         st, res = call("POST", upload_url + "?name=" + urllib.parse.quote(name),
                        raw=data, ctype="application/octet-stream")
-        print(("上传 %s → %s" % (name, "ok" if st in (200, 201) else res.get("message", st))))
+        print(("上传 %s ← %s → %s" % (name, local, "ok" if st in (200, 201) else res.get("message", st))))
     return 0
 
 
