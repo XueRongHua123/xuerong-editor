@@ -1034,8 +1034,10 @@
     <div id="mapCheckModal">
       <div id="mckCard">
         <div id="mckHead">
-          <b>地图检查</b>
+          <b id="mckTitle">地图检查</b>
           <span class="k" id="mckHint">连通性 · 州/战略区 · 十字交叉 · 铁路 · 无主省</span>
+          <button class="btn" id="mckTabCheck" style="font-size:11px">检查</button>
+          <button class="btn" id="mckTabRank" style="font-size:11px">省份排行</button>
           <div id="mckStats"></div>
           <button class="btn" id="mckRun">重新检查</button>
           <button class="btn" id="mckClose">关闭</button>
@@ -5206,6 +5208,44 @@ async function mapRunCheck(){
   window.mapBindUpdate = bindUpdate;
 })();
 
+// v1.0.2 省份排行
+async function mapShowRank(){
+  const list = document.getElementById('mckList');
+  const stats = document.getElementById('mckStats');
+  document.getElementById('mapCheckModal').classList.add('show');
+  document.getElementById('mckTitle').textContent = '省份排行';
+  document.getElementById('mckHint').textContent = '按面积排序 · 细化候选';
+  stats.innerHTML = '';
+  list.innerHTML = '<div class="cm-empty">读取中…</div>';
+  try{
+    const r = await (await fetch('/api/map_analysis?limit=60&min_px=800')).json();
+    if(!r.ok){ list.innerHTML = '<div class="cm-empty">' + escapeHtml(r.msg || '读取失败') + '</div>'; return; }
+    stats.innerHTML = '<span class="i">陆地省 ' + r.count + '</span>' +
+      '<span class="i">中位 ' + r.median + 'px</span>' +
+      '<span class="w">超 800px ' + r.big_count + '</span>';
+    const rows = r.big || [];
+    if(!rows.length){ list.innerHTML = '<div class="cm-empty">没有超过 800px 的陆地省份</div>'; return; }
+    list.innerHTML = rows.map((x, i)=>{
+      const bad = x.state ? '' : '<span style="color:var(--warn)"> 无州</span>';
+      return '<div class="mck-row" data-i="' + i + '">' +
+        '<span class="mck-lv info">' + (i + 1) + '</span>' +
+        '<span class="mck-main"><div class="mck-t">省 ' + x.pid + ' · ' + x.px + ' px' + bad + '</div>' +
+        '<div class="mck-d">州 ' + (x.state || '无') + ' · 战略区 ' + (x.region || '无') +
+        (x.terrain ? ' · ' + escapeHtml(x.terrain) : '') + '</div></span>' +
+        '<button class="btn mck-go" data-p="' + x.pid + '">定位</button></div>';
+    }).join('');
+    list.querySelectorAll('.mck-go').forEach(b=>{
+      b.onclick = e=>{
+        e.stopPropagation();
+        document.getElementById('mapCheckModal').classList.remove('show');
+        mapFocusProvince(Number(b.dataset.p));
+      };
+    });
+  }catch(e){
+    list.innerHTML = '<div class="cm-empty">读取失败：' + escapeHtml(e.message) + '</div>';
+  }
+}
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -5970,6 +6010,8 @@ document.getElementById('mapBuild').onclick = mapBuild;
 document.getElementById('mapClear').onclick = mapClearCache;
 document.getElementById('mapCheckBtn').onclick = mapRunCheck;
 document.getElementById('mckRun').onclick = mapRunCheck;
+document.getElementById('mckTabCheck').onclick = mapRunCheck;
+document.getElementById('mckTabRank').onclick = mapShowRank;
 document.getElementById('mckClose').onclick = ()=>{ document.getElementById('mapCheckModal').classList.remove('show'); };
 
 document.getElementById('mapSearch').addEventListener('keydown', e=>{ if(e.key === 'Enter') mapSearchGo(); });
