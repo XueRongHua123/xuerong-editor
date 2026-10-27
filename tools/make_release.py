@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import io
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -25,7 +26,13 @@ NAME = "雪绒的钢铁雄心编辑器"
 EXE = NAME + ".exe"
 
 
-def build(python):
+def build(python, version="0.0.0"):
+    """打包。打包前把版本号写进 _build_version.py（模块形式打进 exe），结束后删除。"""
+    ver_path = os.path.join(WORK, "_build_version.py")
+    try:
+        io.open(ver_path, "w", encoding="utf-8", newline="").write('VERSION = "%s"' % version + chr(10))
+    except Exception as e:
+        print("写版本文件失败:", e)
     args = [
         python, "-m", "PyInstaller", "--noconfirm", "--onefile", "--name", NAME,
         "--icon", os.path.join(WORK, "mascot", "xuerong_face.ico"),
@@ -47,6 +54,12 @@ def build(python):
     ]
     print("构建：", " ".join(args[:6]), "...")
     r = subprocess.run(args, cwd=HERE)
+    # 无论成功失败都清掉临时版本文件，避免源码运行时读到错误版本
+    try:
+        if os.path.exists(ver_path):
+            os.remove(ver_path)
+    except Exception:
+        pass
     if r.returncode != 0:
         sys.exit("PyInstaller 失败，退出码 %d" % r.returncode)
 
@@ -106,7 +119,7 @@ def main():
     a = ap.parse_args()
 
     if not a.skip_build:
-        build(a.python)
+        build(a.python, a.version)
     out, zpath, docs = package(a.version)
     size = lambda p: os.path.getsize(p) / 1048576
     print("目录：%s（exe %.1f MB，docs %d 篇）" % (out, size(os.path.join(out, EXE)), docs))

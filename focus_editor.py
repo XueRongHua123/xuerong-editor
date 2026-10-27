@@ -20,6 +20,19 @@ import editor_i18n as i18n
 FROZEN = getattr(sys, "frozen", False)
 _HERE = os.path.dirname(os.path.abspath(__file__))
 W = os.path.dirname(_HERE) if os.path.basename(_HERE).lower() == "work" else _HERE
+
+# 版本号：打包时由 make_release.py 生成 _build_version.py 注入；源码运行则回退到 git tag
+try:
+    from _build_version import VERSION as APP_VERSION      # noqa: F401
+except Exception:
+    try:
+        import subprocess as _sp
+        APP_VERSION = (_sp.run(["git", "describe", "--tags", "--abbrev=0"], cwd=_HERE,
+                               capture_output=True, text=True, timeout=3).stdout.strip().lstrip("v")) or "dev"
+    except Exception:
+        APP_VERSION = "dev"
+
+REPO = "XueRongHua123/xuerong-editor"
 DEFAULT_MOD = None
 def _detect_game():
     cands = []
@@ -2249,6 +2262,94 @@ def _map_dir(root):
 
 
 # v0.73 地图多来源
+# -*- coding: utf-8 -*-
+"""更新检查：查 GitHub 最新 Release，与本地版本比较。
+
+设计要点：
+- 只查一次 /releases/latest，GitHub 未认证配额 60 次/小时，缓存 6 小时后足够
+- 任何网络失败都静默返回「检查不了」，不打扰用户
+- 版本比较按数字段，忽略前缀 v 与后缀
+"""
+import json
+import os
+import re
+import time
+
+UPDATE_CACHE = os.path.join(W, "cache", "update.json")
+UPDATE_TTL = 6 * 3600          # 6 小时内不重复请求
+UPDATE_STATE = {"last": 0, "result": None}
+
+
+def _ver_tuple(v):
+    """1.2.3 → (1,2,3)；解析不出来的段按 0"""
+    parts = re.findall(r"\d+", str(v or ""))
+    return tuple(int(x) for x in parts[:4]) if parts else (0,)
+
+
+def _ver_newer(a, b):
+    ta, tb = _ver_tuple(a), _ver_tuple(b)
+    n = max(len(ta), len(tb))
+    ta = ta + (0,) * (n - len(ta))
+    tb = tb + (0,) * (n - len(tb))
+    return ta > tb
+
+
+def check_update(force=False, timeout=6):
+    """返回 {ok, current, latest, newer, url, notes, published, checked, msg}"""
+    now = time.time()
+    if not force:
+        # 内存缓存
+        if UPDATE_STATE["result"] and now - UPDATE_STATE["last"] < UPDATE_TTL:
+            return dict(UPDATE_STATE["result"])
+        # 磁盘缓存
+        try:
+            if os.path.exists(UPDATE_CACHE) and now - os.path.getmtime(UPDATE_CACHE) < UPDATE_TTL:
+                cached = json.loads(io.open(UPDATE_CACHE, encoding="utf-8").read())
+                UPDATE_STATE["result"] = cached
+                UPDATE_STATE["last"] = os.path.getmtime(UPDATE_CACHE)
+                return dict(cached)
+        except Exception:
+            pass
+
+    out = {"ok": False, "current": APP_VERSION, "latest": "", "newer": False,
+           "url": "https://github.com/%s/releases/latest" % REPO,
+           "notes": "", "published": "", "checked": time.strftime("%Y-%m-%d %H:%M:%S"),
+           "msg": ""}
+    try:
+        req = urllib.request.Request(
+            "https://api.github.com/repos/%s/releases/latest" % REPO,
+            headers={"User-Agent": "xuerong-editor/%s" % APP_VERSION,
+                     "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            d = json.loads(r.read().decode())
+        out["ok"] = True
+        out["latest"] = (d.get("tag_name") or "").lstrip("v")
+        out["url"] = d.get("html_url") or out["url"]
+        out["published"] = (d.get("published_at") or "")[:10]
+        body = d.get("body") or ""
+        out["notes"] = body[:1200]
+        out["assets"] = [{"name": a.get("name"), "size": a.get("size"),
+                          "url": a.get("browser_download_url")}
+                         for a in (d.get("assets") or [])]
+        out["newer"] = _ver_newer(out["latest"], APP_VERSION)
+    except Exception as e:
+        out["msg"] = "检查失败：%s" % str(e)[:120]
+
+    try:
+        os.makedirs(os.path.dirname(UPDATE_CACHE), exist_ok=True)
+        io.open(UPDATE_CACHE, "w", encoding="utf-8", newline="").write(json.dumps(out, ensure_ascii=False))
+    except Exception:
+        pass
+    UPDATE_STATE["result"] = out
+    UPDATE_STATE["last"] = now
+    return out
+
+
+def app_info():
+    return {"version": APP_VERSION, "repo": REPO, "frozen": FROZEN,
+            "exe": sys.executable if FROZEN else ""}
+
+
 def map_sources():
     """列出所有可用于地图的来源：已加载的 mod（有无 map 都列出）+ 原版"""
     out = []
@@ -5910,6 +6011,11 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/log":
             _q = parse_qs(urlparse(self.path).query)
             self._send(read_error_log((_q.get("path", [""])[0] or None)))
+        elif path_only == "/api/update":
+            _f = parse_qs(urlparse(self.path).query).get("force", [""])[0]
+            self._send(check_update(force=bool(_f)))
+        elif path_only == "/api/app_info":
+            self._send({"ok": True, **app_info()})
         elif path_only == "/api/lint":
             self._send(lint_project())
         elif path_only == "/api/missing_loc":

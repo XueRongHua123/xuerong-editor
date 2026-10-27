@@ -489,6 +489,19 @@
   .mck-t{font-size:12.5px;color:var(--t1)}
   .mck-d{font-size:11px;color:var(--t2);margin-top:3px;line-height:1.5;word-break:break-all}
   .mck-go{flex:0 0 auto;font-size:11px}
+  /* ---------- v1.0.1 版本提示 ---------- */
+  #verBadge.new{color:var(--accent);border-color:var(--accent);opacity:1;font-weight:600}
+  #updModal{position:fixed;inset:0;z-index:120;display:none;place-items:center;
+    background:rgba(8,10,9,.72);backdrop-filter:blur(3px)}
+  #updModal.show{display:grid}
+  #updCard{width:min(620px,calc(100% - 48px));max-height:calc(100% - 80px);display:flex;flex-direction:column;
+    background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:var(--shadow)}
+  #updHead{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line)}
+  #updHead b{font-size:14px}
+  #updVer{font-size:12px;color:var(--accent);font-variant-numeric:tabular-nums}
+  #updBody{flex:1;overflow:auto;padding:12px 16px;font-size:12px;line-height:1.7;color:var(--t2);white-space:pre-wrap}
+  #updFoot{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
+  #updFoot .btn{height:32px;padding:0 14px;justify-content:center}
   /* ---------- v0.83 视觉层次 ---------- */
   /* 三档文字：主（正文/数值）、次（标签/说明）、弱（辅助信息） */
   :root{--t1:var(--text);--t2:var(--muted);--t3:color-mix(in srgb,var(--muted) 72%,transparent)}
@@ -861,6 +874,7 @@
       <button class="btn" id="delTreeBtn">🗑 删除树</button>
       <span class="tb-sep"></span>
       <button class="btn" id="saveAll">💾 保存全部</button>
+      <button class="btn" id="verBadge" title="检查更新" style="font-size:11px;opacity:.75">v—</button>
       <button class="btn" id="exportBtn">📦 导出覆盖包</button>
       <button class="btn" id="undoBtn" title="撤销 (Ctrl+Z)">↶ 撤销</button>
       <button class="btn" id="redoBtn" title="重做 (Ctrl+Y)">↷ 重做</button>
@@ -1003,6 +1017,18 @@
         </div>
         <div id="lintStats"></div>
         <div id="lintList"></div>
+      </div>
+    </div>
+    <div id="updModal">
+      <div id="updCard">
+        <div id="updHead"><b>有新版本</b><span id="updVer"></span>
+          <button class="btn" id="updClose" style="margin-left:auto">关闭</button></div>
+        <div id="updBody"></div>
+        <div id="updFoot">
+          <a class="btn" id="updDl" target="_blank" rel="noopener">下载新版</a>
+          <a class="btn" id="updPage" target="_blank" rel="noopener">打开 Release 页</a>
+          <button class="btn" id="updLater">7 天内不再提示</button>
+        </div>
       </div>
     </div>
     <div id="mapCheckModal">
@@ -4371,6 +4397,7 @@ fsSel.onchange = ()=>{
 };
 (function(){
   document.querySelectorAll('img').forEach(i=>{ i.draggable = false; });
+  try{ if(window.mapBindUpdate) window.mapBindUpdate(); }catch(e){}
   const bubble = document.getElementById('aiBubble');
   let drag = null;
   try {
@@ -5110,6 +5137,73 @@ async function mapRunCheck(){
     b.onclick = createState;
   }
   window.mapBindNewState = bindNewState;
+})();
+
+// v1.0.1 更新检查 UI
+(function(){
+  const SNOOZE_KEY = 'xuerong_update_snooze';
+
+  function fmtVer(v){ return v ? ('v' + String(v).replace(/^v/, '')) : 'v—'; }
+
+  function snoozed(){
+    try{
+      const t = Number(localStorage.getItem(SNOOZE_KEY) || 0);
+      return t && (Date.now() - t) < 7 * 24 * 3600 * 1000;
+    }catch(e){ return false; }
+  }
+
+  function showModal(info){
+    document.getElementById('updVer').textContent = fmtVer(info.current) + ' → ' + fmtVer(info.latest);
+    const body = document.getElementById('updBody');
+    const lines = [];
+    if(info.published) lines.push('发布时间：' + info.published);
+    lines.push('');
+    lines.push(info.notes || '（这次发布没有填写说明）');
+    body.textContent = lines.join('\n');
+    const dl = document.getElementById('updDl');
+    const exeAsset = (info.assets || []).find(a => /\.exe$/i.test(a.name || ''));
+    dl.href = exeAsset ? exeAsset.url : info.url;
+    document.getElementById('updPage').href = info.url;
+    document.getElementById('updModal').classList.add('show');
+  }
+
+  async function check(force){
+    const badge = document.getElementById('verBadge');
+    try{
+      const r = await (await fetch('/api/update' + (force ? '?force=1' : ''))).json();
+      if(badge){
+        badge.textContent = fmtVer(r.current);
+        badge.title = r.latest ? ('当前 v' + r.current + '，最新 v' + r.latest) : '检查更新';
+      }
+      if(r.ok && r.newer){
+        badge.classList.add('new');
+        badge.textContent = fmtVer(r.current) + ' → ' + fmtVer(r.latest);
+        if(force || !snoozed()) showModal(r);
+      }else if(force){
+        status(r.ok ? ('已是最新版本 v' + r.current) : (r.msg || '检查失败'));
+      }
+    }catch(e){
+      if(force) status('检查更新失败：' + e.message, true);
+    }
+  }
+
+  function bindUpdate(){
+    const badge = document.getElementById('verBadge');
+    if(!badge || badge.dataset.bound) return;
+    badge.dataset.bound = '1';
+    badge.onclick = ()=> check(true);
+    document.getElementById('updClose').onclick = ()=>{
+      document.getElementById('updModal').classList.remove('show');
+    };
+    document.getElementById('updLater').onclick = ()=>{
+      try{ localStorage.setItem(SNOOZE_KEY, String(Date.now())); }catch(e){}
+      document.getElementById('updModal').classList.remove('show');
+    };
+    // 启动后延迟 4 秒静默检查，不打断首屏
+    setTimeout(()=> check(false), 4000);
+  }
+
+  window.mapBindUpdate = bindUpdate;
 })();
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */
