@@ -1144,6 +1144,21 @@
               <button class="btn" id="mgApply">执行合并</button>
             </div>
             <div class="mp-row" style="padding-top:0"><span class="mp-k" id="mgStat">—</span></div>
+            <h4>新建州</h4>
+            <div class="mp-acts">
+              <input id="nsProvinces" placeholder="省号，空格分隔（如 221 222 223）" style="height:28px">
+              <input id="nsName" placeholder="州名（中文，写进本地化）" style="height:28px">
+              <select id="nsCategory" class="btn" style="height:28px">
+                <option value="rural">rural 乡村</option>
+                <option value="town">town 城镇</option>
+                <option value="city">city 城市</option>
+                <option value="megalopolis">megalopolis 大都市</option>
+                <option value="wasteland">wasteland 荒地</option>
+              </select>
+              <input id="nsManpower" placeholder="人力（默认 100000）" style="height:28px">
+              <button class="btn" id="nsCreate">创建州</button>
+            </div>
+            <div class="mp-row" style="padding-top:0"><span class="mp-k" id="nsStat">—</span></div>
           </div>
         </div>
         </div><!-- /mapBody -->
@@ -5061,6 +5076,42 @@ async function mapRunCheck(){
   window.mapBindMerge = bindMerge;
 })();
 
+// v1.0 新建州 UI
+(function(){
+  function nsStat(msg, isErr){
+    const el = document.getElementById('nsStat');
+    if(el){ el.textContent = msg; el.style.color = isErr ? 'var(--warn)' : ''; }
+  }
+
+  async function createState(){
+    const raw = (document.getElementById('nsProvinces').value || '').trim();
+    const pids = raw.split(/[\s,;]+/).map(x=>parseInt(x,10)).filter(n=>n > 0);
+    if(!pids.length){ nsStat('先填省份（空格分隔）', true); return; }
+    const name = (document.getElementById('nsName').value || '').trim();
+    const cat = document.getElementById('nsCategory').value;
+    const mp = parseInt(document.getElementById('nsManpower').value, 10) || 100000;
+    nsStat('创建中…');
+    try{
+      const r = await (await fetch('/api/state_create', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({provinces: pids, root: MAP.root || '', name: name,
+                              category: cat, manpower: mp})})).json();
+      if(!r.ok){ nsStat(r.msg || '创建失败', true); return; }
+      nsStat('已建州 ' + r.id + '（' + r.provinces.length + ' 个省）· ' + (r.note || ''));
+      if(r.moved_from && r.moved_from.length)
+        nsStat('已建州 ' + r.id + '，从原州 ' + r.moved_from.join(',') + ' 移出 ' + r.provinces.length + ' 个省');
+    }catch(e){ nsStat('请求失败：' + e.message, true); }
+  }
+
+  function bindNewState(){
+    const b = document.getElementById('nsCreate');
+    if(!b || b.dataset.bound) return;
+    b.dataset.bound = '1';
+    b.onclick = createState;
+  }
+  window.mapBindNewState = bindNewState;
+})();
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -5215,6 +5266,7 @@ function mapBindV081(){
   };
   if(window.mapBindPaint) window.mapBindPaint();
   if(window.mapBindMerge) window.mapBindMerge();
+  if(window.mapBindNewState) window.mapBindNewState();
   mapSetMode('view');
 }
 
