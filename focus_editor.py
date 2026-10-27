@@ -2855,7 +2855,168 @@ def map_edit_state():
             "pending": len(MAP_EDIT.get("pending") or []), "file": MAP_EDIT.get("file") or ""}
 
 
+# v1.0 新建州（把若干省组织成一个州）
+def _states_dir_for_write(root):
+    """新建州文件应该写到的目录：链顶 mod（跳过原版）；原版只读"""
+    layers = mod_layers(root)
+    for lay in reversed(layers or []):
+        if lay and not is_under_game(lay):
+            d = os.path.join(lay, "history", "states")
+            return lay, d
+    return None, None
+
+
+def _free_state_id():
+    used = set()
+    for sid in STATES.keys():
+        try:
+            used.add(int(sid))
+        except Exception:
+            pass
+    n = 1
+    while n in used:
+        n += 1
+    return n
+
+
+def state_create(provinces, root=None, name=None, category="rural", manpower=100000, sid=None):
+    """用给定省份新建一个州。
+    - 这些省若已属于别的州，会从原州移出（HOI4 里一个省只能属于一个州）
+    - 文件写到链顶 mod 的 history/states/，原版与父 mod 不写
+    """
+    root = _map_pick(root)
+    try:
+        pids = sorted({int(p) for p in (provinces or [])})
+    except Exception:
+        return {"ok": False, "msg": "省份列表不合法"}
+    if not pids:
+        return {"ok": False, "msg": "至少要给一个省"}
+
+    top, states_dir = _states_dir_for_write(root)
+    if not top or not states_dir:
+        return {"ok": False, "msg": "找不到可写的 mod 目录（原版只读）"}
+
+    # 省份必须存在于地图上
+    _ensure_prov_rgb(root)
+    known = set(PROV_RGB)
+    missing = [p for p in pids if p not in known]
+    if missing:
+        return {"ok": False, "msg": "这些省在地图上不存在：%s" % ", ".join(map(str, missing[:8]))}
+
+    # 目标州 id
+    if sid in (None, "", 0):
+        new_id = _free_state_id()
+    else:
+        try:
+            new_id = int(sid)
+        except Exception:
+            return {"ok": False, "msg": "州 id 不合法"}
+        if str(new_id) in STATES or new_id in STATES:
+            return {"ok": False, "msg": "州 %d 已经存在" % new_id}
+
+    # 从原州移出
+    moved_from = []
+    for pid in pids:
+        cur = _find_state_of_prov(pid)
+        if cur is None:
+            continue
+        _r, _rel, fpath = _state_file_for(cur)
+        if not fpath or is_under_game(_r or ""):
+            continue
+        try:
+            text, has_bom = _read_bom_text(fpath)
+            loc = _state_locate(text)
+            if not loc:
+                continue
+            b, e = loc
+            body = text[b + 1:e - 1]
+            old = _parse_state_provinces(body)
+            new = [p for p in old if p != pid]
+            new_text = text[:b + 1] + _set_state_provinces(body, new) + text[e - 1:]
+            snapshot(fpath)
+            _write_bom_text(fpath, new_text, has_bom)
+            CHANGED[fpath] = _rel or os.path.relpath(fpath, _r or root)
+            if cur not in moved_from:
+                moved_from.append(cur)
+        except Exception as e2:
+            print("移出原州失败:", pid, e2)
+
+    # HOI4 里 state 的 name 是本地化键，不能直接写中文；显示名写进 loc 文件
+    display_name = (name or "").strip()
+    st_name = "STATE_%d" % new_id
+    cat = (category or "rural").strip()
+    try:
+        mp = int(manpower)
+    except Exception:
+        mp = 100000
+    body_lines = [
+        "state = {",
+        "\tid = %d" % new_id,
+        '\tname = "%s"' % st_name,
+        "\tmanpower = %d" % mp,
+        "\tstate_category = %s" % cat,
+        "\tprovinces = {",
+    ]
+    body_lines += ["\t\t%d" % p for p in pids]
+    body_lines += ["\t}", "\tlocal_supplies = 0.0", "}", ""]
+    content = "\n".join(body_lines)
+
+    os.makedirs(states_dir, exist_ok=True)
+    _fname_base = re.sub(r'[^\w\u4e00-\u9fa5-]+', "_", (display_name or st_name))[:40]
+    fname = "%d - %s.txt" % (new_id, _fname_base)
+    fpath = os.path.join(states_dir, fname)
+    if os.path.exists(fpath):
+        return {"ok": False, "msg": "文件已存在：%s" % fname}
+    try:
+        io.open(fpath, "w", encoding="utf-8", newline="").write(content)
+    except Exception as e:
+        return {"ok": False, "msg": "写文件失败：%s" % e}
+
+    # 内存里也建一条，界面立刻能用
+    STATES[new_id] = {
+        "id": new_id, "name": st_name, "manpower": str(mp), "category": cat,
+        "provinces": pids, "owner": "", "cores": [], "victory_points": {},
+        "buildings": {}, "path": fpath, "file": fpath, "source": os.path.basename(top),
+        "root": top, "rel": os.path.relpath(fpath, top), "created": True,
+    }
+    CHANGED[fpath] = os.path.relpath(fpath, top)
+
+    # 本地化：把显示名写进 loc（yml 必须带 BOM，否则游戏读不到）
+    loc_written = ""
+    if display_name:
+        try:
+            loc_dir = os.path.join(top, "localisation", "simp_chinese")
+            os.makedirs(loc_dir, exist_ok=True)
+            loc_path = os.path.join(loc_dir, "zz_xuerong_state_names_l_simp_chinese.yml")
+            line = ' %s:0 "%s"' % (st_name, display_name.replace('"', "'"))
+            if os.path.exists(loc_path):
+                old_txt = io.open(loc_path, encoding="utf-8-sig", errors="replace").read()
+                if st_name not in old_txt:
+                    body = old_txt.rstrip()
+                    if not body.endswith("}"):
+                        body = body.rstrip() + chr(10)
+                    new_txt = body + line + chr(10)
+                else:
+                    new_txt = None
+            else:
+                new_txt = "l_simp_chinese:" + chr(10) + line + chr(10)
+            if new_txt:
+                snapshot(loc_path) if os.path.exists(loc_path) else None
+                with io.open(loc_path, "w", encoding="utf-8-sig", newline="") as f:
+                    f.write(new_txt)
+                loc_written = os.path.relpath(loc_path, top)
+                CHANGED[loc_path] = loc_written
+        except Exception as e3:
+            print("写本地化失败:", e3)
+
+    return {"ok": True, "id": new_id, "name": st_name, "display": display_name,
+            "loc": loc_written, "provinces": pids,
+            "file": os.path.relpath(fpath, top), "moved_from": moved_from,
+            "note": ("已写入本地化 %s" % loc_written) if loc_written else ("未填显示名，游戏里会显示 %s" % st_name)}
+
+
 def _map_files_strict(root):
+
 
     """严格模式：沿叠加链找地图（子 mod 没有地图时用父 mod 的），整条链都没有才返回 None。
     返回的地图 bmp 可能来自父 mod，但 base 仍报请求的 root，便于界面区分"数据来自哪里"。"""
@@ -5920,6 +6081,10 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 r = map_edit_state()
             self._send(r)
+        elif self.path == "/api/state_create":
+            self._send(state_create(body.get("provinces") or [], body.get("root") or None,
+                                    body.get("name"), body.get("category"),
+                                    body.get("manpower") or 100000, body.get("id")))
         elif self.path == "/api/map_merge":
             act = (body.get("act") or "preview")
             _src = int(body.get("src", 0))
