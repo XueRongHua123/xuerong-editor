@@ -12,6 +12,7 @@
 - 导出“覆盖包”ZIP（只含改动文件，解压覆盖到 mod 目录即可）。
 """
 import io, os, re, json, zipfile, shutil, time, argparse, threading, webbrowser, sys, string, hashlib, colorsys, zlib
+import subprocess
 import urllib.request, urllib.error
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
@@ -22,15 +23,27 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 W = os.path.dirname(_HERE) if os.path.basename(_HERE).lower() == "work" else _HERE
 
 # 版本号：打包时由 make_release.py 生成 _build_version.py 注入；源码运行则回退到 git tag
-try:
-    from _build_version import VERSION as APP_VERSION      # noqa: F401
-except Exception:
+def _read_app_version():
+    """打包时 make_release.py 生成 _version.txt 并用 --add-data 塞进 exe；
+    源码运行时读同目录的文件，都没有则回退到 git tag。"""
+    for _b in (getattr(sys, "_MEIPASS", ""), _HERE, os.getcwd()):
+        try:
+            _p = os.path.join(_b, "_version.txt") if _b else ""
+            if _p and os.path.exists(_p):
+                v = io.open(_p, encoding="utf-8").read().strip()
+                if v:
+                    return v
+        except Exception:
+            pass
     try:
         import subprocess as _sp
-        APP_VERSION = (_sp.run(["git", "describe", "--tags", "--abbrev=0"], cwd=_HERE,
-                               capture_output=True, text=True, timeout=3).stdout.strip().lstrip("v")) or "dev"
+        return (_sp.run(["git", "describe", "--tags", "--abbrev=0"], cwd=_HERE,
+                        capture_output=True, text=True, timeout=3).stdout.strip().lstrip("v")) or "dev"
     except Exception:
-        APP_VERSION = "dev"
+        return "dev"
+
+
+APP_VERSION = _read_app_version()
 
 REPO = "XueRongHua123/xuerong-editor"
 DEFAULT_MOD = None
@@ -2275,7 +2288,7 @@ import os
 import re
 import time
 
-UPDATE_CACHE = os.path.join(W, "cache", "update.json")
+UPDATE_CACHE = os.path.join(WORK, "cache", "update.json")
 UPDATE_TTL = 6 * 3600          # 6 小时内不重复请求
 UPDATE_STATE = {"last": 0, "result": None}
 
@@ -2350,7 +2363,123 @@ def app_info():
             "exe": sys.executable if FROZEN else ""}
 
 
+# v1.0.3 一键更新
+UPDATE_PKG_DIR = os.path.join(WORK, "cache", "update_pkg")
+
+
+def update_download(asset_url=None, expect_size=0, timeout=180):
+    """下载新版 exe 到缓存目录并校验（MZ 头 + 体积）。返回 {ok, path, size, msg}"""
+    if not asset_url:
+        info = check_update(force=True)
+        exe_asset = None
+        for a in (info.get("assets") or []):
+            if str(a.get("name") or "").lower().endswith(".exe"):
+                exe_asset = a
+                break
+        if not exe_asset:
+            return {"ok": False, "msg": "最新版本里没有 exe 附件"}
+        asset_url = exe_asset["url"]
+        expect_size = exe_asset.get("size") or 0
+    try:
+        os.makedirs(UPDATE_PKG_DIR, exist_ok=True)
+        dst = os.path.join(UPDATE_PKG_DIR, "xuerong_new.exe")
+        tmp = dst + ".part"
+        req = urllib.request.Request(asset_url, headers={"User-Agent": "xuerong-editor/%s" % APP_VERSION})
+        got = 0
+        with urllib.request.urlopen(req, timeout=timeout) as r, open(tmp, "wb") as f:
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+                got += len(chunk)
+                if got > 300 * 1024 * 1024:
+                    return {"ok": False, "msg": "下载体积异常，已中止"}
+        size = os.path.getsize(tmp)
+        with open(tmp, "rb") as f:
+            magic = f.read(2)
+        if magic != b"MZ":
+            os.remove(tmp)
+            return {"ok": False, "msg": "下载到的不是 exe（缺少 MZ 头）"}
+        if expect_size and abs(size - int(expect_size)) > 2048:
+            os.remove(tmp)
+            return {"ok": False, "msg": "体积不符（期望 %d，实际 %d）" % (int(expect_size), size)}
+        os.replace(tmp, dst)
+        return {"ok": True, "path": dst, "size": size,
+                "msg": "已下载 %.1f MB，校验通过" % (size / 1048576)}
+    except Exception as e:
+        return {"ok": False, "msg": "下载失败：%s" % str(e)[:160]}
+
+
+def update_apply(launch=False):
+    """把新版 zip 解压到 exe 旁边的独立目录，不改动正在运行的文件。
+    零风险：解压失败不影响当前版本；用户从新目录启动即可。"""
+    info = check_update(force=True)
+    latest = info.get("latest") or ""
+    zip_asset = None
+    for a in (info.get("assets") or []):
+        if str(a.get("name") or "").lower().endswith(".zip"):
+            zip_asset = a
+            break
+    if not zip_asset:
+        return {"ok": False, "msg": "最新版本里没有 zip 附件，请到 Release 页手动下载"}
+
+    base_dir = os.path.dirname(sys.executable) if FROZEN else WORK
+    out_dir = os.path.join(base_dir, "_update_%s" % (latest or "latest"))
+    try:
+        os.makedirs(os.path.dirname(out_dir), exist_ok=True)
+    except Exception:
+        pass
+
+    zpath = os.path.join(UPDATE_PKG_DIR, "update.zip")
+    try:
+        os.makedirs(UPDATE_PKG_DIR, exist_ok=True)
+        req = urllib.request.Request(zip_asset["url"],
+                                     headers={"User-Agent": "xuerong-editor/%s" % APP_VERSION})
+        got = 0
+        with urllib.request.urlopen(req, timeout=300) as r, open(zpath, "wb") as f:
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+                got += len(chunk)
+        if got < 1024 * 1024:
+            return {"ok": False, "msg": "下载不完整（%.1f KB）" % (got / 1024)}
+    except Exception as e:
+        return {"ok": False, "msg": "下载失败：%s" % str(e)[:160]}
+
+    try:
+        if os.path.isdir(out_dir):
+            shutil.rmtree(out_dir, ignore_errors=True)
+        with zipfile.ZipFile(zpath) as z:
+            z.extractall(out_dir)
+        # zip 里通常多一层同名目录，找到真正的 exe
+        real_exe = None
+        for dp, _dn, fs in os.walk(out_dir):
+            for fn in fs:
+                if fn.lower().endswith(".exe"):
+                    real_exe = os.path.join(dp, fn)
+                    break
+            if real_exe:
+                break
+        if not real_exe:
+            return {"ok": False, "msg": "解压后没找到 exe"}
+        if launch:
+            try:
+                os.startfile(os.path.dirname(real_exe))      # 打开所在文件夹
+            except Exception:
+                pass
+        return {"ok": True, "version": latest, "dir": out_dir, "exe": real_exe,
+                "size": round(got / 1048576, 1),
+                "msg": "新版已解压到：%s（当前窗口可以关闭，从新目录启动即可，旧版本不改动）"
+                       % os.path.dirname(real_exe)}
+    except Exception as e:
+        return {"ok": False, "msg": "解压失败：%s" % str(e)[:160]}
+
+
 def map_analysis(root=None, limit=60, min_px=800, only_land=True):
+
     """省份排名：按面积（像素数）列出大省，附州/战略区/地形。
     数据直接来自图层缓存的 prov_index.json，不重新扫像素。"""
     root = _map_pick(root)
@@ -6211,6 +6340,14 @@ class Handler(SimpleHTTPRequestHandler):
                                  body.get("tid", ""), body.get("x", 0), body.get("y", 0)))
         elif self.path == "/api/state_province":
             self._send(state_province_edit(body.get("pid"), body.get("target")))
+        elif self.path == "/api/update_apply":
+            act = body.get("act") or "prepare"
+            if act == "download":
+                self._send(update_download(body.get("url") or None, body.get("size") or 0))
+            elif act == "launch":
+                self._send(update_apply(launch=True))
+            else:
+                self._send(update_apply(launch=False))
         elif self.path == "/api/map_paint":
             act = body.get("act") or ""
             if act == "begin":
