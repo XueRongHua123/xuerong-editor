@@ -1025,7 +1025,7 @@
           <button class="btn" id="updClose" style="margin-left:auto">关闭</button></div>
         <div id="updBody"></div>
         <div id="updFoot">
-          <a class="btn" id="updDl" target="_blank" rel="noopener">下载新版</a>
+          <button class="btn" id="updDl">下载并解压新版</button>
           <a class="btn" id="updPage" target="_blank" rel="noopener">打开 Release 页</a>
           <button class="btn" id="updLater">7 天内不再提示</button>
         </div>
@@ -5162,10 +5162,33 @@ async function mapRunCheck(){
     lines.push('');
     lines.push(info.notes || '（这次发布没有填写说明）');
     body.textContent = lines.join('\n');
-    const dl = document.getElementById('updDl');
-    const exeAsset = (info.assets || []).find(a => /\.exe$/i.test(a.name || ''));
-    dl.href = exeAsset ? exeAsset.url : info.url;
     document.getElementById('updPage').href = info.url;
+    const dl = document.getElementById('updDl');
+    dl.disabled = false;
+    dl.textContent = '下载并解压新版';
+    dl.onclick = async function(){
+      dl.disabled = true;
+      dl.textContent = '下载中…';
+      const body = document.getElementById('updBody');
+      try {
+        const r = await (await fetch('/api/update_apply', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({act:'prepare'})})).json();
+        if (!r.ok) {
+          body.textContent += String.fromCharCode(10, 10) + '[失败] ' + (r.msg || '');
+          dl.disabled = false;
+          dl.textContent = '重试';
+          return;
+        }
+        dl.textContent = '已解压';
+        body.textContent += String.fromCharCode(10, 10) + '[完成] ' + r.msg;
+        status('新版已解压到 ' + (r.dir || ''));
+      } catch (e) {
+        body.textContent += String.fromCharCode(10, 10) + '[异常] ' + e.message;
+        dl.disabled = false;
+        dl.textContent = '重试';
+      }
+    };
     document.getElementById('updModal').classList.add('show');
   }
 

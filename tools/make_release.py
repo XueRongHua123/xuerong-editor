@@ -28,9 +28,9 @@ EXE = NAME + ".exe"
 
 def build(python, version="0.0.0"):
     """打包。打包前把版本号写进 _build_version.py（模块形式打进 exe），结束后删除。"""
-    ver_path = os.path.join(WORK, "_build_version.py")
+    ver_path = os.path.join(WORK, "_version.txt")
     try:
-        io.open(ver_path, "w", encoding="utf-8", newline="").write('VERSION = "%s"' % version + chr(10))
+        io.open(ver_path, "w", encoding="utf-8", newline="").write(version.strip() + chr(10))
     except Exception as e:
         print("写版本文件失败:", e)
     args = [
@@ -39,6 +39,7 @@ def build(python, version="0.0.0"):
         "--add-data", os.path.join(WORK, "focus_editor_index.html") + ";.",
         "--add-data", os.path.join(WORK, "mascot_face.png") + ";.",
         "--add-data", os.path.join(WORK, "mascot_card.png") + ";.",
+        "--add-data", os.path.join(WORK, "_version.txt") + ";.",
         "--add-data", os.path.join(WORK, "mascot") + ";mascot",
         # 只用 Image.open/convert/frombytes/save/resize，不需要 AVIF 等特殊解码器（省 ~8MB 解压体积）
         "--exclude-module", "PIL._avif",
