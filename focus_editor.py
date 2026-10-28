@@ -2679,7 +2679,14 @@ def refine_preview(pid, k=2, root=None):
                       "bbox": [min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1],
                       # 描边用：只回包围盒内的相对坐标，前端按比例画
                       "pts": [(p % w - min(xs)) * 100000 + (p // w - min(ys)) for p in pts][:20000]})
+    # 细化前把风险讲清楚：VP 会移动、首都会偏、新省要不要进州
+    _p2s, _dups = _prov_state_map()
+    _warn, _sid = _refine_state_warnings(pid, _p2s)
+    if pid in _dups:
+        _warn.insert(0, "省 %d 同时被州 %s 声明（数据冲突），本次按第一个州处理，建议先修正" % (
+            pid, " / ".join(str(x) for x in _dups[pid])))
     return {"ok": True, "pid": pid, "k": len(cnt), "total": len(res["px"]),
+            "state": _sid, "warnings": _warn,
             "parts": parts, "msg": "切成 %d 块，面积 %s" % (
                 len(cnt), sorted(cnt.values(), reverse=True))}
 
@@ -2785,9 +2792,24 @@ def refine_apply(pid, k=2, root=None, base_pid=None):
     bmp_write_rect(bmp, bx, by, bw, bh, after)
     _REFINE_IDS_CACHE.pop("cur", None)
 
-    return {"ok": True, "pid": pid, "new_ids": [assign[kk] for kk in keys[1:]],
+    # 新省必须进州，否则是孤儿地块（没有 owner / 建筑槽 / 人口）
+    _new_ids = [assign[kk] for kk in keys[1:]]
+    _p2s2, _ = _prov_state_map()
+    _sid2 = _p2s2.get(pid, 0)
+    _state_rel = _refine_attach_to_state(root, _sid2, _new_ids, pid)
+    reload_data()
+
+    _m = "已切成 %d 块，新增省号 %s" % (len(keys), _new_ids)
+    if _state_rel:
+        _m += "；已加入州 %d（%s）" % (_sid2, _state_rel)
+    elif _sid2:
+        _m += "；加入州 %d 失败，需手动处理" % _sid2
+    else:
+        _m += "；原省无州归属，新省也未归属"
+    return {"ok": True, "pid": pid, "new_ids": _new_ids, "state": _sid2,
+            "stateFile": _state_rel,
             "parts": len(keys), "pixels": len(owner), "rect": [bx, by, bw, bh],
-            "msg": "已切成 %d 块，新增省号 %s" % (len(keys), [assign[kk] for kk in keys[1:]])}
+            "msg": _m}
 
 
 def used_rgb_ids(rows):
@@ -5617,6 +5639,111 @@ def _loc_write_pairs(root, pairs, lang="simp_chinese"):
         lines.append(' %s:0 "%s"' % (k, existing[k]))
     io.open(fn, "wb").write(b"\xef\xbb\xbf" + (chr(10).join(lines) + chr(10)).encode("utf-8"))
     return os.path.basename(fn)
+
+
+def _prov_state_map():
+    """省 → 州 的映射。
+
+    同一省被多个州声明时（原版和 mod 都有这个省，mod 的州覆盖原版的州），
+    按 ROOTS 的加载顺序取优先级最高的那一层 —— 后面的 mod 覆盖前面的。
+    只有在同一层内部冲突时才记为真实数据问题。"""
+    layers = {}
+    for i, r in enumerate(ROOTS or []):
+        layers[os.path.abspath(r)] = i
+    best = {}      # pid -> (priority, sid)
+    dups = {}
+    for _s in (STATES.values() if isinstance(STATES, dict) else []):
+        try:
+            sid = int(_s.get("id") or 0)
+        except Exception:
+            continue
+        pri = layers.get(os.path.abspath(_s.get("root") or ""), 0)
+        for _p in (_s.get("provinces") or []):
+            try:
+                pid = int(_p)
+            except Exception:
+                continue
+            cur = best.get(pid)
+            if cur is None or pri > cur[0]:
+                best[pid] = (pri, sid)
+            elif pri == cur[0] and cur[1] != sid:
+                # 同一层里两个州都声明了这个省 —— 这才是真冲突
+                dups.setdefault(pid, [cur[1]]).append(sid)
+    return {k: v[1] for k, v in best.items()}, dups
+
+
+def _refine_state_warnings(pid, prov2state):
+    """细化前的风险提示：VP / 首都 / 州归属"""
+    warn = []
+    sid = prov2state.get(pid, 0)
+    if not sid:
+        warn.append("省 %d 不属于任何州，细化出来的新省也不会有归属" % pid)
+        return warn, 0
+
+    st = None
+    for s in (STATES.values() if isinstance(STATES, dict) else []):
+        try:
+            if int(s.get("id") or 0) == int(sid):
+                st = s
+                break
+        except Exception:
+            continue
+    if not st:
+        return warn, sid
+
+    provs = st.get("provinces") or []
+    if len(provs) <= 1:
+        warn.append("州 %d 只有这一个省，细化后新省需要单独建州或并入邻州" % sid)
+    else:
+        warn.append("新省会加入州 %d（共 %d 省）" % (sid, len(provs)))
+
+    for vp in (st.get("victory_points") or []):
+        try:
+            if int(vp.get("province") or -1) == int(pid):
+                warn.append("省 %d 有 %s 点胜利点，细化后图标会随质心移到原省残留块" % (
+                    pid, vp.get("points")))
+        except Exception:
+            pass
+
+    # 首都：只查已加载的国家，命中就提示
+    try:
+        for c in (COUNTRIES.values() if isinstance(COUNTRIES, dict) else []):
+            if str(c.get("capital") or "") == str(pid):
+                warn.append("省 %d 是 %s 的首都，细化后首都位置会落在原省残留块" % (
+                    pid, c.get("tag") or c.get("name") or "某国"))
+    except Exception:
+        pass
+    return warn, sid
+
+
+def _refine_attach_to_state(root, sid, new_ids, pid):
+    """把细化出来的新省加进原州（改 history/states/*.txt 的 provinces 列表）"""
+    if not sid or not new_ids:
+        return ""
+    _r, rel, path = _state_file_for(sid)
+    if not path:
+        return ""
+    try:
+        text = _read_text(path)
+        m = re.search(r'(?m)^[ \t]*provinces\s*=\s*\{', text)
+        cur = []
+        if m:
+            b = text.find("{", m.end() - 1)
+            e = brace_match(text, b)
+            if e > b:
+                cur = [int(x) for x in re.findall(r'\d+', text[b + 1:e - 1])]
+        if not cur:
+            cur = [pid]
+        merged = sorted(set(cur) | set(int(x) for x in new_ids))
+        if merged == sorted(set(cur)):
+            return ""
+        body = _set_state_provinces(text, merged)
+        snapshot(path)
+        _write_bom_text(path, body, text.startswith("\ufeff") or True)
+        return rel
+    except Exception as e:
+        print("写州归属失败:", e)
+        return ""
 
 
 def event_detail(eid, root=None):

@@ -532,6 +532,7 @@
 .ev-p-body label{display:block;font-size:11px;color:var(--t3);margin:8px 0 3px}
 .ev-p-body input{width:100%;height:28px;background:var(--input);border:1px solid var(--line);
   color:var(--text);border-radius:6px;padding:0 8px;font-size:12px;box-sizing:border-box;font-family:Consolas,monospace}
+#rfStat{white-space:pre-line}
 .ev-p-hint{font-size:11px;color:var(--t3);margin:3px 0 6px;line-height:1.5;word-break:break-all}
 .ev-p-opt{border-top:1px solid var(--line);margin-top:10px;padding-top:8px}
 .ev-p-opt .o-row{margin-bottom:8px;padding:6px 8px;background:var(--panel2);border-radius:6px}
@@ -5877,8 +5878,10 @@ async function mapRepair(){
       previewOk = true;
       lastPid = pid; lastK = r.k;
       const sizes = (r.parts || []).map(p=>p.px).sort((a,b)=>b-a);
+      const warns = (r.warnings || []);
       rfStat('省 ' + pid + ' 切成 ' + r.k + ' 块，面积 ' + sizes.join(' / ') +
-             '（共 ' + r.total + ' 像素）· 形状已画到地图上');
+             '（共 ' + r.total + ' 像素）· 形状已画到地图上' +
+             (warns.length ? String.fromCharCode(10) + warns.map(w=>'⚠ ' + w).join(String.fromCharCode(10)) : ''));
       window.REFINE_PREVIEW = r;
       if (window.mapRenderSelection) window.mapRenderSelection();
       document.getElementById('rfApply').disabled = false;
