@@ -529,6 +529,23 @@
   .lt-group label > span, .lt-group label{text-overflow:ellipsis}
   .lt-op:hover,.lt-group label.on .lt-op{opacity:1}
   .lt-group label{justify-content:flex-start}
+  /* ---------- v1.4.0 国策树预览 ---------- */
+  #ftModal{position:fixed;inset:0;z-index:122;display:none;place-items:center;
+    background:rgba(8,10,9,.74);backdrop-filter:blur(3px)}
+  #ftModal.show{display:grid}
+  #ftCard{width:min(1400px,calc(100% - 40px));height:calc(100% - 60px);display:flex;flex-direction:column;
+    background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:var(--shadow)}
+  #ftHead{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);flex:0 0 auto}
+  #ftBody{flex:1;overflow:auto;background:#14171a;cursor:grab}
+  #ftBody.dragging{cursor:grabbing}
+  #ftSvg{display:block}
+  .ft-node{cursor:pointer}
+  .ft-node rect{fill:#232a2e;stroke:#4a555c;stroke-width:2;rx:8}
+  .ft-node:hover rect{stroke:var(--accent)}
+  .ft-node.sel rect{stroke:#ffd678;stroke-width:3}
+  .ft-node text{fill:#c8d0d4;font-size:10px;text-anchor:middle;pointer-events:none}
+  .ft-edge{stroke:#5a656b;stroke-width:2;fill:none}
+  .ft-edge.mutex{stroke:#a06060;stroke-dasharray:5 4}
   /* ---------- v1.2.1 选中省份高亮 ---------- */
   #mapSelCanvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:5}
   /* ---------- v1.1.0 右侧 Tab ---------- */
@@ -865,6 +882,7 @@
       <summary>国策树</summary>
       <input id="search" placeholder="搜索焦点 id / 名称...">
       <div id="searchHits"></div>
+      <div class="mp-acts" style="padding:4px 0"><button class="btn" id="ftOpen">图形预览</button></div>
       <div id="treeList" style="max-height:300px;overflow:auto"></div>
     </details>
     <details open>
@@ -1089,6 +1107,19 @@
             <div id="outStat" class="mp-k" style="padding-top:6px"></div>
           </div>
         </div>
+      </div>
+    </div>
+    <div id="ftModal">
+      <div id="ftCard">
+        <div id="ftHead">
+          <b>国策树预览</b>
+          <select id="ftPick" style="min-width:200px"></select>
+          <span class="k" id="ftInfo"></span>
+          <span style="margin-left:auto"></span>
+          <button class="btn" id="ftFit" title="缩放到全部">适应</button>
+          <button class="btn" id="ftClose">关闭</button>
+        </div>
+        <div id="ftBody"><svg id="ftSvg"></svg></div>
       </div>
     </div>
     <div id="updModal">
@@ -5916,6 +5947,122 @@ async function mapShowGfxMissing(){
   }
   list.innerHTML = html;
 }
+// v1.4.0 国策树预览（参考 HOI4 Mod Utilities 的 Focus tree preview）
+(function(){
+  const CELL = 96;            // HOI4 的国策格边长
+  const PAD = 60;
+  let ftData = null, ftSel = null;
+
+  function ftOpen(){
+    document.getElementById('ftModal').classList.add('show');
+    ftLoadList();
+  }
+  function ftClose(){ document.getElementById('ftModal').classList.remove('show'); }
+
+  async function ftLoadList(){
+    const sel = document.getElementById('ftPick');
+    if(sel.dataset.loaded){
+      if(sel.value) ftDraw(sel.value);
+      return;
+    }
+    const r = await (await fetch('/api/focus_trees')).json();
+    if(!r.ok){ document.getElementById('ftInfo').textContent = '读取失败'; return; }
+    sel.innerHTML = (r.trees || []).map(t=>
+      '<option value="' + t.id + '">' + t.id + '（' + t.count + ' 节点）</option>').join('');
+    sel.dataset.loaded = '1';
+    sel.onchange = ()=> ftDraw(sel.value);
+    if(sel.value) ftDraw(sel.value);
+  }
+
+  async function ftDraw(tid){
+    const svg = document.getElementById('ftSvg');
+    const info = document.getElementById('ftInfo');
+    info.textContent = '读取中…';
+    const g = await (await fetch('/api/focus_graph?tree=' + encodeURIComponent(tid))).json();
+    if(!g.ok){ info.textContent = g.msg || '读取失败'; svg.innerHTML = ''; return; }
+    ftData = g;
+    info.textContent = g.msg + '　' + (g.file || '');
+
+    const nodes = g.nodes || [];
+    if(!nodes.length){ svg.innerHTML = ''; return; }
+    const minX = Math.min(...nodes.map(n=>n.x));
+    const minY = Math.min(...nodes.map(n=>n.y));
+    const maxX = Math.max(...nodes.map(n=>n.x));
+    const maxY = Math.max(...nodes.map(n=>n.y));
+    const W = (maxX - minX + 1) * CELL + PAD * 2;
+    const H = (maxY - minY + 1) * CELL + PAD * 2;
+    svg.setAttribute('width', W);
+    svg.setAttribute('height', H);
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+
+    const px = n => (n.x - minX) * CELL + PAD;
+    const py = n => (n.y - minY) * CELL + PAD;
+    const idx = {};
+    nodes.forEach(n=>{ idx[n.id] = n; });
+
+    let out = '<defs><marker id="ftArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">'
+      + '<path d="M0,0 L6,3 L0,6 z" fill="#5a656b"/></marker></defs>';
+    // 连线
+    for(const e of (g.edges || [])){
+      const a = idx[e.from], b = idx[e.to];
+      if(!a || !b) continue;
+      const x1 = px(a) + CELL/2, y1 = py(a) + CELL/2;
+      const x2 = px(b) + CELL/2, y2 = py(b) + CELL/2;
+      const cls = e.kind === 'mutex' ? 'ft-edge mutex' : 'ft-edge';
+      const mk = e.kind === 'mutex' ? '' : ' marker-end="url(#ftArrow)"';
+      out += '<line class="' + cls + '" x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '"' + mk + '/>';
+    }
+    // 节点
+    for(const n of nodes){
+      const x = px(n), y = py(n);
+      out += '<g class="ft-node" data-id="' + n.id + '" transform="translate(' + x + ',' + y + ')">'
+        + '<rect width="' + (CELL-8) + '" height="' + (CELL-8) + '" rx="8"/>';
+      if(n.icon){
+        out += '<image href="/api/icon?gfx=' + encodeURIComponent(n.icon) + '" x="6" y="6"'
+          + ' width="' + (CELL-20) + '" height="' + (CELL-20) + '" preserveAspectRatio="xMidYMid meet"/>';
+      }
+      const label = (n.name || n.id).slice(0, 16);
+      out += '<text x="' + (CELL-8)/2 + '" y="' + (CELL-11) + '">' + label.replace(/[<>&]/g, '') + '</text>'
+        + '</g>';
+    }
+    svg.innerHTML = out;
+
+    svg.querySelectorAll('.ft-node').forEach(el=>{
+      el.onclick = ()=>{
+        svg.querySelectorAll('.ft-node').forEach(o=>o.classList.remove('sel'));
+        el.classList.add('sel');
+        const n = idx[el.dataset.id];
+        ftSel = n;
+        info.textContent = (n.name || n.id) + '　[' + n.id + ']　(' + n.x + ',' + n.y + ')'
+          + (n.cost ? '　成本 ' + n.cost : '')
+          + (n.prereq.length ? '　前置 ' + n.prereq.map(g=>g.join('|')).join(' + ') : '')
+          + (n.mutex.length ? '　互斥 ' + n.mutex.join(',') : '');
+      };
+    });
+  }
+
+  function ftBind(){
+    const btn = document.getElementById('ftOpen');
+    if(!btn || btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.onclick = ftOpen;
+    document.getElementById('ftClose').onclick = ftClose;
+    document.getElementById('ftFit').onclick = ()=>{
+      const svg = document.getElementById('ftSvg');
+      const body = document.getElementById('ftBody');
+      const w = Number(svg.getAttribute('width')) || 1;
+      const h = Number(svg.getAttribute('height')) || 1;
+      const k = Math.min(body.clientWidth / w, body.clientHeight / h, 1);
+      svg.style.transformOrigin = '0 0';
+      svg.style.transform = 'scale(' + k + ')';
+    };
+  }
+  window.mapBindFocusTree = ftBind;
+  // 这个按钮在国策树面板里，初始化函数可能早于本段执行，所以自己再绑一次
+  if(document.readyState !== 'loading') ftBind();
+  else document.addEventListener('DOMContentLoaded', ftBind);
+})();
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -6076,6 +6223,7 @@ function mapBindV081(){
   if(window.mapBindSideTabs) window.mapBindSideTabs();
   if(window.mapBindOutput) window.mapBindOutput();
   if(window.mapBindRefine) window.mapBindRefine();
+  if(window.mapBindFocusTree) window.mapBindFocusTree();
   mapSetMode('view');
 }
 
