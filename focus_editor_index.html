@@ -529,6 +529,8 @@
   .lt-group label > span, .lt-group label{text-overflow:ellipsis}
   .lt-op:hover,.lt-group label.on .lt-op{opacity:1}
   .lt-group label{justify-content:flex-start}
+  /* ---------- v1.2.1 选中省份高亮 ---------- */
+  #mapSelCanvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:5}
   /* ---------- v1.1.0 右侧 Tab ---------- */
   #mapSide{width:268px;flex:0 0 268px;border-left:1px solid var(--line);display:flex;
     flex-direction:column;background:var(--panel);overflow:hidden}
@@ -1176,6 +1178,7 @@
             <img id="mapEdges" alt="">
           </div>
           <div id="mapHud" style="display:none"><div id="mapHudText"></div></div>
+          <canvas id="mapSelCanvas"></canvas>
         </div><!-- /mapStageWrap -->
         <div id="mapSide">
           <div id="sideTabs">
@@ -1195,7 +1198,7 @@
               <label><input type="checkbox" id="mapLState">州<input type="range" class="lt-op" data-op="state" min="0" max="100" value="85" title="州 不透明度"></label>
             </div>
             <div class="lt-group"><div class="lt-title">基础</div>
-              <label><input type="checkbox" id="mapLEdges" checked>省界<input type="range" class="lt-op" data-op="edges" min="0" max="100" value="70" title="省界 不透明度"></label>
+              <label><input type="checkbox" id="mapLEdges" checked>省界<input type="range" class="lt-op" data-op="edges" min="0" max="100" value="80" title="省界 不透明度"></label>
               <label><input type="checkbox" id="mapLBase" checked>底图<input type="range" class="lt-op" data-op="base" min="0" max="100" value="100" title="底图 不透明度"></label>
               <label>透明度<input type="range" id="mapOpacity" min="20" max="100" value="85"></label>
             </div>
@@ -5676,6 +5679,84 @@ async function mapRepair(){
   window.mapBindOutput = bindOutput;
 })();
 
+/* ---------- v1.2.1 选中省份描边 ---------- */
+(function () {
+  function selCanvas() {
+    const c = document.getElementById('mapSelCanvas');
+    const wrap = document.getElementById('mapStageWrap');
+    if (!c || !wrap) return null;
+    const r = wrap.getBoundingClientRect();
+    const z = uiZoom();
+    const w = Math.max(1, Math.round(r.width / z));
+    const h = Math.max(1, Math.round(r.height / z));
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    return { c: c, ctx: c.getContext('2d'), w: w, h: h };
+  }
+
+  function drawOutline(ctx, pid, color, size) {
+    if (!MAP.idCanvas || !MAP.ready) return 0;
+    const idc = MAP.idCanvas.getContext('2d');
+    const k = MAP.k;
+    const cv = document.getElementById('mapSelCanvas');
+    const x0 = Math.max(0, Math.floor(-MAP.x / k) - 2);
+    const y0 = Math.max(0, Math.floor(-MAP.y / k) - 2);
+    const x1 = Math.min(MAP.w, Math.ceil((cv.width - MAP.x) / k) + 2);
+    const y1 = Math.min(MAP.h, Math.ceil((cv.height - MAP.y) / k) + 2);
+    const cw = x1 - x0, ch = y1 - y0;
+    if (cw <= 0 || ch <= 0) return 0;
+    let data;
+    try { data = idc.getImageData(x0, y0, cw, ch).data; } catch (e) { return 0; }
+    const at = function (x, y) {
+      if (x < 0 || y < 0 || x >= cw || y >= ch) return 0;
+      const i = (y * cw + x) * 4;
+      return (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
+    };
+    ctx.fillStyle = color;
+    let n = 0;
+    for (let y = 0; y < ch; y++) {
+      for (let x = 0; x < cw; x++) {
+        if (at(x, y) !== pid) continue;
+        const edge = at(x - 1, y) !== pid || at(x + 1, y) !== pid ||
+                     at(x, y - 1) !== pid || at(x, y + 1) !== pid;
+        if (!edge) continue;
+        const cx = (x0 + x) * k + MAP.x;
+        const cy = (y0 + y) * k + MAP.y;
+        ctx.fillRect(cx - size / 2, cy - size / 2, size, size);
+        n++;
+      }
+    }
+    return n;
+  }
+
+  window.mapRenderSelection = function () {
+    const sc = selCanvas();
+    if (!sc) return;
+    const ctx = sc.ctx;
+    ctx.clearRect(0, 0, sc.w, sc.h);
+    if (!MAP.ready) return;
+    const sel = Array.isArray(MAP.sel) ? MAP.sel : [];
+    const base = Math.max(1, Math.round(MAP.k * 1.4));
+    sel.forEach(function (pid) {
+      if (pid === MAP.lastPid) return;
+      drawOutline(ctx, pid, 'rgba(255,255,255,0.6)', base);
+    });
+    if (MAP.lastPid) {
+      const big = Math.max(2, Math.round(MAP.k * 2.4));
+      drawOutline(ctx, MAP.lastPid, 'rgba(18,20,16,0.9)', big);
+      drawOutline(ctx, MAP.lastPid, 'rgba(255,214,120,1)', Math.max(1, Math.round(MAP.k * 1.5)));
+    }
+  };
+
+  // 每次视图变换后重绘（mapApply 是唯一的变换出口）
+  const origApply = window.mapApply;
+  if (typeof origApply === 'function') {
+    window.mapApply = function () {
+      origApply.apply(this, arguments);
+      window.mapRenderSelection();
+    };
+  }
+})();
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -5789,6 +5870,7 @@ function mapSelectProvince(pid){
   const det = document.getElementById('msDetachProv');
   if(det) det.disabled = !rec.state;
   MAP.lastState = rec.state || null;
+  if(window.mapRenderSelection) window.mapRenderSelection();
   const info = document.getElementById('msInfo');
   if(info) info.textContent = '省 ' + pid + ' · 州 ' + (rec.state || '无') + ' · 地区 ' + (rec.region || '无');
   mapUpdateStatus();

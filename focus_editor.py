@@ -3910,16 +3910,9 @@ def map_build(force=False, root=None):
         _tcols = _terrain_colors(root)
     except Exception as _e:
         print("读地形配色失败:", _e)
+    # 旧的「terrain.bmp 灰度明暗」已弃用：现在统一用 heightmap 的真实山体阴影
+    # （_apply_hillshade）。两套叠一起会把颜色压暗一倍。
     _shade = None
-    try:
-        _tbmp, _tprov = _layers_find("map/terrain.bmp", mod_layers(root))
-        if _tbmp and os.path.exists(_tbmp):
-            with Image.open(_tbmp) as _tim:
-                if _tim.size == (w, h):
-                    _shade = _tim.convert("L").tobytes()
-                    print("  地形明暗纹理: 已载入")
-    except Exception as _e:
-        print("读 terrain.bmp 失败:", _e)
 
     # 4) 一遍像素：ids、质心累加
     n = w * h
@@ -4084,14 +4077,22 @@ def map_build(force=False, root=None):
     # 7) 写资产
     Image.frombytes("RGB", (w, h), bytes(provbuf)).save(os.path.join(dirp, "province.png"))
     Image.frombytes("RGB", (w, h), bytes(statebuf)).save(os.path.join(dirp, "state.png"))
-    Image.frombytes("RGB", (w, h), bytes(edgebuf)).save(os.path.join(dirp, "edges.png"))
+    # 省界存成 RGBA：白线不透明、其余全透明。
+    # 之前存 RGB（黑底白线），前端按 opacity 叠上去时黑色背景会把地形压暗一大截。
+    _edge_img = Image.frombytes("RGB", (w, h), bytes(edgebuf)).convert("RGBA")
+    _edge_img.putalpha(_edge_img.convert("L"))
+    _edge_img.save(os.path.join(dirp, "edges.png"))
     Image.frombytes("RGB", (w, h), bytes(polbuf)).save(os.path.join(dirp, "political.png"))
     Image.frombytes("RGB", (w, h), bytes(regbuf)).save(os.path.join(dirp, "region.png"))
     _terr_img = _render_terrain(root, w, h, prov2terrain)
-    if _terr_img is not None:
-        _terr_img.save(os.path.join(dirp, "terrain.png"))
-    else:
-        Image.frombytes("RGB", (w, h), bytes(terrbuf)).save(os.path.join(dirp, "terrain.png"))
+    if _terr_img is None:
+        # 省级地形色（来自 definition.csv，永远可信）+ 高度阴影
+        _terr_img = Image.frombytes("RGB", (w, h), bytes(terrbuf))
+        try:
+            _terr_img = _apply_hillshade(_terr_img, root, w, h, None)
+        except Exception as _e:
+            print("  高度阴影失败，保留纯色:", _e)
+    _terr_img.save(os.path.join(dirp, "terrain.png"))
     Image.frombytes("RGB", (w, h), bytes(contbuf)).save(os.path.join(dirp, "continent.png"))
     Image.frombytes("RGB", (w, h), bytes(idbuf)).save(os.path.join(dirp, "prov_id.png"))
     im.resize((max(1, w // 2), max(1, h // 2)), Image.BILINEAR).save(os.path.join(dirp, "base.png"))
@@ -4392,15 +4393,79 @@ def _terrain_index_map(root):
     return idx2type
 
 
+def _hillshade_mask(root, w, h):
+    """高度图 → 明暗 mask（L 模式，255=全亮）。没有高度图或尺寸不符返回 None。"""
+    try:
+        from PIL import Image, ImageChops
+        Image.MAX_IMAGE_PIXELS = None
+        hbmp, _ = _layers_find("map/heightmap.bmp", mod_layers(root))
+        if not hbmp:
+            return None
+        with Image.open(hbmp) as him:
+            if him.size != (w, h):
+                return None
+            hh = him.convert("L")
+        gx = ImageChops.subtract(ImageChops.offset(hh, 1, 0),
+                                 ImageChops.offset(hh, -1, 0), 1.0, 128)
+        gy = ImageChops.subtract(ImageChops.offset(hh, 0, 1),
+                                 ImageChops.offset(hh, 0, -1), 1.0, 128)
+
+        def lit(v):
+            # 西北光：东侧高、南侧高的地形变暗。系数小一点，避免山地整片压黑
+            return max(0, min(255, int(128 - (v - 128) * 0.70)))
+        shade = ImageChops.add(gx.point(lit), gy.point(lit), 1.0, -128)
+        # 下限 108：最暗处也保留约 42% 亮度，当作环境光，不让背光坡变成黑块
+        return shade.point(lambda v: max(108, min(255, int(v * 1.28))))
+    except Exception:
+        return None
+
+
+def _apply_hillshade(img, root, w, h, ocean_mask=None):
+    """给地形色图叠高度阴影。ocean_mask 为 L 模式，255 = 海洋（用弱阴影）。
+
+    用乘法光照而不是 composite（后者会把背光面压到接近黑）：
+      先把底色提亮 1.35 倍，再乘一个 0.72~1.27 的系数，
+      最终亮度 = 底色 × (0.97 ~ 1.71)，中间值约 1.32 倍，暗部仍有 0.97 倍。"""
+    from PIL import Image, ImageChops
+    Image.MAX_IMAGE_PIXELS = None
+    shade = _hillshade_mask(root, w, h)
+    if shade is None:
+        return img
+    bright = img.point(lambda v: min(255, int(v * 1.35)))
+    # m/255 = (0.72 + 0.55*s) / 1.35
+    factor = shade.point(lambda v: max(1, min(255, int(189 * (0.72 + 0.55 * (v / 255.0))))))
+    out = ImageChops.multiply(bright, factor.convert("RGB"))
+    if ocean_mask is not None:
+        # 海洋/湖泊只用很弱的起伏
+        soft = ImageChops.multiply(img.point(lambda v: min(255, int(v * 1.06))),
+                                   shade.point(lambda v: max(150, min(255, int(v * 1.6)))).convert("RGB"))
+        out = Image.composite(soft, out, ocean_mask)
+    return out
+
+
+def _terrain_index_trusted(root, layers):
+    """terrain.bmp 是否与 provinces.bmp 同源。
+    不同源说明 mod 换了地图却没换地形索引图，用它着色会得到与地图无关的分布。"""
+    try:
+        _t, tbase = _layers_find("map/terrain.bmp", layers)
+        _p, pbase = _layers_find("map/provinces.bmp", layers)
+        if not _t or not _p:
+            return False
+        return os.path.abspath(tbase or "") == os.path.abspath(pbase or "")
+    except Exception:
+        return False
+
+
 def _render_terrain(root, w, h, prov2terrain):
-    """生成地形图层：地形类别色 × 高度图山体阴影。
-    全程 Pillow 的 C 操作（调色板映射 + 差分 + composite），1258 万像素约 0.5 秒。"""
+    """像素级地形图（terrain.bmp 可信时用）。返回 RGB Image，不可信或失败返回 None。"""
     try:
         from PIL import Image, ImageChops
         Image.MAX_IMAGE_PIXELS = None
         layers = mod_layers(root)
+        if not _terrain_index_trusted(root, layers):
+            print("  terrain.bmp 与 provinces.bmp 不同源，改用省级地形着色")
+            return None
         tbmp, _ = _layers_find("map/terrain.bmp", layers)
-        hbmp, _ = _layers_find("map/heightmap.bmp", layers)
         if not tbmp:
             return None
         cats = _terrain_colors(root)
@@ -4422,31 +4487,9 @@ def _render_terrain(root, w, h, prov2terrain):
         tmap.putpalette(pal)
         base_rgb = tmap.convert("RGB")
 
-        if not hbmp:
-            return base_rgb
-        with Image.open(hbmp) as him:
-            if him.size != (w, h):
-                return base_rgb
-            hh = him.convert("L")
-        # 差分 → 有符号梯度（128 为中心）
-        gx = ImageChops.subtract(ImageChops.offset(hh, 1, 0), ImageChops.offset(hh, -1, 0), 1.0, 128)
-        gy = ImageChops.subtract(ImageChops.offset(hh, 0, 1), ImageChops.offset(hh, 0, -1), 1.0, 128)
-
-        def lit(v):
-            # 西北光：东侧高（gx>128）、南侧高（gy>128）→ 变暗
-            return max(0, min(255, int(128 - (v - 128) * 0.85)))
-        shade = ImageChops.add(gx.point(lit), gy.point(lit), 1.0, -128)
-        shade = shade.point(lambda v: max(0, min(255, int(v * 1.35))))
-
-        bright = base_rgb.point(lambda v: min(255, int(v * 1.32)))
-        out = Image.composite(bright, Image.new("RGB", (w, h), (0, 0, 0)), shade)
-
-        # 海洋/湖泊不给强阴影
         ocean_mask = tmap.convert("L").point(
             lambda v: 255 if idx2type.get(v) in ("ocean", "lakes") else 0)
-        ocean_layer = base_rgb.point(lambda v: int(v * 0.94))
-        out = Image.composite(ocean_layer, out, ocean_mask)
-        return out
+        return _apply_hillshade(base_rgb, root, w, h, ocean_mask)
     except Exception as e:
         print("地形渲染失败，回退纯色:", e)
         return None
@@ -4505,7 +4548,21 @@ def _terrain_colors(root):
                 sub = body[cb + 1:ce - 1]
                 col = re.search(r'color\s*=\s*\{\s*(\d+)\s+(\d+)\s+(\d+)\s*\}', sub)
                 if col:
-                    out[name] = (int(col.group(1)), int(col.group(2)), int(col.group(3)))
+                    out[name] = [int(col.group(1)), int(col.group(2)), int(col.group(3))]
+    # 亮度归一化：游戏里地形色差异很大（marsh 76,96,35 与 plains 255,129,66 差 3 倍），
+    # 直接铺到 2D 地图上会显得一半发黑。把陆地的最大分量抬到 210 左右，色相不变；
+    # 海洋/湖泊保持原值（水本来就该深）。
+    for name, c in list(out.items()):
+        if name in ("ocean", "lakes", "unknown"):
+            out[name] = tuple(c)
+            continue
+        mx = max(c) or 1
+        target = 210
+        if mx < target:
+            f = target / float(mx)
+            out[name] = tuple(min(255, int(v * f)) for v in c)
+        else:
+            out[name] = tuple(c)
     return out
 
 
