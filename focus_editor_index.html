@@ -529,6 +529,21 @@
   .lt-group label > span, .lt-group label{text-overflow:ellipsis}
   .lt-op:hover,.lt-group label.on .lt-op{opacity:1}
   .lt-group label{justify-content:flex-start}
+  /* ---------- v1.1.0 右侧 Tab ---------- */
+  #mapSide{width:268px;flex:0 0 268px;border-left:1px solid var(--line);display:flex;
+    flex-direction:column;background:var(--panel);overflow:hidden}
+  #mapSide.empty{display:flex}          /* 始终显示：图层面板在这里 */
+  #sideTabs{display:flex;gap:2px;padding:8px 8px 0;border-bottom:1px solid var(--line);flex:0 0 auto}
+  .side-tab{flex:1;height:30px;border:0;background:none;color:var(--t2);font-size:11.5px;cursor:pointer;
+    border-bottom:2px solid transparent;border-radius:6px 6px 0 0}
+  .side-tab:hover{color:var(--text);background:var(--panel2)}
+  .side-tab.on{color:var(--accent);border-bottom-color:var(--accent);background:var(--panel2)}
+  .side-pane{display:none;flex:1;overflow:auto;padding:10px 12px}
+  .side-pane.on{display:block}
+  #mapTools{position:static!important;width:auto!important;max-height:none!important;
+    padding:0!important;border:0!important;background:none!important;box-shadow:none!important;margin:0!important}
+  #mapTools h4{margin-top:6px}
+  #mapTools h4:first-child{margin-top:0}
   /* ---------- v0.83 视觉层次 ---------- */
   /* 三档文字：主（正文/数值）、次（标签/说明）、弱（辅助信息） */
   :root{--t1:var(--text);--t2:var(--muted);--t3:color-mix(in srgb,var(--muted) 72%,transparent)}
@@ -1150,7 +1165,14 @@
             <img id="mapEdges" alt="">
           </div>
           <div id="mapHud" style="display:none"><div id="mapHudText"></div></div>
-          <div id="mapTools">
+        </div><!-- /mapStageWrap -->
+        <div id="mapSide">
+          <div id="sideTabs">
+            <button class="side-tab on" data-tab="layers">图层</button>
+            <button class="side-tab" data-tab="edit">编辑</button>
+          </div>
+          <div class="side-pane on" id="pane-layers">
+            <div id="mapTools">
             <h4>图层 <button class="lt-toggle" id="mapLayerToggle" title="折叠/展开">−</button></h4>
             <div class="lt-body">
             <div class="lt-group"><div class="lt-title">数据</div>
@@ -1173,8 +1195,8 @@
             </div>
             <button class="btn" id="mapClear" style="margin-top:4px;font-size:11px" title="删除已生成的图层缓存，源文件不动">清理地图缓存</button>
           </div>
-        </div><!-- /mapStageWrap -->
-        <div id="mapSide" class="empty">
+          </div>
+          <div class="side-pane" id="pane-edit">
           <div id="selBox">
           <h4>选中省份</h4>
           <div class="mp-row"><b class="mp-v" id="msId">—</b><span class="mp-k" id="msType"></span></div>
@@ -1234,7 +1256,8 @@
             </div>
             <div class="mp-row" style="padding-top:0"><span class="mp-k" id="nsStat">—</span></div>
           </div>
-        </div>
+          </div><!-- /pane-edit -->
+        </div><!-- /mapSide -->
         </div><!-- /mapBody -->
         <div id="mapStatus">
           <span class="st-mode" id="msMode">浏览</span>
@@ -5572,6 +5595,33 @@ async function mapRepair(){
   window.mapBindPlayset = psBind;
 })();
 
+// v1.1.0 右侧 Tab 切换
+(function(){
+  function sideTab(name){
+    document.querySelectorAll('.side-tab').forEach(b=>{
+      b.classList.toggle('on', b.dataset.tab === name);
+    });
+    document.querySelectorAll('.side-pane').forEach(p=>{
+      p.classList.toggle('on', p.id === 'pane-' + name);
+    });
+    try{ localStorage.setItem('xuerong_side_tab', name); }catch(e){}
+  }
+  window.mapSideTab = sideTab;
+
+  function bindSideTabs(){
+    const tabs = document.querySelectorAll('.side-tab');
+    if(!tabs.length || tabs[0].dataset.bound) return;
+    tabs.forEach(b=>{
+      b.dataset.bound = '1';
+      b.onclick = ()=> sideTab(b.dataset.tab);
+    });
+    let last = 'layers';
+    try{ last = localStorage.getItem('xuerong_side_tab') || 'layers'; }catch(e){}
+    if(last !== 'layers') sideTab(last);
+  }
+  window.mapBindSideTabs = bindSideTabs;
+})();
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -5661,7 +5711,6 @@ function mapSetMode(mode){
   // 浏览模式下，未选省时属性面板保持收起
   if(mode === 'view' && !MAP.lastPid){
     const side = document.getElementById('mapSide');
-    if(side) side.classList.add('empty');
   }
 }
 
@@ -5674,8 +5723,7 @@ function mapStatusPos(clientX, clientY){
 function mapSelectProvince(pid){
   MAP.lastPid = pid;
   const rec = (MAP.idx && MAP.idx[String(pid)]) || {};
-  const side = document.getElementById('mapSide');
-  if(side) side.classList.remove('empty');
+  if(window.mapSideTab) window.mapSideTab('edit');
   const set = (id, v)=>{ const e = document.getElementById(id); if(e) e.textContent = v; };
   set('msId', '省 ' + pid);
   set('msType', rec.type || '');
@@ -5730,6 +5778,7 @@ function mapBindV081(){
   if(window.mapBindNewState) window.mapBindNewState();
   if(window.mapBindHotkeys) window.mapBindHotkeys();
   if(window.mapBindPlayset) window.mapBindPlayset();
+  if(window.mapBindSideTabs) window.mapBindSideTabs();
   mapSetMode('view');
 }
 
@@ -5969,8 +6018,8 @@ function mapShowOps(pid, sid){
 }
 
 function mapHideOps(){
-  const side = document.getElementById('mapSide');
-  if(side) side.classList.add('empty');
+  // 侧栏现在是常显的 Tab 容器（图层面板在里面），不能再靠 empty 类隐藏
+  if(window.mapSideTab) window.mapSideTab('layers');
 }
 
 async function mapMoveProv(detach){
