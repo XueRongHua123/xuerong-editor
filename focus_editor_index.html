@@ -90,15 +90,6 @@
   .tt-link{fill:var(--accent);stroke:var(--panel2);stroke-width:1.5;cursor:crosshair}
   .tt-link:hover{fill:var(--accent)}
   .tt-temp{stroke:var(--accent);stroke-width:2;stroke-dasharray:5 4;fill:none;pointer-events:none}
-  #focusPreview{position:fixed;inset:0;z-index:89;background:rgba(5,7,6,.9);display:none;align-items:center;justify-content:center}
-  #focusPreview.show{display:flex}
-  .fpv-card{width:calc(100% - 50px);height:calc(100% - 50px);background:radial-gradient(circle at 50% 0%,var(--panel2),var(--input) 70%);border:1px solid var(--accent);border-radius:12px;display:flex;flex-direction:column;overflow:hidden}
-  .fpv-head{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);color:var(--text);font-size:13px}
-  #focusPreviewSvg{flex:1;width:100%}
-  .fpv-node rect.card{fill:var(--panel);stroke:var(--accent);stroke-width:2}
-  .fpv-node text{fill:var(--text);font-size:14px}
-  .fpv-node text.cost{fill:var(--text);font-size:12px}
-  .fpv-edge{stroke:var(--accent);stroke-width:2;fill:none;opacity:.85}
 .ok{color:var(--ok)}.muted{color:var(--muted)}
   #treeList div{padding:5px 8px;border-radius:6px;cursor:pointer;font-size:12px;margin-bottom:2px;border-left:2px solid transparent}
   .tabbtn{padding:6px 9px;background:var(--panel);border:1px solid var(--line);border-radius:6px;cursor:pointer;font-size:12px;color:var(--text);margin-bottom:4px;border-left:2px solid transparent}
@@ -250,7 +241,7 @@
   .btn.primary{background:var(--accent)!important;color:var(--on-accent)!important;border-color:var(--accent)!important}
   input,textarea,select{background:var(--input)!important;color:var(--text)!important;border-color:var(--line)!important}
   .k,summary,.welcome-tip,.welcome-body p{color:var(--muted)!important}
-  #welcome .welcome-card,div[id$="Modal"],.ts-card,.fp-card,.tt-card,.ai-card,.fpv-card,.diff-card{background:var(--panel)!important;border-color:var(--line)!important}
+  #welcome .welcome-card,div[id$="Modal"],.ts-card,.fp-card,.tt-card,.ai-card,.diff-card{background:var(--panel)!important;border-color:var(--line)!important}
   #welcome .welcome-card{box-shadow:none!important}
   .welcome-sub{color:var(--accent)!important}
   .welcome-body h1{color:var(--text)!important}
@@ -967,7 +958,6 @@
       <button class="btn" id="logBtn">🧾 报错</button>
       <button class="btn" id="reportBtn">🩺 体检</button>
       <button class="btn" id="backupBtn">🕘 备份</button>
-      <button class="btn" id="focusPreviewBtn">🎮 预览</button>
       <button class="btn" id="contentBtn">📚 内容库</button>
       <button class="btn" id="helpBtn">❓ 教程</button>
       <select id="langSel" class="btn" style="padding:3px 4px">
@@ -1573,12 +1563,6 @@
     </div>
   </div>
 </div>
-<div id="focusPreview">
-  <div class="fpv-card">
-    <div class="fpv-head"><b>国策树预览（游戏风格）</b><button class="btn" id="focusPreviewClose">关闭</button></div>
-    <svg id="focusPreviewSvg"></svg>
-  </div>
-</div>
 <div id="contentModal">
   <div class="diff-card">
     <div class="diff-head">
@@ -1892,46 +1876,6 @@ async function openLog(){
   document.getElementById('logBody').textContent = (j.path || '') + '\n\n' +
     (lines.length ? lines.join('\n') : '没有发现相关的报错行。');
   document.getElementById('logModal').classList.add('show');
-}
-function openFocusPreview(){
-  const t = curTree();
-  if(!t){ status('先选择一棵树'); return; }
-  document.getElementById('focusPreview').classList.add('show');
-  drawFocusPreview(t);
-}
-function drawFocusPreview(t){
-  const svg = document.getElementById('focusPreviewSvg');
-  const sx = 220, sy = 150, W = 260, H = 100;
-  const pos = {};
-  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
-  t.focuses.forEach(f=>{
-    const x = (f.ax ?? f.x ?? 0) * sx, y = (f.ay ?? f.y ?? 0) * sy;
-    pos[f.id] = {x, y, f};
-    minX = Math.min(minX, x); minY = Math.min(minY, y);
-    maxX = Math.max(maxX, x + W); maxY = Math.max(maxY, y + H);
-  });
-  let edges = '', nodes = '';
-  t.focuses.forEach(f=>{
-    const c = pos[f.id]; if(!c) return;
-    (f.prereq || []).forEach(g=>g.forEach(p=>{
-      const q = pos[p];
-      if(q) edges += '<path class="fpv-edge" d="M ' + (q.x + W) + ' ' + (q.y + H / 2) +
-        ' C ' + (q.x + W + 70) + ' ' + (q.y + H / 2) + ', ' + (c.x - 70) + ' ' + (c.y + H / 2) +
-        ', ' + c.x + ' ' + (c.y + H / 2) + '"/>';
-    }));
-  });
-  t.focuses.forEach(f=>{
-    const c = pos[f.id]; if(!c) return;
-    const iconUrl = f.icon ? ('/api/icon?gfx=' + encodeURIComponent(f.icon)) : (f.iconPng || '');
-    const icon = iconUrl ? '<image href="' + escapeHtml(iconUrl) + '" x="12" y="22" width="56" height="56" preserveAspectRatio="xMidYMid meet"/>' : '';
-    nodes += '<g class="fpv-node" transform="translate(' + c.x + ',' + c.y + ')">' +
-      '<rect class="card" width="' + W + '" height="' + H + '" rx="10"/>' + icon +
-      '<text x="82" y="34">' + escapeHtml(f.name || f.id) + '</text>' +
-      '<text class="cost" x="82" y="56">cost ' + escapeHtml(String(f.cost || 1)) + '</text>' +
-      '<text class="cost" x="82" y="76">' + escapeHtml(f.id) + '</text></g>';
-  });
-  svg.setAttribute('viewBox', (minX - 60) + ' ' + (minY - 60) + ' ' + (maxX - minX + 120) + ' ' + (maxY - minY + 120));
-  svg.innerHTML = edges + nodes;
 }
 async function openBackups(){
   const t = curTree();
@@ -4749,8 +4693,6 @@ document.getElementById('repairAllBtn').onclick = async ()=>{
 };
 document.getElementById('backupBtn').onclick = openBackups;
 document.getElementById('backupClose').onclick = ()=>{ document.getElementById('backupModal').classList.remove('show'); };
-document.getElementById('focusPreviewBtn').onclick = openFocusPreview;
-document.getElementById('focusPreviewClose').onclick = ()=>{ document.getElementById('focusPreview').classList.remove('show'); };
 document.getElementById('contentBtn').onclick = ()=>openContent();
 document.getElementById('contentClose').onclick = ()=>{ document.getElementById('contentModal').classList.remove('show'); };
 document.getElementById('contentSearch').addEventListener('input', e=>renderContent(e.target.value.trim().toLowerCase()));
