@@ -5251,6 +5251,69 @@ def _gfx_texture_exists(rel, layers):
     return False
 
 
+# ref: HOI4 Mod Utilities "Focus tree preview"
+def focus_tree_graph(tid):
+    """返回一棵国策树的节点与连线（只读，供预览渲染）"""
+    tid = (tid or "").strip()
+    t = TREES.get(tid)
+    if not t:
+        return {"ok": False, "msg": "没有这棵国策树：%s" % tid}
+    nodes = []
+    known = set()
+    for f in t.get("focuses") or []:
+        fid = f.get("id")
+        if not fid:
+            continue
+        known.add(fid)
+    for f in t.get("focuses") or []:
+        fid = f.get("id")
+        if not fid:
+            continue
+        try:
+            x = int(float(f.get("x") or 0))
+        except Exception:
+            x = 0
+        try:
+            y = int(float(f.get("y") or 0))
+        except Exception:
+            y = 0
+        node = {
+            "id": fid, "x": x, "y": y,
+            "icon": f.get("icon") or "",
+            "cost": f.get("cost") or "",
+            "name": LOC.get(fid, ""),
+            "desc": LOC.get(fid + "_desc", ""),
+            # prereq 是「组的列表」：组内 OR、组间 AND
+            "prereq": [g for g in (f.get("prereq") or []) if g],
+            "mutex": [m for m in (f.get("mutex") or []) if m],
+        }
+        nodes.append(node)
+    # 连线只在两边都存在于本树时才有意义（跨树前置指向别的树时略过）
+    edges = []
+    for n in nodes:
+        for grp in n["prereq"]:
+            for src in grp:
+                if src in known:
+                    edges.append({"from": src, "to": n["id"], "kind": "prereq"})
+        for src in n["mutex"]:
+            if src in known:
+                edges.append({"from": src, "to": n["id"], "kind": "mutex"})
+    return {"ok": True, "tree": tid, "count": len(nodes),
+            "nodes": nodes, "edges": edges,
+            "file": os.path.basename(t.get("file") or ""),
+            "msg": "%s：%d 个节点，%d 条连线" % (tid, len(nodes), len(edges))}
+
+
+def focus_tree_list():
+    """所有国策树（供下拉选择）"""
+    out = []
+    for tid in TREE_ORDER:
+        t = TREES.get(tid) or {}
+        out.append({"id": tid, "count": len(t.get("focuses") or []),
+                    "file": os.path.basename(t.get("file") or "")})
+    return {"ok": True, "trees": out, "count": len(out)}
+
+
 def _terrain_colors(root):
     """从 common/terrain/*.txt 读各地形类别的游戏内配色 {name: (r,g,b)}。
     mod 定义了同名类别就覆盖原版；读不到就返回空字典。"""
@@ -7662,6 +7725,11 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 self._send({"list": all_goal_icons() or sorted(ICONS.keys()),
                             "map": {g: "/api/icon?gfx=" + g for g in (all_goal_icons() or sorted(ICONS.keys()))}})
+        elif path_only == "/api/focus_trees":
+            self._send(focus_tree_list())
+        elif path_only == "/api/focus_graph":
+            _q = parse_qs(urlparse(self.path).query)
+            self._send(focus_tree_graph(_q.get("tree", [""])[0]))
         elif path_only == "/api/focus":
             qs = parse_qs(urlparse(self.path).query)
             tid = qs.get("tree", [""])[0]
