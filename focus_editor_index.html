@@ -5285,25 +5285,47 @@ async function mapRepair(){
     rows.push(['幽灵省', p.ghost_count + ' 个',
       p.ghost_count ? ('删除 definition.csv 里这些行：' + (p.ghost || []).slice(0, 10).join(', ')) : '无需处理',
       p.ghost_count > 0]);
-    stats.innerHTML = '<span class="w">可修 ' + p.ghost_count + ' 项</span>';
+    // 十字交叉：单独查一次
+    let cross = {found: 0, msg: ''};
+    try{
+      cross = await (await fetch('/api/map_repair_cross')).json();
+    }catch(e){}
+    rows.push(['十字交叉像素', (cross.found || 0) + ' 处',
+      cross.found ? ('把 2×2 的 A B / B A 解成横切或纵切；' + (cross.msg || '')) : '无需处理',
+      (cross.found || 0) > 0]);
+    stats.innerHTML = '<span class="w">幽灵省 ' + p.ghost_count + '</span>' +
+      '<span class="w">十字交叉 ' + (cross.found || 0) + '</span>';
     list.innerHTML = rows.map(([name, count, detail, canFix])=>
       '<div class="mck-row"><span class="mck-lv ' + (canFix ? 'warn' : 'info') + '">' +
       (canFix ? '可修' : '跳过') + '</span><span class="mck-main">' +
       '<div class="mck-t">' + name + ' · ' + count + '</div>' +
       '<div class="mck-d">' + escapeHtml(detail) + '</div></span>' +
-      (canFix ? '<button class="btn" id="fixGhost" style="font-size:11px">执行</button>' : '') +
+      (canFix ? '<button class="btn" data-fix="' + name + '" style="font-size:11px">执行</button>' : '') +
       '</div>').join('');
-    const btn = document.getElementById('fixGhost');
-    if(btn) btn.onclick = async ()=>{
-      if(!confirm('删除 ' + p.ghost_count + ' 个幽灵省？会改写 definition.csv（有备份）。')) return;
-      btn.disabled = true; btn.textContent = '修复中…';
-      const r = await (await fetch('/api/map_repair?act=ghost')).json();
-      if(!r.ok){ btn.textContent = '失败'; status(r.msg || '修复失败', true); return; }
-      status('已删除 ' + r.removed + ' 个幽灵省，正在重建图层…');
-      btn.textContent = '已修';
-      try{ await mapBuild(true); }catch(e){}
-      mapRepair();
-    };
+    list.querySelectorAll('[data-fix]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const kind = btn.dataset.fix;
+        if(kind === '幽灵省'){
+          if(!confirm('删除 ' + p.ghost_count + ' 个幽灵省？会改写 definition.csv（有备份）。')) return;
+          btn.disabled = true; btn.textContent = '修复中…';
+          const r = await (await fetch('/api/map_repair?act=ghost')).json();
+          if(!r.ok){ btn.textContent = '失败'; status(r.msg || '修复失败', true); return; }
+          status('已删除 ' + r.removed + ' 个幽灵省，正在重建图层…');
+          btn.textContent = '已修';
+          try{ await mapBuild(true); }catch(e){}
+          mapRepair();
+        } else {
+          if(!confirm('修复 ' + (cross.found || 0) + ' 处十字交叉？会改写 provinces.bmp（可撤销）。')) return;
+          btn.disabled = true; btn.textContent = '修复中…';
+          const r = await (await fetch('/api/map_repair_cross?apply=1')).json();
+          if(!r.ok){ btn.textContent = '失败'; status(r.msg || '修复失败', true); return; }
+          status(r.msg || '已修复');
+          btn.textContent = '已修';
+          try{ await mapBuild(true); }catch(e){}
+          mapRepair();
+        }
+      };
+    });
   }catch(e){
     list.innerHTML = '<div class="cm-empty">失败：' + escapeHtml(e.message) + '</div>';
   }

@@ -2484,6 +2484,134 @@ def _csv_path_for(root):
     return csvp, prov
 
 
+def _scan_cross(allpx, w, h):
+    """找出所有 2x2 十字模式：左上==右下 且 右上==左下 且 A!=B。返回 [(x, y, A, B)]"""
+    out = []
+    for y in range(h - 1):
+        base = y * w
+        nxt = base + w
+        for x in range(w - 1):
+            a = allpx[base + x]
+            b = allpx[base + x + 1]
+            c = allpx[nxt + x]
+            d = allpx[nxt + x + 1]
+            if a == d and b == c and a != b:
+                out.append((x, y, a, b))
+    return out
+
+
+def map_repair_cross(root=None, apply_fix=False, limit=2000):
+    """修十字交叉像素：把 2x2 的 `A B / B A` 解成 `A A / B B` 或 `A B / A B`。
+    选择依据：看 A 在上方还是左方的邻域更多，优先保持那个方向的连通。"""
+    root = _map_pick(root)
+    layers = mod_layers(root)
+    bmp, prov = _layers_find("map/provinces.bmp", layers)
+    if not bmp:
+        return {"ok": False, "msg": "找不到 provinces.bmp"}
+    if apply_fix and is_under_game(bmp):
+        return {"ok": False, "msg": "provinces.bmp 来自原版，只读"}
+    info = bmp_info(bmp)
+    if not info or info["bpp"] != 24:
+        return {"ok": False, "msg": "只支持 24 位 BMP"}
+    w, h = info["w"], info["h"]
+    allpx = bmp_read_rect(bmp, 0, 0, w, h)
+    if allpx is None:
+        return {"ok": False, "msg": "读图失败"}
+    crosses = _scan_cross(allpx, w, h)
+    if not crosses:
+        return {"ok": True, "found": 0, "fixed": 0, "msg": "没有十字交叉"}
+
+    # 决定每处怎么解
+    changes = []      # [(x, y, new_rgb)]
+    plan = {"h": 0, "v": 0, "tie": 0}
+    for (x, y, a, b) in crosses[:limit]:
+        up = allpx[(y - 1) * w + x] if y > 0 else None
+        left = allpx[y * w + (x - 1)] if x > 0 else None
+        a_up = (up == a)
+        a_left = (left == a)
+        if a_up and not a_left:
+            # A 在上方更连贯 → 纵向切：把 (x, y+1) 的 B 改成 A
+            changes.append((x, y + 1, a))
+            plan["v"] += 1
+        elif a_left and not a_up:
+            # A 在左方更连贯 → 横向切：把 (x+1, y) 的 B 改成 A
+            changes.append((x + 1, y, a))
+            plan["h"] += 1
+        else:
+            # 无法判断：默认横向（改动更集中在上方）
+            changes.append((x + 1, y, a))
+            plan["tie"] += 1
+
+    result = {"ok": True, "found": len(crosses), "planned": len(changes),
+              "plan": plan, "applied": 0}
+    if not apply_fix:
+        result["msg"] = "发现 %d 处十字交叉（横向 %d / 纵向 %d / 默认 %d），未改动" % (
+            len(crosses), plan["h"], plan["v"], plan["tie"])
+        result["sample"] = [{"x": x, "y": y} for (x, y, _c) in changes[:20]]
+        return result
+
+    # 应用：只改像素，用区块撤销
+    xs = [c[0] for c in changes]
+    ys = [c[1] for c in changes]
+    x0, x1 = max(0, min(xs)), min(w - 1, max(xs))
+    y0, y1 = max(0, min(ys)), min(h - 1, max(ys))
+    bw, bh = x1 - x0 + 1, y1 - y0 + 1
+    before = bmp_read_rect(bmp, x0, y0, bw, bh)
+    after = list(before)
+    for (cx, cy, rgb) in changes:
+        idx = (cy - y0) * bw + (cx - x0)
+        if 0 <= idx < len(after):
+            after[idx] = rgb
+    os.makedirs(MAP_UNDO_DIR, exist_ok=True)
+    seq = int(time.time() * 1000)
+    fn = os.path.join(MAP_UNDO_DIR, "cross%d.bin" % seq)
+    with open(fn, "wb") as f:
+        for (r, g, b) in before:
+            f.write(bytes((r, g, b)))
+    bmp_write_rect(bmp, x0, y0, bw, bh, after)
+    MAP_EDIT["undo"].append({"file": fn, "bmp": bmp, "x": x0, "y": y0, "w": bw, "h": bh,
+                             "count": len(changes), "kind": "cross"})
+    MAP_EDIT["redo"] = []
+    result["applied"] = len(changes)
+    result["rect"] = [x0, y0, bw, bh]
+    result["undo_depth"] = len(MAP_EDIT["undo"])
+
+    # 改像素会产生新的交叉，迭代几轮直到不再减少
+    rounds = 1
+    prev = len(crosses)
+    while rounds < 4:
+        allpx2 = bmp_read_rect(bmp, 0, 0, w, h)
+        cs2 = _scan_cross(allpx2, w, h) if allpx2 else []
+        if not cs2 or len(cs2) >= prev:
+            break
+        prev = len(cs2)
+        ch2 = []
+        for (x, y, a, b) in cs2:
+            up = allpx2[(y - 1) * w + x] if y > 0 else None
+            left = allpx2[y * w + (x - 1)] if x > 0 else None
+            ch2.append((x + 1 if (left == a or up != a) else x, y if (left == a or up != a) else y + 1, a))
+        xs2 = [c[0] for c in ch2]
+        ys2 = [c[1] for c in ch2]
+        ax0, ax1 = max(0, min(xs2)), min(w - 1, max(xs2))
+        ay0, ay1 = max(0, min(ys2)), min(h - 1, max(ys2))
+        aw, ah = ax1 - ax0 + 1, ay1 - ay0 + 1
+        bef2 = bmp_read_rect(bmp, ax0, ay0, aw, ah)
+        aft2 = list(bef2)
+        for (cx, cy, rgb) in ch2:
+            _i = (cy - ay0) * aw + (cx - ax0)
+            if 0 <= _i < len(aft2):
+                aft2[_i] = rgb
+        bmp_write_rect(bmp, ax0, ay0, aw, ah, aft2)
+        result["applied"] += len(ch2)
+        rounds += 1
+
+    result["rounds"] = rounds
+    result["remaining"] = prev
+    result["msg"] = "已修复 %d 处十字交叉（%d 轮），剩余约 %d 处（图层需要重建）" % (
+        result["applied"], rounds, prev)
+    return result
+
+
 def map_repair_preview(root=None):
     """列出能自动修的问题及其影响面（不改文件）"""
     root = _map_pick(root)
@@ -6285,6 +6413,10 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/log":
             _q = parse_qs(urlparse(self.path).query)
             self._send(read_error_log((_q.get("path", [""])[0] or None)))
+        elif path_only == "/api/map_repair_cross":
+            _q = parse_qs(urlparse(self.path).query)
+            _ap = _q.get("apply", ["0"])[0] in ("1", "true", "yes")
+            self._send(map_repair_cross(_q.get("root", [None])[0], _ap))
         elif path_only == "/api/map_repair":
             _q = parse_qs(urlparse(self.path).query)
             _act = _q.get("act", ["preview"])[0]
