@@ -2696,7 +2696,79 @@ def map_repair_ghost(root=None):
             "msg": "已删除 %d 个幽灵省，图层需要重建" % len(removed)}
 
 
+# v1.0.9 playset 编辑器
+PLAYSET_FILE = os.path.join(WORK, "playset.json")
+
+
+def playset_get():
+    """返回当前叠加链（按启动器加载顺序）"""
+    layers = []
+    for r in ROOTS:
+        ab = os.path.abspath(r)
+        desc = _mod_descriptor(ab)
+        layers.append({
+            "path": ab,
+            "name": desc["name"] or os.path.basename(ab),
+            "has_descriptor": os.path.exists(os.path.join(ab, "descriptor.mod")),
+            "has_map": os.path.exists(os.path.join(ab, "map", "provinces.bmp")),
+            "replace_count": len(desc["replace"]),
+            "deps": desc["deps"],
+        })
+    return {"ok": True, "layers": layers, "game": GAME or "",
+            "saved": os.path.exists(PLAYSET_FILE),
+            "order": "列表从下往上覆盖：越靠下加载越晚，优先级越高"}
+
+
+def playset_validate(paths):
+    """校验一组 mod 路径，返回 (可用列表, 问题列表)"""
+    good, bad = [], []
+    for p in paths or []:
+        ab = os.path.abspath(str(p or ""))
+        if not os.path.isdir(ab):
+            bad.append({"path": ab, "why": "目录不存在"})
+            continue
+        has_desc = os.path.exists(os.path.join(ab, "descriptor.mod"))
+        has_nf = os.path.isdir(os.path.join(ab, "common", "national_focus"))
+        has_any = os.path.isdir(os.path.join(ab, "common")) or os.path.isdir(os.path.join(ab, "map"))
+        if not (has_desc or has_nf or has_any):
+            bad.append({"path": ab, "why": "不像 mod 根目录（无 descriptor.mod / common / map）"})
+            continue
+        good.append(ab)
+    return good, bad
+
+
+def playset_save(paths):
+    """保存播放集到 work/playset.json。重启后生效（运行中切换会打乱已加载的状态）。"""
+    good, bad = playset_validate(paths)
+    try:
+        os.makedirs(WORK, exist_ok=True)
+        io.open(PLAYSET_FILE, "w", encoding="utf-8", newline="").write(
+            json.dumps({"order": good, "saved": time.strftime("%Y-%m-%d %H:%M:%S")},
+                       ensure_ascii=False, indent=1))
+    except Exception as e:
+        return {"ok": False, "msg": "保存失败：%s" % e}
+    _LAYERS_CACHE.clear()
+    return {"ok": True, "count": len(good), "bad": bad,
+            "msg": "已保存 %d 个 mod（顺序：越靠下优先级越高）。重启编辑器后生效。" % len(good)}
+
+
+def playset_load_saved():
+    """启动时读 playset.json（没有 --mod 参数时使用）"""
+    try:
+        if not os.path.exists(PLAYSET_FILE):
+            return []
+        d = json.loads(io.open(PLAYSET_FILE, encoding="utf-8").read())
+        out = []
+        for p in (d.get("order") or []):
+            if p and os.path.isdir(p) and p not in out:
+                out.append(p)
+        return out
+    except Exception:
+        return []
+
+
 def map_analysis(root=None, limit=60, min_px=800, only_land=True):
+
 
     """省份排名：按面积（像素数）列出大省，附州/战略区/地形。
     数据直接来自图层缓存的 prov_index.json，不重新扫像素。"""
@@ -6517,6 +6589,8 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send(map_repair_ghost(_q.get("root", [None])[0]))
             else:
                 self._send(map_repair_preview(_q.get("root", [None])[0]))
+        elif path_only == "/api/playset":
+            self._send(playset_get())
         elif path_only == "/api/map_analysis":
             _q = parse_qs(urlparse(self.path).query)
             try:
@@ -6776,6 +6850,12 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 ok, msg = load_mod_root(ds[0])
                 self._send({"ok": ok, "msg": msg})
+        elif self.path == "/api/playset_save":
+            self._send(playset_save(body.get("paths") or []))
+        elif self.path == "/api/playset_pick":
+            ds = detect_mods()
+            self._send({"ok": bool(ds), "path": ds[0] if ds else "",
+                        "msg": "" if ds else "没有选择目录"})
         elif self.path == "/api/load_mod":
             ok, msg = load_mod_root(body.get("path"))
             self._send({"ok": ok, "msg": msg})
@@ -7039,7 +7119,7 @@ def main():
     ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args()
     GAME = args.game
-    roots = args.mod or []   # 不带参数：先打开页面，再在页面里选择 mod
+    roots = args.mod or playset_load_saved()   # 没传 --mod 时用上次保存的播放集
     load_game_loc()
     total = 0
     for r in roots:
