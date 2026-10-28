@@ -573,6 +573,8 @@
   .ft-node text{fill:#c8d0d4;font-size:10px;text-anchor:middle;pointer-events:none}
   .ft-edge{stroke:#5a656b;stroke-width:2;fill:none}
   .ft-edge.mutex{stroke:#a06060;stroke-dasharray:5 4}
+  /* ---------- v1.9.0 矢量省界 ---------- */
+  #mapEdgeCanvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:4}
   /* ---------- v1.2.1 选中省份高亮 ---------- */
   #mapSelCanvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:5}
   /* ---------- v1.1.0 右侧 Tab ---------- */
@@ -1282,6 +1284,7 @@
             <img id="mapEdges" alt="">
           </div>
           <div id="mapHud" style="display:none"><div id="mapHudText"></div></div>
+          <canvas id="mapEdgeCanvas"></canvas>
           <canvas id="mapSelCanvas"></canvas>
         </div><!-- /mapStageWrap -->
         <div id="mapSide">
@@ -1303,7 +1306,7 @@
               <label><input type="checkbox" id="mapLState">州<input type="range" class="lt-op" data-op="state" min="0" max="100" value="85" title="州 不透明度"></label>
             </div>
             <div class="lt-group"><div class="lt-title">基础</div>
-              <label><input type="checkbox" id="mapLEdges" checked>省界<input type="range" class="lt-op" data-op="edges" min="0" max="100" value="80" title="省界 不透明度"></label>
+              <label><input type="checkbox" id="mapLEdges">省界<input type="range" class="lt-op" data-op="edges" min="0" max="100" value="80" title="省界 不透明度"></label>
               <label><input type="checkbox" id="mapLBase" checked>底图<input type="range" class="lt-op" data-op="base" min="0" max="100" value="100" title="底图 不透明度"></label>
               <label>透明度<input type="range" id="mapOpacity" min="20" max="100" value="85"></label>
             </div>
@@ -6502,6 +6505,106 @@ function makePannable(svg, body){
   window.evLoadToEditor = function(eid){ bindEd(); loadEvent(eid); };
   if(document.readyState !== 'loading') bindEd();
   else document.addEventListener('DOMContentLoaded', bindEd);
+})();
+
+// v1.9.0 矢量省界
+// 位图边界放大 8 倍会变成 8px 粗的背景带；这里改用 canvas 按「屏幕像素」画 1px 线，
+// 任何缩放级别下边界粗细都恒定，这是位图放大给不了的。
+(function(){
+  let pending = null, lastDraw = 0;
+
+  function edgeCanvas(){
+    const c = document.getElementById('mapEdgeCanvas');
+    const wrap = document.getElementById('mapStageWrap');
+    if(!c || !wrap) return null;
+    const r = wrap.getBoundingClientRect();
+    const z = uiZoom();
+    const w = Math.max(1, Math.round(r.width / z));
+    const h = Math.max(1, Math.round(r.height / z));
+    if(c.width !== w || c.height !== h){ c.width = w; c.height = h; }
+    return { c: c, ctx: c.getContext('2d'), w: w, h: h };
+  }
+
+  function draw(){
+    const sc = edgeCanvas();
+    if(!sc) return;
+    const {ctx, w, h} = sc;
+    ctx.clearRect(0, 0, w, h);
+    if(!MAP.ready || !MAP.idCanvas) return;
+
+    const k = MAP.k;
+    const idc = MAP.idCanvas.getContext('2d');
+    const x0 = Math.max(0, Math.floor(-MAP.x / k) - 1);
+    const y0 = Math.max(0, Math.floor(-MAP.y / k) - 1);
+    const x1 = Math.min(MAP.w, Math.ceil((w - MAP.x) / k) + 1);
+    const y1 = Math.min(MAP.h, Math.ceil((h - MAP.y) / k) + 1);
+    const cw = x1 - x0, ch = y1 - y0;
+    if(cw <= 0 || ch <= 0) return;
+    let data;
+    try { data = idc.getImageData(x0, y0, cw, ch).data; } catch(e) { return; }
+
+    const at = function (x, y) {
+      if (x < 0 || y < 0 || x >= cw || y >= ch) return -1;
+      const i = (y * cw + x) * 4;
+      return (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
+    };
+
+    // 先标出边界像素，再「连相邻的两个边界像素」成折线。
+    // 只画孤立点的话，缩放越大点间距越大，看起来就是虚线。
+    const isEdge = new Uint8Array(cw * ch);
+    for(let y = 0; y < ch; y++){
+      for(let x = 0; x < cw; x++){
+        const v = at(x, y);
+        if(v === -1) continue;
+        if(at(x - 1, y) === v && at(x + 1, y) === v &&
+           at(x, y - 1) === v && at(x, y + 1) === v) continue;
+        isEdge[y * cw + x] = 1;
+      }
+    }
+
+    // 线宽固定 1 屏幕像素：任何缩放级别下边界粗细都一样，这是位图给不了的
+    ctx.strokeStyle = 'rgba(238,242,236,0.95)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    const sx = function(x){ return Math.round((x0 + x) * k + MAP.x) + 0.5; };
+    const sy = function(y){ return Math.round((y0 + y) * k + MAP.y) + 0.5; };
+    for(let y = 0; y < ch; y++){
+      for(let x = 0; x < cw; x++){
+        if(!isEdge[y * cw + x]) continue;
+        if(x + 1 < cw && isEdge[y * cw + x + 1]){
+          ctx.moveTo(sx(x), sy(y));
+          ctx.lineTo(sx(x + 1), sy(y));
+        }
+        if(y + 1 < ch && isEdge[(y + 1) * cw + x]){
+          ctx.moveTo(sx(x), sy(y));
+          ctx.lineTo(sx(x), sy(y + 1));
+        }
+      }
+    }
+    ctx.stroke();
+  }
+
+  // 拖动时先清掉（避免错位），停手后再重算
+  window.mapDrawVectorEdges = function(immediate){
+    const now = Date.now();
+    if(pending) clearTimeout(pending);
+    if(immediate || now - lastDraw > 120){
+      lastDraw = now;
+      draw();
+      return;
+    }
+    pending = setTimeout(()=>{ pending = null; lastDraw = Date.now(); draw(); }, 90);
+  };
+
+  // 每帧 mapApply 后跟随；缩放时立即，平移时节流
+  const orig = window.mapApply;
+  if(typeof orig === 'function'){
+    window.mapApply = function(){
+      orig.apply(this, arguments);
+      window.mapDrawVectorEdges(false);
+    };
+  }
+  window.addEventListener('resize', ()=> window.mapDrawVectorEdges(true));
 })();
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */
