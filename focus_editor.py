@@ -3683,6 +3683,23 @@ def map_build(force=False, root=None):
     # 3.6) 战略区
     prov2region, region_list = _strategic_regions(root)
 
+    # 3.7) 地形：用游戏自己的配色，再叠 terrain.bmp 的明暗做出纹理感
+    _tcols = {}
+    try:
+        _tcols = _terrain_colors(root)
+    except Exception as _e:
+        print("读地形配色失败:", _e)
+    _shade = None
+    try:
+        _tbmp, _tprov = _layers_find("map/terrain.bmp", mod_layers(root))
+        if _tbmp and os.path.exists(_tbmp):
+            with Image.open(_tbmp) as _tim:
+                if _tim.size == (w, h):
+                    _shade = _tim.convert("L").tobytes()
+                    print("  地形明暗纹理: 已载入")
+    except Exception as _e:
+        print("读 terrain.bmp 失败:", _e)
+
     # 4) 一遍像素：ids、质心累加
     n = w * h
     ids = [0] * n
@@ -3747,12 +3764,12 @@ def map_build(force=False, root=None):
         pid = ids[i]
         c = prov_color.get(pid)
         if c is None:
-            c = _hsv_hex(pid, 0.5, 0.9) if pid else bytes((24, 28, 26))
+            c = _hsv_hex(pid, 0.72, 0.96) if pid else bytes((24, 28, 26))
             prov_color[pid] = c
         sid = prov2state.get(pid, 0)
         sc = state_color.get(sid)
         if sc is None:
-            sc = _hsv_hex(sid + 7, 0.42, 0.8) if sid else bytes((30, 34, 32))
+            sc = _hsv_hex(sid + 7, 0.62, 0.92) if sid else bytes((30, 34, 32))
             state_color[sid] = sc
         o = i * 3
         provbuf[o:o + 3] = c
@@ -3766,9 +3783,22 @@ def map_build(force=False, root=None):
         tname = prov2terrain.get(pid, "")
         tc = terr_color.get(tname)
         if tc is None:
-            tc = _hsv_hex(zlib.crc32(tname.encode("utf-8")) % 997, 0.35, 0.72) if tname else bytes((26, 30, 28))
+            _base = _tcols.get(tname)
+            if _base:
+                tc = bytes(_base)
+            elif tname:
+                tc = _hsv_hex(zlib.crc32(tname.encode("utf-8")) % 997, 0.35, 0.72)
+            else:
+                tc = bytes((26, 30, 28))
             terr_color[tname] = tc
-        terrbuf[o:o + 3] = tc
+        if _shade is not None:
+            # 明暗系数 0.72~1.18，让同一种地形也有起伏感
+            _f = 0.72 + (_shade[i] / 255.0) * 0.46
+            terrbuf[o] = min(255, int(tc[0] * _f))
+            terrbuf[o + 1] = min(255, int(tc[1] * _f))
+            terrbuf[o + 2] = min(255, int(tc[2] * _f))
+        else:
+            terrbuf[o:o + 3] = tc
         # 大洲
         con = prov2continent.get(pid, 0)
         cc2 = cont_color.get(con)
@@ -3803,9 +3833,10 @@ def map_build(force=False, root=None):
                 edge = True
             if edge:
                 o = i * 3
-                edgebuf[o] = 250
-                edgebuf[o + 1] = 250
-                edgebuf[o + 2] = 250
+                # 淡灰而不是纯白：放大后边界线仍然可见但不会压过色块
+                edgebuf[o] = 205
+                edgebuf[o + 1] = 209
+                edgebuf[o + 2] = 203
 
     # 6.5) 国家边界：相邻省属于不同 owner 的地方压深一档
     for y in range(h):
@@ -4120,6 +4151,42 @@ def _map_ids_from_cache(dirp):
         o = i * 3
         a[i] = (raw[o] << 16) | (raw[o + 1] << 8) | raw[o + 2]
     return ids, w, h, raw
+
+
+def _terrain_colors(root):
+    """从 common/terrain/*.txt 读各地形类别的游戏内配色 {name: (r,g,b)}。
+    mod 定义了同名类别就覆盖原版；读不到就返回空字典。"""
+    out = {}
+    for base in reversed(mod_layers(root)):      # 原版 → ... → mod（后覆盖前）
+        d = os.path.join(base or "", "common", "terrain")
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+            try:
+                text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig",
+                                              errors="replace").read())
+            except Exception:
+                continue
+            m = re.search(r'(?m)^categories\s*=\s*\{', text)
+            if not m:
+                continue
+            b = text.find("{", m.end() - 1)
+            e = brace_match(text, b)
+            if e <= b:
+                continue
+            body = text[b + 1:e - 1]
+            # 只取一级子块：行首单个 tab 缩进的 name = {
+            for cm in re.finditer(r'(?m)^\t([a-zA-Z_][\w]*)\s*=\s*\{', body):
+                name = cm.group(1)
+                cb = body.find("{", cm.end() - 1)
+                ce = brace_match(body, cb)
+                if ce <= cb:
+                    continue
+                sub = body[cb + 1:ce - 1]
+                col = re.search(r'color\s*=\s*\{\s*(\d+)\s+(\d+)\s+(\d+)\s*\}', sub)
+                if col:
+                    out[name] = (int(col.group(1)), int(col.group(2)), int(col.group(3)))
+    return out
 
 
 def map_integrity(root=None, limit=200):
