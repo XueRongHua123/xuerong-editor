@@ -5617,6 +5617,15 @@ async function mapLoadMeta(root){
     }
     metaEl.style.color = '';
     MAP.meta = d.meta || {};
+    // 省特别多时（1 万以上），「省色块」缩略看就是一片噪点，默认改用地形视图
+    if(!MAP._viewInited && (MAP.meta.provinces || 0) > 8000){
+      MAP._viewInited = true;
+      const pv = document.getElementById('mapLProv');
+      const tv = document.getElementById('mapLTerrain');
+      if(pv && tv){ pv.checked = false; tv.checked = true; }
+      status('省数较多（' + MAP.meta.provinces + '），默认显示地形视图；需要看省时可勾「省色块」');
+    }
+    if(!MAP._viewInited) MAP._viewInited = true;
     MAP.w = MAP.meta.w || MAP.w;
     MAP.h = MAP.meta.h || MAP.h;
     await mapLoadAssets();
