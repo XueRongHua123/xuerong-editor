@@ -4443,6 +4443,97 @@ def _apply_hillshade(img, root, w, h, ocean_mask=None):
     return out
 
 
+def _terrain_tex_map(root):
+    """terrain.txt 的 terrain_N -> {color索引: (type, texture编号)}"""
+    idx2type, idx2tex = {}, {}
+    for base in reversed(mod_layers(root)):
+        d = os.path.join(base or "", "common", "terrain")
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+            try:
+                text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig",
+                                              errors="replace").read())
+            except Exception:
+                continue
+            for m in re.finditer(r'(?m)^\s*([A-Za-z_][\w]*)\s*=\s*\{', text):
+                b = text.find("{", m.end() - 1)
+                e = brace_match(text, b)
+                if e <= b:
+                    continue
+                body = text[b + 1:e - 1]
+                typ = re.search(r'type\s*=\s*(\w+)', body)
+                col = re.search(r'color\s*=\s*\{\s*(\d+)\s*\}', body)
+                tex = re.search(r'texture\s*=\s*(\d+)', body)
+                if typ and col and tex:
+                    k = int(col.group(1))
+                    idx2type[k] = typ.group(1)
+                    idx2tex[k] = int(tex.group(1))
+    return idx2type, idx2tex
+
+
+def _apply_terrain_texture(img, root, w, h, tmap, ids):
+    """用 map/terrain/atlas0.dds 的贴图亮度调制地形色明暗。
+
+    只调亮度不混色：贴图本身是灰色调细节层，直接 alpha 混合会把地形色洗掉。
+    海洋/湖泊跳过——atlas 里没有水面贴图（借用 desert 的），会把海面弄成斑块。
+    纹理起点按省号哈希偏移，相邻省的花纹不会对齐。"""
+    try:
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None
+        atlas_path, _ = _layers_find("map/terrain/atlas0.dds", mod_layers(root))
+        if not atlas_path:
+            _g = os.path.join(GAME or "", "map", "terrain", "atlas0.dds")
+            atlas_path = _g if os.path.exists(_g) else None
+        if not atlas_path or not tmap:
+            return img
+        with Image.open(atlas_path) as aim:
+            atlas = aim.convert("RGBA")
+        TILE = atlas.width // 8
+        if TILE <= 0:
+            return img
+        idx2type, idx2tex = _terrain_tex_map(root)
+        if not idx2tex:
+            return img
+        apx = atlas.load()
+        traw = tmap.tobytes()
+        src = img.tobytes()
+        out = bytearray(src)
+        cache = {}
+        water = ("ocean", "lakes")
+        n = w * h
+        for i in range(n):
+            ti = traw[i]
+            typ = idx2type.get(ti)
+            m = idx2tex.get(ti)
+            if m is None or m > 63 or typ in water:
+                continue
+            pid = ids[i] if ids else 0
+            ax = (i % w + (pid * 37)) % TILE
+            ay = (i // w + (pid * 71)) % TILE
+            key = (m, ax, ay)
+            tc = cache.get(key)
+            if tc is None:
+                tc = apx[(m % 8) * TILE + ax, (m // 8) * TILE + ay]
+                if len(cache) < 300000:
+                    cache[key] = tc
+            luma = tc[0] * 0.30 + tc[1] * 0.59 + tc[2] * 0.11
+            f = 0.74 + (luma / 255.0) * 0.56
+            a = tc[3] / 255.0
+            f = 1.0 + (f - 1.0) * (0.50 + a * 0.50)
+            o = i * 3
+            r = src[o] * f
+            g = src[o + 1] * f
+            b = src[o + 2] * f
+            out[o] = 255 if r > 255 else int(r)
+            out[o + 1] = 255 if g > 255 else int(g)
+            out[o + 2] = 255 if b > 255 else int(b)
+        return Image.frombytes("RGB", (w, h), bytes(out))
+    except Exception as e:
+        print("地形贴图失败，保留纯色:", e)
+        return img
+
+
 def _terrain_index_trusted(root, layers):
     """terrain.bmp 是否与 provinces.bmp 同源。
     不同源说明 mod 换了地图却没换地形索引图，用它着色会得到与地图无关的分布。"""
@@ -4489,6 +4580,7 @@ def _render_terrain(root, w, h, prov2terrain):
 
         ocean_mask = tmap.convert("L").point(
             lambda v: 255 if idx2type.get(v) in ("ocean", "lakes") else 0)
+        base_rgb = _apply_terrain_texture(base_rgb, root, w, h, tmap, None)
         return _apply_hillshade(base_rgb, root, w, h, ocean_mask)
     except Exception as e:
         print("地形渲染失败，回退纯色:", e)
