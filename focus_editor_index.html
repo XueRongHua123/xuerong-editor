@@ -5796,12 +5796,36 @@ async function mapRepair(){
     return n;
   }
 
+  // v1.8.0 细化预览的形状叠层（复用 mapSelCanvas）
+  window.mapDrawRefine = function (parts) {
+    const c = document.getElementById('mapSelCanvas');
+    if (!c || !MAP.ready) return;
+    const ctx = c.getContext('2d');
+    const colors = ['rgba(255,90,90,.78)','rgba(90,200,120,.78)','rgba(90,150,250,.78)',
+                    'rgba(250,200,80,.78)','rgba(200,120,240,.78)','rgba(120,220,220,.78)',
+                    'rgba(230,150,90,.78)','rgba(150,150,90,.78)'];
+    const px = Math.max(1, MAP.k);
+    (parts || []).forEach(function (p, i) {
+      const bb = p.bbox || [0, 0];
+      const bx = bb[0], by = bb[1];
+      ctx.fillStyle = colors[i % colors.length];
+      (p.pts || []).forEach(function (v) {
+        const rx = Math.floor(v / 100000), ry = v % 100000;
+        const cx = (bx + rx) * MAP.k + MAP.x;
+        const cy = (by + ry) * MAP.k + MAP.y;
+        if (cx < -4 || cy < -4 || cx > c.width + 4 || cy > c.height + 4) return;
+        ctx.fillRect(cx, cy, px, px);
+      });
+    });
+  };
+
   window.mapRenderSelection = function () {
     const sc = selCanvas();
     if (!sc) return;
     const ctx = sc.ctx;
     ctx.clearRect(0, 0, sc.w, sc.h);
     if (!MAP.ready) return;
+    if (window.REFINE_PREVIEW && REFINE_PREVIEW.parts) window.mapDrawRefine(REFINE_PREVIEW.parts);
     const sel = Array.isArray(MAP.sel) ? MAP.sel : [];
     const base = Math.max(1, Math.round(MAP.k * 1.4));
     sel.forEach(function (pid) {
@@ -5847,7 +5871,9 @@ async function mapRepair(){
       lastPid = pid; lastK = r.k;
       const sizes = (r.parts || []).map(p=>p.px).sort((a,b)=>b-a);
       rfStat('省 ' + pid + ' 切成 ' + r.k + ' 块，面积 ' + sizes.join(' / ') +
-             '（共 ' + r.total + ' 像素）');
+             '（共 ' + r.total + ' 像素）· 形状已画到地图上');
+      window.REFINE_PREVIEW = r;
+      if (window.mapRenderSelection) window.mapRenderSelection();
       document.getElementById('rfApply').disabled = false;
     }catch(e){ rfStat('预览失败：' + e.message, true); }
   }
@@ -5868,6 +5894,8 @@ async function mapRepair(){
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({pid: pid, k: k})})).json();
       if(!r.ok){ rfStat(r.msg || '应用失败', true); btn.disabled = false; return; }
+      window.REFINE_PREVIEW = null;
+      if (window.mapRenderSelection) window.mapRenderSelection();
       rfStat(r.msg + '，正在重建图层…');
       status(r.msg || '已细化');
       previewOk = false;
@@ -5885,6 +5913,8 @@ async function mapRepair(){
     document.getElementById('rfK').addEventListener('input', ()=>{
       previewOk = false;
       document.getElementById('rfApply').disabled = true;
+      window.REFINE_PREVIEW = null;
+      if (window.mapRenderSelection) window.mapRenderSelection();
     });
   }
   window.mapBindRefine = rfBind;
