@@ -5314,6 +5314,129 @@ def focus_tree_list():
     return {"ok": True, "trees": out, "count": len(out)}
 
 
+# ref: HOI4 Mod Utilities "Event tree preview"
+_EVENT_GRAPH_CACHE = {}
+
+
+def _event_block(text, kind_kw):
+    """取出所有 xxx_event = { ... } 块：(id, body)"""
+    out = []
+    for m in re.finditer(r'(?m)^\s*([a-z_]*_event)\s*=\s*\{', text):
+        b = text.find("{", m.end() - 1)
+        e = brace_match(text, b)
+        if e <= b:
+            continue
+        body = text[b + 1:e - 1]
+        eid = re.search(r'(?m)^\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', body)
+        if not eid:
+            continue
+        out.append((eid.group(1), body, m.group(1)))
+    return out
+
+
+def _event_fire_targets(body):
+    """事件体里触发的其它事件 → [(target, where)]，where ∈ option / after / immediate"""
+    res = []
+    KINDS = r'(?:country_event|news_event|state_event)'
+    # 先按块归类：option / after / immediate
+    zones = []
+    for key in ("option", "after", "immediate"):
+        for m in re.finditer(r'(?m)^\s*' + key + r'\s*=\s*\{', body):
+            b = body.find("{", m.end() - 1)
+            e = brace_match(body, b)
+            if e > b:
+                zones.append((b, e, key))
+    zones.sort()
+
+    def zone_of(pos):
+        for b, e, k in zones:
+            if b <= pos < e:
+                return k
+        return "other"
+
+    # 两种写法：块式 { id = X } 与简写 = X
+    for m in re.finditer(KINDS + r'\s*=\s*\{', body):
+        b = body.find("{", m.end() - 1)
+        e = brace_match(body, b)
+        if e <= b:
+            continue
+        sub = body[b + 1:e - 1]
+        tid = re.search(r'(?m)^\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', sub)
+        if tid:
+            res.append((tid.group(1), zone_of(m.start())))
+    for m in re.finditer(KINDS + r'\s*=\s*"?([A-Za-z0-9_.\-]+)"?', body):
+        tid = m.group(1)
+        if tid in ("yes", "no"):
+            continue
+        res.append((tid, zone_of(m.start())))
+    return res
+
+
+def event_graph(ns="", root=None):
+    """某个事件命名空间的树。ns 为空时返回所有命名空间概览。"""
+    root = _map_pick(root)
+    ns = (ns or "").strip()
+    key = (os.path.abspath(root or ""), ns)
+    hit = _EVENT_GRAPH_CACHE.get(key)
+    if hit:
+        return hit
+
+    events = {}
+    d = os.path.join(root or "", "events")
+    if os.path.isdir(d):
+        for _dp, _dn, files in os.walk(d):
+            for fn in sorted(files):
+                if not fn.endswith(".txt"):
+                    continue
+                try:
+                    text = strip_comments(io.open(os.path.join(_dp, fn), encoding="utf-8-sig",
+                                                  errors="replace").read())
+                except Exception:
+                    continue
+                for eid, body, kind in _event_block(text, "event"):
+                    events[eid] = {"id": eid, "kind": kind, "body": body,
+                                   "file": os.path.relpath(os.path.join(_dp, fn), root)}
+
+    # 命名空间：优先 ns 前缀（X.1 里的 X），没有点号的按整个 id 算
+    spaces = {}
+    for eid in events:
+        s = eid.split(".")[0] if "." in eid else eid
+        spaces.setdefault(s, []).append(eid)
+
+    if not ns:
+        out = {"ok": True, "spaces": [{"id": k, "count": len(v)} for k, v in
+                                      sorted(spaces.items(), key=lambda kv: -len(kv[1]))],
+               "count": len(spaces), "events": len(events),
+               "msg": "%d 个事件，分属 %d 个命名空间" % (len(events), len(spaces))}
+        _EVENT_GRAPH_CACHE[key] = out
+        return out
+
+    ids = set(spaces.get(ns) or [])
+    if not ids:
+        return {"ok": False, "msg": "没有命名空间 %s 的事件" % ns}
+
+    nodes, edges = [], []
+    for eid in sorted(ids):
+        ev = events[eid]
+        nodes.append({"id": eid, "kind": ev["kind"], "file": ev["file"],
+                      "name": LOC.get(eid + ".t", "") or LOC.get(eid + ".title", ""),
+                      "text": "#" + str(len(nodes) + 1)})
+        for tid, where in _event_fire_targets(ev["body"]):
+            edges.append({"from": eid, "to": tid, "where": where,
+                          "external": tid not in ids})
+    # 外部引用也画成节点（灰色），方便看出跳到别处
+    ext = sorted({e["to"] for e in edges if e["external"]})
+    for tid in ext:
+        nodes.append({"id": tid, "kind": "external", "file": "",
+                      "name": LOC.get(tid + ".t", ""), "text": ""})
+    out = {"ok": True, "ns": ns, "count": len(nodes), "edges": len(edges),
+           "nodes": nodes, "edges": edges,
+           "msg": "%s：%d 个事件，%d 条触发，%d 个外部引用" % (
+               ns, len(ids), len(edges), len(ext))}
+    _EVENT_GRAPH_CACHE[key] = out
+    return out
+
+
 def _terrain_colors(root):
     """从 common/terrain/*.txt 读各地形类别的游戏内配色 {name: (r,g,b)}。
     mod 定义了同名类别就覆盖原版；读不到就返回空字典。"""
@@ -7725,6 +7848,11 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 self._send({"list": all_goal_icons() or sorted(ICONS.keys()),
                             "map": {g: "/api/icon?gfx=" + g for g in (all_goal_icons() or sorted(ICONS.keys()))}})
+        elif path_only == "/api/event_spaces":
+            self._send(event_graph("", None))
+        elif path_only == "/api/event_graph":
+            _q = parse_qs(urlparse(self.path).query)
+            self._send(event_graph(_q.get("ns", [""])[0], _q.get("root", [None])[0]))
         elif path_only == "/api/focus_trees":
             self._send(focus_tree_list())
         elif path_only == "/api/focus_graph":
