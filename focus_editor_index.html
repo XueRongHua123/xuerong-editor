@@ -607,6 +607,7 @@
   #mapStageWrap.dragging{cursor:grabbing}
   #mapStack{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
   #mapStack img{position:absolute;left:0;top:0;image-rendering:pixelated;pointer-events:none}
+  #mapStack.smooth img{image-rendering:auto}
   #mapHud{position:absolute;left:10px;top:10px;z-index:3;background:rgba(12,14,12,.82);border:1px solid var(--line);
     border-radius:8px;padding:7px 11px;font-size:11.5px;color:var(--text);line-height:1.6;pointer-events:auto;
     min-width:170px}
@@ -5578,7 +5579,7 @@ async function mapLoadAssets(){
   set('mapContinent', 'continent.png', 0.8);
   set('mapProv', 'province.png', 0.85);
   set('mapState', 'state.png', 0.62);
-  set('mapEdges', 'edges.png', 0.35);
+  set('mapEdges', 'edges.png', 0.7);
   document.getElementById('mapBase').style.width = (MAP.w / 2) + 'px';
   document.getElementById('mapBase').style.height = (MAP.h / 2) + 'px';
   document.getElementById('mapBase').style.transformOrigin = '0 0';
@@ -5643,6 +5644,9 @@ function mapApplyLayers(){
 function mapApply(){
   const stack = document.getElementById('mapStack');
   stack.style.transform = 'translate(' + MAP.x + 'px,' + MAP.y + 'px) scale(' + MAP.k + ')';
+  // 放大到 1.4 倍以上改用插值渲染：边界不再是一格一格的楼梯，整体观感顺滑
+  // 1:1 及以下保持像素锐利，方便看单像素细节（涂色/描边时用）
+  stack.classList.toggle('smooth', MAP.k > 1.4);
 }
 
 function mapFit(){
@@ -5656,8 +5660,13 @@ function mapFit(){
 }
 
 function mapScreenToImage(clientX, clientY){
+  // getBoundingClientRect 返回的是「视觉像素」，而 MAP.x/MAP.k 用的是 CSS 像素。
+  // 界面字号档位用的是 body{zoom}，缩放过时必须先除掉 uiZoom，否则点击会整体偏移
+  // （表现就是：点在陆地上，右边显示的是旁边海洋的省）。
+  const z = uiZoom();
   const r = document.getElementById('mapStageWrap').getBoundingClientRect();
-  return {x: (clientX - r.left - MAP.x) / MAP.k, y: (clientY - r.top - MAP.y) / MAP.k};
+  return {x: ((clientX - r.left) / z - MAP.x) / MAP.k,
+          y: ((clientY - r.top) / z - MAP.y) / MAP.k};
 }
 
 function mapProvAt(imgX, imgY){
