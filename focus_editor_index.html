@@ -529,6 +529,23 @@
   .lt-group label > span, .lt-group label{text-overflow:ellipsis}
   .lt-op:hover,.lt-group label.on .lt-op{opacity:1}
   .lt-group label{justify-content:flex-start}
+  /* ---------- v1.5.0 事件树预览 ---------- */
+  #evModal{position:fixed;inset:0;z-index:123;display:none;place-items:center;
+    background:rgba(8,10,9,.74);backdrop-filter:blur(3px)}
+  #evModal.show{display:grid}
+  #evCard{width:min(1400px,calc(100% - 40px));height:calc(100% - 60px);display:flex;flex-direction:column;
+    background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:var(--shadow)}
+  #evHead{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);flex:0 0 auto}
+  #evBody{flex:1;overflow:auto;background:#14171a}
+  #evSvg{display:block}
+  .ev-node rect{fill:#232a2e;stroke:#4a555c;stroke-width:2;rx:6}
+  .ev-node:hover rect{stroke:var(--accent)}
+  .ev-node.ext rect{fill:#1c2024;stroke:#3a4248;stroke-dasharray:4 3}
+  .ev-node text{fill:#c8d0d4;font-size:10px;pointer-events:none}
+  .ev-edge{stroke:#5a656b;stroke-width:1.6;fill:none}
+  .ev-edge.after{stroke:#c09040;stroke-dasharray:5 4}
+  .ev-edge.immediate{stroke:#5080a0;stroke-dasharray:2 3}
+  .ev-edge.external{stroke:#6a5a7a;stroke-dasharray:5 4}
   /* ---------- v1.4.0 国策树预览 ---------- */
   #ftModal{position:fixed;inset:0;z-index:122;display:none;place-items:center;
     background:rgba(8,10,9,.74);backdrop-filter:blur(3px)}
@@ -883,6 +900,7 @@
       <input id="search" placeholder="搜索焦点 id / 名称...">
       <div id="searchHits"></div>
       <div class="mp-acts" style="padding:4px 0"><button class="btn" id="ftOpen" style="width:100%;background:var(--panel2);border:1px solid var(--line2);height:30px">图形预览</button></div>
+      <div class="mp-acts" style="padding:2px 0 6px"><button class="btn" id="evOpen" style="width:100%;background:var(--panel2);border:1px solid var(--line2);height:30px">事件树预览</button></div>
       <div id="treeList" style="max-height:300px;overflow:auto"></div>
     </details>
     <details open>
@@ -1121,6 +1139,19 @@
           <button class="btn" id="ftClose">关闭</button>
         </div>
         <div id="ftBody"><svg id="ftSvg"></svg></div>
+      </div>
+    </div>
+    <div id="evModal">
+      <div id="evCard">
+        <div id="evHead">
+          <b>事件树预览</b>
+          <select id="evPick" style="min-width:200px"></select>
+          <span class="k" id="evInfo"></span>
+          <span style="margin-left:auto"></span>
+          <button class="btn" id="evFit">适应</button>
+          <button class="btn" id="evClose">关闭</button>
+        </div>
+        <div id="evBody"><svg id="evSvg"></svg></div>
       </div>
     </div>
     <div id="updModal">
@@ -6085,6 +6116,136 @@ async function mapShowGfxMissing(){
   // 这个按钮在国策树面板里，初始化函数可能早于本段执行，所以自己再绑一次
   if(document.readyState !== 'loading') ftBind();
   else document.addEventListener('DOMContentLoaded', ftBind);
+})();
+
+// v1.5.0 事件树预览（参考 HOI4 Mod Utilities 的 Event tree preview）
+(function(){
+  const NW = 130, NH = 34, GX = 26, GY = 26;
+  let evData = null;
+
+  function evClose(){ document.getElementById('evModal').classList.remove('show'); }
+
+  async function evLoadList(){
+    const sel = document.getElementById('evPick');
+    if(sel.dataset.loaded){ if(sel.value) evDraw(sel.value); return; }
+    const r = await (await fetch('/api/event_spaces')).json();
+    if(!r.ok){ document.getElementById('evInfo').textContent = '读取失败'; return; }
+    sel.innerHTML = (r.spaces || []).map(x=>
+      '<option value="' + x.id + '">' + x.id + '（' + x.count + ' 事件）</option>').join('');
+    sel.dataset.loaded = '1';
+    sel.onchange = ()=> evDraw(sel.value);
+    if(sel.value) evDraw(sel.value);
+  }
+
+  async function evDraw(ns){
+    const svg = document.getElementById('evSvg');
+    const info = document.getElementById('evInfo');
+    info.textContent = '读取中…';
+    const g = await (await fetch('/api/event_graph?ns=' + encodeURIComponent(ns))).json();
+    if(!g.ok){ info.textContent = g.msg || '读取失败'; svg.innerHTML = ''; return; }
+    evData = g;
+    info.textContent = g.msg;
+
+    const nodes = g.nodes || [], edges = g.edges || [];
+    if(!nodes.length){ svg.innerHTML = ''; return; }
+
+    // 分层：按「触发的深度」排；根 = 没有入边的事件
+    const indeg = {}, adj = {};
+    nodes.forEach(n=>{ indeg[n.id] = 0; adj[n.id] = []; });
+    edges.forEach(e=>{ if(adj[e.from]) adj[e.from].push(e.to); if(indeg[e.to] !== undefined) indeg[e.to]++; });
+    const depth = {};
+    const roots = nodes.filter(n=>indeg[n.id] === 0).map(n=>n.id);
+    const q = roots.slice();
+    roots.forEach(r=>{ depth[r] = 0; });
+    let guard = 0;
+    while(q.length && guard++ < 5000){
+      const cur = q.shift();
+      for(const nx of (adj[cur] || [])){
+        if(depth[nx] === undefined){ depth[nx] = depth[cur] + 1; q.push(nx); }
+      }
+    }
+    nodes.forEach(n=>{ if(depth[n.id] === undefined) depth[n.id] = 0; });
+
+    // 按层分组，层内按 id 排序
+    const layers = {};
+    nodes.forEach(n=>{ (layers[depth[n.id]] = layers[depth[n.id]] || []).push(n); });
+    Object.keys(layers).forEach(k=> layers[k].sort((a,b)=>a.id.localeCompare(b.id, 'en', {numeric:true})));
+
+    const pos = {};
+    let maxW = 0;
+    Object.keys(layers).map(Number).sort((a,b)=>a-b).forEach(d=>{
+      layers[d].forEach((n, i)=>{
+        pos[n.id] = { x: i * (NW + GX) + 10, y: d * (NH + GY) + 10 };
+      });
+      maxW = Math.max(maxW, layers[d].length * (NW + GX));
+    });
+    const maxD = Math.max(...Object.keys(layers).map(Number));
+    const W = maxW + 20, H = (maxD + 1) * (NH + GY) + 20;
+    svg.setAttribute('width', W);
+    svg.setAttribute('height', H);
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+
+    let out = '<defs><marker id="evArrow" markerWidth="7" markerHeight="7" refX="6" refY="2.5" orient="auto">'
+      + '<path d="M0,0 L6,2.5 L0,5 z" fill="#5a656b"/></marker></defs>';
+    for(const e of edges){
+      const a = pos[e.from], b = pos[e.to];
+      if(!a || !b) continue;
+      const x1 = a.x + NW / 2, y1 = a.y + NH;
+      const x2 = b.x + NW / 2, y2 = b.y;
+      let cls = 'ev-edge';
+      if(e.external) cls += ' external';
+      else if(e.where === 'after') cls += ' after';
+      else if(e.where === 'immediate') cls += ' immediate';
+      const path = 'M' + x1 + ',' + y1 + ' C' + x1 + ',' + (y1 + 24) + ' ' + x2 + ',' + (y2 - 24) + ' ' + x2 + ',' + y2;
+      out += '<path class="' + cls + '" d="' + path + '" marker-end="url(#evArrow)"/>';
+    }
+    for(const n of nodes){
+      const p = pos[n.id];
+      if(!p) continue;
+      const ext = n.kind === 'external';
+      out += '<g class="ev-node' + (ext ? ' ext' : '') + '" data-id="' + n.id + '"'
+        + ' transform="translate(' + p.x + ',' + p.y + ')">'
+        + '<rect width="' + NW + '" height="' + NH + '" rx="6"/>'
+        + '<text x="8" y="14" style="font-size:10px;font-weight:600">' + n.id.replace(/[<>&]/g, '') + '</text>'
+        + '<text x="8" y="27" style="font-size:9px;fill:#8a969c">'
+        + ((n.name || (ext ? '（外部引用）' : n.kind)) + '').slice(0, 20).replace(/[<>&]/g, '') + '</text>'
+        + '</g>';
+    }
+    svg.innerHTML = out;
+
+    svg.querySelectorAll('.ev-node').forEach(el=>{
+      el.onclick = ()=>{
+        const n = nodes.find(x=>x.id === el.dataset.id);
+        if(!n) return;
+        info.textContent = n.id + '　' + (n.name || '（无标题）')
+          + (n.file ? '　' + n.file : '　（不在本 mod 里）')
+          + '　深度 ' + depth[n.id];
+      };
+    });
+  }
+
+  function evBind(){
+    const btn = document.getElementById('evOpen');
+    if(!btn || btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.onclick = ()=>{
+      document.getElementById('evModal').classList.add('show');
+      evLoadList();
+    };
+    document.getElementById('evClose').onclick = evClose;
+    document.getElementById('evFit').onclick = ()=>{
+      const svg = document.getElementById('evSvg');
+      const body = document.getElementById('evBody');
+      const w = Number(svg.getAttribute('width')) || 1;
+      const h = Number(svg.getAttribute('height')) || 1;
+      const k = Math.min(body.clientWidth / w, body.clientHeight / h, 1);
+      svg.style.transformOrigin = '0 0';
+      svg.style.transform = 'scale(' + k + ')';
+    };
+  }
+  window.mapBindEventTree = evBind;
+  if(document.readyState !== 'loading') evBind();
+  else document.addEventListener('DOMContentLoaded', evBind);
 })();
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */
