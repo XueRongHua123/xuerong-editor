@@ -5474,9 +5474,25 @@ def event_space_create(ns, root=None):
     snapshot(fn) if os.path.exists(fn) else None
     io.open(fn, "wb").write(b"\xef\xbb\xbf" + body.encode("utf-8"))
     _EVENT_GRAPH_CACHE.clear()
+
+    # 同时生成本地化，省得再手动补键
+    loc_dir = os.path.join(root, "localisation", "simp_chinese")
+    loc_fn = os.path.join(loc_dir, "zz_xuerong_%s_l_simp_chinese.yml" % ns)
+    loc_msg = ""
+    try:
+        os.makedirs(loc_dir, exist_ok=True)
+        lines = ["l_simp_chinese:",
+                 ' %s.1.t:0 "【未命名事件】"' % ns,
+                 ' %s.1.d:0 "（在这里写事件描述）"' % ns,
+                 ' %s.1.a:0 "确定"' % ns]
+        io.open(loc_fn, "wb").write(b"\xef\xbb\xbf" + (chr(10).join(lines) + chr(10)).encode("utf-8"))
+        loc_msg = "，本地化已写到 localisation/simp_chinese/%s" % os.path.basename(loc_fn)
+    except Exception as _e:
+        loc_msg = "，本地化生成失败（%s）" % _e
+
     return {"ok": True, "ns": ns, "file": "events/zz_xuerong_%s.txt" % ns,
-            "msg": "已创建命名空间 %s（events/zz_xuerong_%s.txt），记得补本地化 %s.1.t / .d / .a" % (
-                ns, ns, ns)}
+            "locFile": os.path.basename(loc_fn) if os.path.exists(loc_fn) else "",
+            "msg": "已创建命名空间 %s（events/zz_xuerong_%s.txt）%s" % (ns, ns, loc_msg)}
 
 
 def event_space_delete(ns, root=None):
@@ -5558,6 +5574,163 @@ def event_space_delete(ns, root=None):
     reload_data()
     return {"ok": True, "ns": ns, "removed": removed, "files": touched,
             "msg": "已删除命名空间 %s 的 %d 个事件" % (ns, removed)}
+
+
+def event_detail(eid, root=None):
+    """读一个事件的 title / desc / 各 option 的名称与触发目标，供就地编辑"""
+    eid = (eid or "").strip()
+    root = _map_pick(root)
+    if not eid:
+        return {"ok": False, "msg": "没有事件 id"}
+    d = os.path.join(root or "", "events")
+    if not os.path.isdir(d):
+        return {"ok": False, "msg": "没有 events 目录"}
+    for _dp, _dn, files in os.walk(d):
+        for fn in files:
+            if not fn.endswith(".txt"):
+                continue
+            p = os.path.join(_dp, fn)
+            try:
+                text = strip_comments(io.open(p, encoding="utf-8-sig", errors="replace").read())
+            except Exception:
+                continue
+            for m in re.finditer(r'(?m)^\s*[a-z_]*_event\s*=\s*\{', text):
+                b = text.find("{", m.end() - 1)
+                e = brace_match(text, b)
+                if e <= b:
+                    continue
+                body = text[b + 1:e - 1]
+                got = re.search(r'(?m)^\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', body)
+                if not got or got.group(1) != eid:
+                    continue
+                tit = re.search(r'(?m)^\s*title\s*=\s*"?([A-Za-z0-9_.\-]+)"?', body)
+                dsc = re.search(r'(?m)^\s*desc\s*=\s*"?([A-Za-z0-9_.\-]+)"?', body)
+                opts = []
+                for om in re.finditer(r'(?m)^\s*option\s*=\s*\{', body):
+                    ob = body.find("{", om.end() - 1)
+                    oe = brace_match(body, ob)
+                    if oe <= ob:
+                        continue
+                    sub = body[ob + 1:oe - 1]
+                    nm = re.search(r'(?m)^\s*name\s*=\s*"?([A-Za-z0-9_.\-]+)"?', sub)
+                    tg = re.search(r'(?m)^\s*(?:country_event|news_event|state_event)\s*=\s*(?:\{\s*)?id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', sub)
+                    if not tg:
+                        tg = re.search(r'(?m)^\s*(?:country_event|news_event|state_event)\s*=\s*"?([A-Za-z0-9_.\-]+)"?', sub)
+                    opts.append({"name": nm.group(1) if nm else "",
+                                 "target": tg.group(1) if tg else ""})
+                return {"ok": True, "id": eid, "file": os.path.relpath(p, root),
+                        "title": tit.group(1) if tit else "",
+                        "desc": dsc.group(1) if dsc else "",
+                        "titleText": LOC.get(tit.group(1), "") if tit else "",
+                        "descText": LOC.get(dsc.group(1), "") if dsc else "",
+                        "options": opts}
+    return {"ok": False, "msg": "找不到事件 %s（可能不在本 mod 里）" % eid}
+
+
+def event_edit(eid, title=None, desc=None, options=None, root=None):
+    """就地改事件的 title / desc / 各 option 的名称与触发目标。
+
+    只替换匹配到的行，不动其它内容；改前 snapshot。"""
+    eid = (eid or "").strip()
+    root = _map_pick(root)
+    if not eid:
+        return {"ok": False, "msg": "没有事件 id"}
+    if is_under_game(root):
+        return {"ok": False, "msg": "这是原版目录，只读"}
+    d = os.path.join(root or "", "events")
+    if not os.path.isdir(d):
+        return {"ok": False, "msg": "没有 events 目录"}
+
+    changed = []
+    for _dp, _dn, files in os.walk(d):
+        for fn in files:
+            if not fn.endswith(".txt"):
+                continue
+            p = os.path.join(_dp, fn)
+            try:
+                raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            except Exception:
+                continue
+            text = strip_comments(raw)
+            hit = None
+            for m in re.finditer(r'(?m)^\s*[a-z_]*_event\s*=\s*\{', text):
+                b = text.find("{", m.end() - 1)
+                e = brace_match(text, b)
+                if e <= b:
+                    continue
+                body = text[b + 1:e - 1]
+                got = re.search(r'(?m)^\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', body)
+                if got and got.group(1) == eid:
+                    hit = (m.start(), e, body)
+                    break
+            if not hit:
+                continue
+            # 用「去注释后的坐标」定位到原文：按行替换更安全
+            lines = raw.splitlines(True)
+            out = []
+            state = {"in_event": False, "depth": 0, "opt_i": -1,
+                     "title_done": False, "desc_done": False}
+            for ln in lines:
+                st = ln.strip()
+                if re.match(r'^[a-z_]*_event\s*=\s*\{', st):
+                    state["in_event"] = True
+                    state["depth"] = 0
+                    state["title_done"] = False
+                    state["desc_done"] = False
+                    state["opt_i"] = -1
+                if state["in_event"]:
+                    is_this = False
+                    mid = re.match(r'^id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', st)
+                    if mid and mid.group(1) == eid:
+                        is_this = True
+                    if is_this:
+                        state["this"] = True
+                    if state.get("this"):
+                        if title and not state["title_done"]:
+                            nt = re.sub(r'^(\s*title\s*=\s*)"?[A-Za-z0-9_.\-]+"?.*$',
+                                        lambda mm: mm.group(1) + title, ln)
+                            if nt != ln:
+                                ln = nt
+                                state["title_done"] = True
+                                changed.append("title")
+                        if desc and not state["desc_done"]:
+                            nd = re.sub(r'^(\s*desc\s*=\s*)"?[A-Za-z0-9_.\-]+"?.*$',
+                                        lambda mm: mm.group(1) + desc, ln)
+                            if nd != ln:
+                                ln = nd
+                                state["desc_done"] = True
+                                changed.append("desc")
+                        if re.match(r'^option\s*=\s*\{', st):
+                            state["opt_i"] += 1
+                        if options and 0 <= state["opt_i"] < len(options):
+                            o = options[state["opt_i"]] or {}
+                            if o.get("name"):
+                                nn = re.sub(r'^(\s*name\s*=\s*)"?[A-Za-z0-9_.\-]+"?.*$',
+                                            lambda mm: mm.group(1) + o["name"], ln)
+                                if nn != ln:
+                                    ln = nn
+                                    changed.append("option%d.name" % state["opt_i"])
+                            if o.get("target"):
+                                nt2 = re.sub(r'^((\s*)(?:country_event|news_event|state_event)\s*=\s*)"?[A-Za-z0-9_.\-]+"?.*$',
+                                             lambda mm: mm.group(1) + o["target"], ln)
+                                if nt2 != ln:
+                                    ln = nt2
+                                    changed.append("option%d.target" % state["opt_i"])
+                    # 花括号深度
+                    state["depth"] += ln.count("{") - ln.count("}")
+                    if state["depth"] <= 0:
+                        state["in_event"] = False
+                        state["this"] = False
+                out.append(ln)
+            if not changed:
+                return {"ok": False, "msg": "没有实际改动（参数为空或未匹配到字段）"}
+            snapshot(p)
+            io.open(p, "wb").write(b"\xef\xbb\xbf" + "".join(out).encode("utf-8"))
+            reload_data()
+            return {"ok": True, "id": eid, "file": os.path.relpath(p, root),
+                    "changed": changed,
+                    "msg": "已更新 %s 的 %s" % (eid, "、".join(sorted(set(changed))))}
+    return {"ok": False, "msg": "找不到事件 %s" % eid}
 
 
 def _terrain_colors(root):
@@ -7977,6 +8150,9 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/event_space_delete":
             _q = parse_qs(urlparse(self.path).query)
             self._send(event_space_delete(_q.get("ns", [""])[0], _q.get("root", [None])[0]))
+        elif path_only == "/api/event_detail":
+            _q = parse_qs(urlparse(self.path).query)
+            self._send(event_detail(_q.get("id", [""])[0], _q.get("root", [None])[0]))
         elif path_only == "/api/event_spaces":
             self._send(event_graph("", None))
         elif path_only == "/api/event_graph":
@@ -8215,6 +8391,9 @@ class Handler(SimpleHTTPRequestHandler):
             self._send(loc_generate(body.get("root"), body.get("keys"),
                                     body.get("lang") or "simp_chinese",
                                     bool(body.get("dry"))))
+        elif self.path == "/api/event_edit":
+            self._send(event_edit(body.get("id"), body.get("title"), body.get("desc"),
+                                  body.get("options"), body.get("root")))
         elif self.path == "/api/refine_apply":
             self._send(refine_apply(body.get("pid") or 0, body.get("k") or 2,
                                     body.get("root"), body.get("base_pid")))
