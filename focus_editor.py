@@ -2887,6 +2887,26 @@ def mod_layers(root=None, depth=3):
             return list(_hit)
     except Exception:
         _ck = None
+    # playset 语义：启动时给了多个 --mod（按启动器里的加载顺序），就按它们的顺序叠加，
+    # 后面的覆盖前面的。这比只靠 descriptor 的 dependencies 更忠实于启动器的实际行为
+    # （很多 mod 根本不写 dependencies）。
+    if len(ROOTS) > 1:
+        chain = []
+        for _r in ROOTS:
+            _ab = os.path.abspath(_r)
+            if _ab not in chain:
+                chain.append(_ab)
+        if root and os.path.abspath(root) not in chain:
+            chain.append(os.path.abspath(root))
+        if GAME and os.path.abspath(GAME) not in chain:
+            chain.insert(0, os.path.abspath(GAME))
+        try:
+            if _ck:
+                _LAYERS_CACHE[_ck] = list(chain)
+        except Exception:
+            pass
+        return chain
+
     chain = []
     cur = root
     guard = 0
