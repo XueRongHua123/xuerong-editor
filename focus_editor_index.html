@@ -6631,13 +6631,14 @@ function makePannable(svg, body){
 // v1.9.2 图层预设
 // 图层组合自己试很难试对（比如州视图必须关掉底图才看得清），给几个一键预设。
 (function(){
+  // unit = 这个视图下左键点选的对象。看什么就选什么，不用先切回省再查。
   const PRESETS = {
-    terrain: { on: ['terrain'], off: ['prov','polit','state','region','continent','base'] },
-    state:   { on: ['state'],   off: ['prov','polit','terrain','region','continent','base'] },
-    prov:    { on: ['prov'],    off: ['polit','terrain','state','region','continent','base'] },
-    polit:   { on: ['polit'],   off: ['prov','terrain','state','region','continent','base'] },
-    region:  { on: ['region'],  off: ['prov','polit','terrain','state','continent','base'] },
-    raw:     { on: ['base'],    off: ['prov','polit','terrain','state','region','continent'] },
+    terrain: { unit: 'prov',    on: ['terrain'], off: ['prov','polit','state','region','continent','base'] },
+    state:   { unit: 'state',   on: ['state'],   off: ['prov','polit','terrain','region','continent','base'] },
+    prov:    { unit: 'prov',    on: ['prov'],    off: ['polit','terrain','state','region','continent','base'] },
+    polit:   { unit: 'country', on: ['polit'],   off: ['prov','terrain','state','region','continent','base'] },
+    region:  { unit: 'region',  on: ['region'],  off: ['prov','polit','terrain','state','continent','base'] },
+    raw:     { unit: 'prov',    on: ['base'],    off: ['prov','polit','terrain','state','region','continent'] },
   };
   const ID = { prov:'mapLProv', polit:'mapLPolit', terrain:'mapLTerrain', state:'mapLState',
                region:'mapLRegion', continent:'mapLContinent', base:'mapLBase' };
@@ -6660,6 +6661,7 @@ function makePannable(svg, body){
     // 省界始终开（矢量描边，不影响别的图层）
     const e = document.getElementById('mapLEdges');
     if(e && name !== 'raw') e.checked = false;
+    window.MAP_PICK_UNIT = p.unit || 'prov';
     if(typeof mapApplyLayers === 'function') mapApplyLayers();
     document.querySelectorAll('.lt-preset').forEach(b=>{
       b.classList.toggle('on', b.dataset.preset === name);
@@ -6685,6 +6687,129 @@ function makePannable(svg, body){
   window.mapBindPresets = bindPresets;
   if(document.readyState !== 'loading') bindPresets();
   else document.addEventListener('DOMContentLoaded', bindPresets);
+})();
+
+// v1.9.3 按预设决定点选对象
+(function(){
+  const UNIT_LABEL = { prov:'省', state:'州', country:'国家', region:'战略区' };
+
+  function cur() { return window.MAP_PICK_UNIT || 'prov'; }
+
+  // 前端没有全局 STATES（州数据是按需拉的），这里懒加载一次并缓存
+  let STATE_CACHE = null;
+  async function ensureStates(){
+    if(STATE_CACHE) return STATE_CACHE;
+    try{
+      const r = await (await fetch('/api/states')).json();
+      const list = Array.isArray(r) ? r : (r.states || r.list || []);
+      STATE_CACHE = list;
+    }catch(e){ STATE_CACHE = []; }
+    return STATE_CACHE;
+  }
+
+  function stateOf(pid){
+    const rec = (MAP.idx && MAP.idx[String(pid)]) || {};
+    const sid = rec.state || 0;
+    if(!sid) return null;
+    const all = STATE_CACHE || [];
+    for(const s of all){
+      if(Number(s.id) === Number(sid)) return s;
+    }
+    return { id: sid };
+  }
+
+  function regionOf(pid){
+    const rec = (MAP.idx && MAP.idx[String(pid)]) || {};
+    const rid = rec.region || 0;
+    if(!rid) return null;
+    const list = (window.MAP && MAP.regions) || [];
+    for(const r of list){ if(Number(r.id) === Number(rid)) return r; }
+    return { id: rid };
+  }
+
+  function countryOf(pid){
+    const st = stateOf(pid);
+    if(!st) return null;
+    const tag = st.owner || st.owner_tag || '';
+    if(!tag) return null;
+    let c = null;
+    if(window.COUNTRIES){
+      c = Array.isArray(COUNTRIES) ? COUNTRIES.find(x=>x.tag === tag) : COUNTRIES[tag];
+    }
+    return { tag: tag, raw: c || st };
+  }
+
+  // 返回要显示的信息卡 HTML；prov 模式返回 null 走原有面板
+  window.mapPickUnit = async function(pid){
+    await ensureStates();
+    const unit = cur();
+    if(unit === 'prov') return null;
+    const rec = (MAP.idx && MAP.idx[String(pid)]) || {};
+    let title = '', rows = [], key = '';
+
+    if(unit === 'state'){
+      const st = stateOf(pid);
+      if(!st){ return { unit: 'state', empty: true, html: '<div class="mp-k">这块地不属于任何州</div>' }; }
+      key = 'S' + st.id;
+      title = '州 ' + st.id + (st.name && st.name !== ('STATE_' + st.id) ? '　' + st.name : '');
+      // /api/states 的 provinces 字段有时是数量、有时是数组，两种都要认
+      const pv = st.provinces;
+      const nProv = Array.isArray(pv) ? pv.length : (typeof pv === 'number' ? pv : (st.province_count || 0));
+      rows.push(['省数', nProv]);
+      rows.push(['归属国', st.owner || st.owner_tag || '无']);
+      const vps = st.victory_points || [];
+      if(vps.length) rows.push(['胜利点', vps.map(v=>v.province + '(' + v.points + ')').join(', ')]);
+      if(st.category) rows.push(['类别', st.category]);
+    } else if(unit === 'country'){
+      const c = countryOf(pid);
+      if(!c){ return { unit: 'country', empty: true, html: '<div class="mp-k">这块地没有归属国</div>' }; }
+      key = 'C' + c.tag;
+      title = c.tag + (c.raw && c.raw.name ? '　' + c.raw.name : '');
+      if(c.raw && c.raw.capital) rows.push(['首都', c.raw.capital]);
+      if(c.raw && c.raw.political_power) rows.push(['政治点', c.raw.political_power]);
+    } else if(unit === 'region'){
+      const r = regionOf(pid);
+      if(!r){ return { unit: 'region', empty: true, html: '<div class="mp-k">这块地不属于任何战略区</div>' }; }
+      key = 'R' + r.id;
+      title = '战略区 ' + r.id + (r.name ? '　' + r.name : '');
+    }
+
+    const html = '<div class="mp-k" style="margin-bottom:6px">当前视图按「' + (UNIT_LABEL[unit] || unit) + '」点选</div>'
+      + '<div style="font-size:13px;font-weight:600;margin-bottom:8px">' + title + '</div>'
+      + rows.map(([k, v]) => '<div class="mp-row"><label>' + k + '</label><span class="mp-v">' + v + '</span></div>').join('')
+      + '<div class="mp-k" style="margin-top:8px">点地图上的其它位置可切换</div>';
+    return { unit: unit, key: key, html: html };
+  };
+
+  // 挂到选中流程：prov 之外的模式直接替换右侧内容
+  const orig = window.mapShowOps;
+  if(typeof orig === 'function'){
+    window.mapShowOps = function(pid, sid){
+      // 省模式完全走原逻辑，不拦（拦截会让其它预设的旧内容残留）
+      if((window.MAP_PICK_UNIT || 'prov') === 'prov'){
+        return orig.apply(this, arguments);
+      }
+      const self = this, args = arguments;
+      const maybe = window.mapPickUnit(pid);
+      if(!maybe || typeof maybe.then !== 'function'){
+        return orig.apply(self, args);
+      }
+      maybe.then(function(r){
+        renderPick(r, pid, sid, orig, self, args);
+      });
+    };
+
+    function renderPick(r, pid, sid, origFn, self, args){
+      if(!r){ return origFn.apply(self, args); }
+      const side = document.getElementById('mapSide');
+      if(side) side.classList.remove('empty');
+      if(window.mapSideTab) window.mapSideTab('edit');
+      const box = document.getElementById('selBox');
+      if(box) box.innerHTML = r.html;
+      status(r.empty ? '这里是空的' : ('已选中 ' + (UNIT_LABEL[r.unit] || '') + '：' + (r.key || '')));
+      if(window.mapRenderSelection) window.mapRenderSelection();
+    }
+  }
 })();
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */
