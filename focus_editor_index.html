@@ -1075,6 +1075,17 @@
             <button class="btn" id="psSave">保存播放集</button>
           </div>
           <div id="psMsg" class="mp-k" style="padding-top:8px"></div>
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+            <div class="mp-k" style="margin-bottom:6px">输出模式</div>
+            <div class="mp-k" style="line-height:1.6;margin-bottom:8px">
+              开启后所有改动写到 <code>work/output/&lt;mod名&gt;/</code>，源 mod 一个字节不动；
+              满意了再点「应用回源」复制回去（原文件会先备份）。
+            </div>
+            <button class="btn" id="outModeBtn">输出模式：关闭</button>
+            <button class="btn" id="outApply">应用回源</button>
+            <button class="btn" id="outClear">清空输出</button>
+            <div id="outStat" class="mp-k" style="padding-top:6px"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -5622,6 +5633,49 @@ async function mapRepair(){
   window.mapBindSideTabs = bindSideTabs;
 })();
 
+// v1.1.1 输出模式
+(function(){
+  async function outRefresh(){
+    try{
+      const r = await (await fetch('/api/output')).json();
+      const btn = document.getElementById('outModeBtn');
+      if(btn){ btn.textContent = '输出模式：' + (r.on ? '开启' : '关闭'); btn.classList.toggle('primary', !!r.on); }
+      const st = document.getElementById('outStat');
+      if(st) st.textContent = r.on
+        ? ('已写 ' + r.files + ' 个文件 · ' + (r.size / 1024).toFixed(0) + ' KB · 源 mod 未改动')
+        : '关闭时直接写 mod 目录（有备份）';
+    }catch(e){}
+  }
+
+  function bindOutput(){
+    const btn = document.getElementById('outModeBtn');
+    if(!btn || btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.onclick = async ()=>{
+      const r = await (await fetch('/api/output?act=toggle')).json();
+      status(r.msg || '');
+      await outRefresh();
+    };
+    document.getElementById('outApply').onclick = async ()=>{
+      if(!confirm('把输出目录里的文件复制回 mod？原文件会先做备份。')) return;
+      const r = await (await fetch('/api/output_apply', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+      status(r.msg || (r.ok ? '已回源' : '回源失败'), !r.ok);
+      document.getElementById('psMsg').textContent = (r.msg || '') +
+        ((r.skipped && r.skipped.length) ? ('　跳过 ' + r.skipped.length + ' 个') : '');
+      await outRefresh();
+    };
+    document.getElementById('outClear').onclick = async ()=>{
+      if(!confirm('清空输出目录？（不影响源 mod）')) return;
+      const r = await (await fetch('/api/output?act=clear')).json();
+      status(r.msg || '');
+      await outRefresh();
+    };
+    outRefresh();
+  }
+  window.mapBindOutput = bindOutput;
+})();
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -5779,6 +5833,7 @@ function mapBindV081(){
   if(window.mapBindHotkeys) window.mapBindHotkeys();
   if(window.mapBindPlayset) window.mapBindPlayset();
   if(window.mapBindSideTabs) window.mapBindSideTabs();
+  if(window.mapBindOutput) window.mapBindOutput();
   mapSetMode('view');
 }
 

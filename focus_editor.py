@@ -1574,6 +1574,7 @@ def _hist_path(tag):
 
 
 def _read_bom_text(path):
+    path = _out_read_path(path)          # 输出模式下读到的是「改过的版本」
     raw = io.open(path, "rb").read()
     has_bom = raw.startswith(b"\xef\xbb\xbf")
     return raw.decode("utf-8-sig", "replace"), has_bom
@@ -1583,7 +1584,9 @@ def _write_bom_text(path, text, has_bom):
     data = text.encode("utf-8")
     if has_bom:
         data = b"\xef\xbb\xbf" + data
-    io.open(path, "wb").write(data)
+    target = _out_path(path)             # 输出模式下写到 output/，源文件不动
+    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+    io.open(target, "wb").write(data)
 
 
 def _first_in(text, pat):
@@ -2700,7 +2703,124 @@ def map_repair_ghost(root=None):
 PLAYSET_FILE = os.path.join(WORK, "playset.json")
 
 
+# v1.1.1 输出目录模式
+OUTPUT_MODE = False
+OUTPUT_ROOT = os.path.join(WORK, "output")
+
+
+def output_state():
+    """输出模式状态与统计"""
+    files = 0
+    size = 0
+    if os.path.isdir(OUTPUT_ROOT):
+        for dp, _dn, fs in os.walk(OUTPUT_ROOT):
+            for fn in fs:
+                files += 1
+                try:
+                    size += os.path.getsize(os.path.join(dp, fn))
+                except Exception:
+                    pass
+    return {"ok": True, "on": OUTPUT_MODE, "root": OUTPUT_ROOT,
+            "files": files, "size": size}
+
+
+def output_toggle(on=None):
+    global OUTPUT_MODE
+    OUTPUT_MODE = bool(on) if on is not None else (not OUTPUT_MODE)
+    return {"ok": True, "on": OUTPUT_MODE,
+            "msg": "输出模式已开启：改动写到 %s，源 mod 不动" % OUTPUT_ROOT if OUTPUT_MODE
+                   else "输出模式已关闭：改动直接写 mod 目录（仍有备份）"}
+
+
+def _out_path(path):
+    """输出模式下把 mod 内的路径映射到 output/<mod名>/<相对路径>。
+    不在任何 mod 内的路径（新建文件等）保持原样。"""
+    if not OUTPUT_MODE:
+        return path
+    try:
+        ab = os.path.abspath(path)
+        for r in ROOTS:
+            rab = os.path.abspath(r)
+            if ab == rab:
+                continue
+            if ab.startswith(rab + os.sep):
+                rel = os.path.relpath(ab, rab)
+                dst = os.path.join(OUTPUT_ROOT, os.path.basename(rab.rstrip("\\/")), rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                return dst
+    except Exception:
+        pass
+    return path
+
+
+def _out_read_path(path):
+    """读取时优先看输出目录：这样开了输出模式改完立刻能看到效果，源文件依然不动。"""
+    if not OUTPUT_MODE:
+        return path
+    try:
+        ab = os.path.abspath(path)
+        for r in ROOTS:
+            rab = os.path.abspath(r)
+            if ab == rab:
+                continue
+            if ab.startswith(rab + os.sep):
+                rel = os.path.relpath(ab, rab)
+                cand = os.path.join(OUTPUT_ROOT, os.path.basename(rab.rstrip("\\/")), rel)
+                if os.path.exists(cand):
+                    return cand
+    except Exception:
+        pass
+    return path
+
+
+def output_apply_back(paths=None):
+    """把输出目录里的文件复制回对应 mod（复制前给源文件做快照备份）"""
+    if not os.path.isdir(OUTPUT_ROOT):
+        return {"ok": False, "msg": "输出目录为空，没有可回源的文件"}
+    done, skipped = [], []
+    for modname in os.listdir(OUTPUT_ROOT):
+        src_mod_dir = os.path.join(OUTPUT_ROOT, modname)
+        if not os.path.isdir(src_mod_dir):
+            continue
+        target_root = None
+        for r in ROOTS:
+            if os.path.basename(os.path.abspath(r).rstrip("\\/")) == modname:
+                target_root = os.path.abspath(r)
+                break
+        if not target_root:
+            skipped.append({"mod": modname, "why": "当前没有加载同名的 mod"})
+            continue
+        for dp, _dn, fs in os.walk(src_mod_dir):
+            for fn in fs:
+                src = os.path.join(dp, fn)
+                rel = os.path.relpath(src, src_mod_dir)
+                dst = os.path.join(target_root, rel)
+                try:
+                    if os.path.exists(dst):
+                        snapshot(dst)
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    shutil.copy2(src, dst)
+                    CHANGED[dst] = rel
+                    done.append(rel)
+                except Exception as e:
+                    skipped.append({"file": rel, "why": str(e)[:80]})
+    return {"ok": True, "applied": len(done), "files": done[:40], "skipped": skipped,
+            "msg": "已把 %d 个文件复制回 mod（原文件已备份）" % len(done)}
+
+
+def output_clear():
+    """清空输出目录（不动 mod）"""
+    try:
+        if os.path.isdir(OUTPUT_ROOT):
+            shutil.rmtree(OUTPUT_ROOT, ignore_errors=True)
+        return {"ok": True, "msg": "输出目录已清空"}
+    except Exception as e:
+        return {"ok": False, "msg": "清空失败：%s" % e}
+
+
 def playset_get():
+
+
     """返回当前叠加链（按启动器加载顺序）"""
     layers = []
     for r in ROOTS:
@@ -3096,6 +3216,7 @@ def bmp_info(path):
 
 
 def bmp_read_rect(path, x0, y0, w, h):
+    path = _out_read_path(path)          # 输出模式下读改过的副本
     """读矩形区域的原始像素（RGB 三元组列表，行优先）。
     走 Pillow 的 C 实现；逐行手工解析在 1100 万像素时要 7 秒以上。"""
     info = bmp_info(path)
@@ -3122,7 +3243,15 @@ def bmp_read_rect(path, x0, y0, w, h):
 
 
 def bmp_write_rect(path, x0, y0, w, h, pixels):
-    """把 RGB 像素列表原位写回 bmp（不重存文件，保持原有结构）"""
+    """把 RGB 像素列表原位写回 bmp（不重存文件，保持原有结构）。
+    输出模式下：先把源 bmp 复制到 output/ 再改副本，源文件不动。"""
+    if OUTPUT_MODE:
+        _dst = _out_path(path)
+        if os.path.abspath(_dst) != os.path.abspath(path):
+            if not os.path.exists(_dst):
+                os.makedirs(os.path.dirname(_dst) or ".", exist_ok=True)
+                shutil.copyfile(path, _dst)
+            path = _dst
     info = bmp_info(path)
     if not info or info["bpp"] != 24:
         return False
@@ -6589,6 +6718,16 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send(map_repair_ghost(_q.get("root", [None])[0]))
             else:
                 self._send(map_repair_preview(_q.get("root", [None])[0]))
+        elif path_only == "/api/output":
+            _q = parse_qs(urlparse(self.path).query)
+            _act = _q.get("act", [""])[0]
+            if _act == "toggle":
+                _on = _q.get("on", [""])[0]
+                self._send(output_toggle(None if _on == "" else (_on in ("1", "true", "yes"))))
+            elif _act == "clear":
+                self._send(output_clear())
+            else:
+                self._send(output_state())
         elif path_only == "/api/playset":
             self._send(playset_get())
         elif path_only == "/api/map_analysis":
@@ -6850,6 +6989,8 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 ok, msg = load_mod_root(ds[0])
                 self._send({"ok": ok, "msg": msg})
+        elif self.path == "/api/output_apply":
+            self._send(output_apply_back())
         elif self.path == "/api/playset_save":
             self._send(playset_save(body.get("paths") or []))
         elif self.path == "/api/playset_pick":
