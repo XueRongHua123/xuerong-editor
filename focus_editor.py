@@ -3878,9 +3878,15 @@ def map_build(force=False, root=None):
 
     index = {}
     for pid, cnt in counts.items():
+        _rgb = None
+        try:
+            _rgb = list(color2prov and next((k for k, v in color2prov.items() if v == pid), None) or ()) or None
+        except Exception:
+            _rgb = None
         index[str(pid)] = {"state": prov2state.get(pid, 0), "type": prov2type.get(pid, ""),
                            "region": prov2region.get(pid, 0), "terrain": prov2terrain.get(pid, ""),
-                           "continent": prov2continent.get(pid, 0), "px": cnt}
+                           "continent": prov2continent.get(pid, 0), "px": cnt,
+                           "rgb": _rgb}
 
     io.open(os.path.join(dirp, "centers.json"), "w", encoding="utf-8", newline="").write(
         json.dumps(centers, ensure_ascii=False))

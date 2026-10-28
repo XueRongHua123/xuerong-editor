@@ -1194,9 +1194,11 @@
         </div><!-- /mapBody -->
         <div id="mapStatus">
           <span class="st-mode" id="msMode">浏览</span>
+          <span id="msPct" style="color:var(--t3);font-variant-numeric:tabular-nums;min-width:44px">100%</span>
+          <span id="msSel" style="color:var(--accent)"></span>
           <span id="msPos">—</span>
           <span id="msInfo">—</span>
-          <span style="margin-left:auto" id="msHint">滚轮缩放 · 拖动平移 · 单击选省</span>
+          <span style="margin-left:auto" id="msHint">V/P/S 切模式 · 滚轮缩放 · Alt+滚轮调笔刷 · Ctrl+Z 撤销 · 0 适应</span>
         </div>
         </div>
       </div>
@@ -4999,7 +5001,7 @@ async function mapRunCheck(){
     wrap.addEventListener('pointerdown', async e=>{
       if(MAP.mode !== 'paint') return;
       if(e.button !== 0) return;
-      if(e.target.closest('#mapTools') || e.target.closest('#mapSide')) return;
+      if(mapEventOverUI(e)) return;
       const ok = await paintBegin();
       if(!ok) return;
       painting = true;
@@ -5332,6 +5334,76 @@ async function mapRepair(){
   }
 }
 
+// v1.0.7 地图快捷键
+(function(){
+  function inInput(){
+    const a = document.activeElement;
+    if(!a) return false;
+    const tag = (a.tagName || '').toLowerCase();
+    return tag === 'input' || tag === 'textarea' || tag === 'select' || a.isContentEditable;
+  }
+
+  function mapOpen(){
+    const m = document.getElementById('mapModal');
+    return m && m.classList.contains('show');
+  }
+
+  function mapBindHotkeys(){
+    if(window.__mapHotkeysBound) return;
+    window.__mapHotkeysBound = true;
+    document.addEventListener('keydown', e=>{
+      if(!mapOpen() || inInput()) return;
+      const k = (e.key || '').toLowerCase();
+      // 切模式
+      if(!e.ctrlKey && !e.metaKey && !e.altKey){
+        if(k === 'v'){ mapSetMode('view'); e.preventDefault(); return; }
+        if(k === 'p'){ mapSetMode('paint'); e.preventDefault(); return; }
+        if(k === 's'){ mapSetMode('state'); e.preventDefault(); return; }
+        if(k === 'i'){ mapSetMode('pick'); e.preventDefault(); return; }
+        // 视图
+        if(k === '0' || k === 'f'){ mapFit(); e.preventDefault(); return; }
+        if(k === '1'){ document.getElementById('mapOne').click(); e.preventDefault(); return; }
+        if(k === '+' || k === '='){
+          mapGoto((MAP.w/2), (MAP.h/2), Math.min(16, MAP.k * 1.25)); e.preventDefault(); return;
+        }
+        if(k === '-' || k === '_'){
+          mapGoto((MAP.w/2), (MAP.h/2), Math.max(0.05, MAP.k / 1.25)); e.preventDefault(); return;
+        }
+        if(k === 'escape'){
+          const cm = document.getElementById('mapCheckModal');
+          if(cm && cm.classList.contains('show')){ cm.classList.remove('show'); return; }
+          MAP.sel = []; mapRenderSel();
+          status('已清空选择'); e.preventDefault(); return;
+        }
+      }
+      // Ctrl+Z / Ctrl+Y 接地图撤销
+      if((e.ctrlKey || e.metaKey) && (k === 'z' || k === 'y')){
+        e.preventDefault();
+        const act = k === 'z' ? 'undo' : 'redo';
+        fetch('/api/map_paint', {method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({act})}).then(r=>r.json()).then(r=>{
+          status(r.ok ? (k === 'z' ? '已撤销一步地图编辑' : '已重做') : (r.msg || '没有可撤销的操作'), !r.ok);
+          if(r.ok) mapBuild(true).catch(()=>{});
+        }).catch(()=>{});
+      }
+    });
+    // Alt + 滚轮：调笔刷半径
+    document.getElementById('mapStageWrap').addEventListener('wheel', e=>{
+      if(!e.altKey || !mapOpen()) return;
+      const r = document.getElementById('paintR');
+      if(!r) return;
+      e.preventDefault();
+      let v = Number(r.value || 4) + (e.deltaY < 0 ? 1 : -1);
+      v = Math.max(1, Math.min(30, v));
+      r.value = v;
+      const lab = document.getElementById('paintRVal');
+      if(lab) lab.textContent = v;
+      status('笔刷半径 ' + v + ' px');
+    }, {capture: true, passive: false});
+  }
+
+  window.mapBindHotkeys = mapBindHotkeys;
+})();
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -5449,6 +5521,7 @@ function mapSelectProvince(pid){
   MAP.lastState = rec.state || null;
   const info = document.getElementById('msInfo');
   if(info) info.textContent = '省 ' + pid + ' · 州 ' + (rec.state || '无') + ' · 地区 ' + (rec.region || '无');
+  mapUpdateStatus();
 }
 
 function mapBindV081(){
@@ -5487,6 +5560,7 @@ function mapBindV081(){
   if(window.mapBindPaint) window.mapBindPaint();
   if(window.mapBindMerge) window.mapBindMerge();
   if(window.mapBindNewState) window.mapBindNewState();
+  if(window.mapBindHotkeys) window.mapBindHotkeys();
   mapSetMode('view');
 }
 
@@ -5647,6 +5721,7 @@ function mapApply(){
   // 放大到 1.4 倍以上改用插值渲染：边界不再是一格一格的楼梯，整体观感顺滑
   // 1:1 及以下保持像素锐利，方便看单像素细节（涂色/描边时用）
   stack.classList.toggle('smooth', MAP.k > 1.4);
+  mapUpdateStatus();
 }
 
 function mapFit(){
@@ -5657,6 +5732,15 @@ function mapFit(){
   MAP.x = (r.width - MAP.w * MAP.k) / 2;
   MAP.y = (r.height - MAP.h * MAP.k) / 2;
   mapApply();
+}
+
+function mapEventOverUI(e){
+  // 图层面板是绝对定位在画布内的浮层，其余面板与回放层同理；
+  // 只要指针落在这些元素上，就不该触发地图的取省/涂色/拖动
+  const t = e && e.target;
+  if(!t || !t.closest) return false;
+  return !!t.closest('#mapTools, #mapSide, #mapRail, #mapHead, #mapStatus, '
+                    + '#mapCheckModal, #updModal, #mckCard, #updCard');
 }
 
 function mapScreenToImage(clientX, clientY){
@@ -5733,18 +5817,48 @@ async function mapMoveProv(detach){
   }catch(e){ status('失败：' + e.message, true); }
 }
 
+function _stateById(sid){
+  if(!sid || typeof STATES === 'undefined') return null;
+  return Object.values(STATES || {}).find(x=>Number(x.id) === Number(sid)) || null;
+}
+
+function _regionName(rid){
+  if(!rid || !MAP.regions) return '';
+  const r = MAP.regions.find(x=>Number(x.id) === Number(rid));
+  if(!r) return '';
+  // regions.json 的 name 是本地化键（STRATEGICREGION_12），有翻译就用翻译
+  const key = r.name || '';
+  const loc = (typeof LOC !== 'undefined' && LOC[key]) ? LOC[key] : '';
+  return loc || ('地区 ' + rid);
+}
+
+function mapUpdateStatus(){
+  const pct = document.getElementById('msPct');
+  if(pct) pct.textContent = Math.round((MAP.k || 1) * 100) + '%';
+  const sel = document.getElementById('msSel');
+  if(sel) sel.textContent = (MAP.sel && MAP.sel.length) ? ('已选 ' + MAP.sel.length) : '';
+}
+
 function mapInfo(pid){
   if(!pid) return '空白（海域或未定义）';
   const rec = (MAP.idx && MAP.idx[String(pid)]) || {};
   const sid = rec.state || 0;
-  let stName = '';
-  if(sid && typeof STATES !== 'undefined'){
-    const st = Object.values(STATES || {}).find(x=>Number(x.id) === sid);
-    if(st) stName = ' · ' + (st.name || ('州 ' + sid));
+  const parts = [];
+  parts.push('省 ' + pid);
+  // 省自己的 RGB（definition.csv 的原色）
+  if(rec.rgb && rec.rgb.length === 3){
+    const c = rec.rgb;
+    parts.push('#' + ((1 << 24) + (c[0] << 16) + (c[1] << 8) + c[2]).toString(16).slice(1));
   }
-  return '省 ' + pid + ' · 州 ' + (sid || '无') + stName +
-    ' · 地区 ' + (rec.region || '无') + (rec.terrain ? ' · ' + rec.terrain : '') +
-    (rec.continent ? ' · 洲 ' + rec.continent : '');
+  const t = rec.type || '';
+  parts.push(t === 'ocean' ? '海洋' : (t === 'lake' ? '湖泊' : (t === 'land' ? '陆地' : (t || '未知'))));
+  const st = _stateById(sid);
+  parts.push('州 ' + (sid || '无') + (st && st.name && st.name !== ('STATE_' + sid) ? ' ' + st.name : ''));
+  const rn = _regionName(rec.region);
+  if(rn) parts.push(rn);
+  if(rec.terrain) parts.push(rec.terrain);
+  if(rec.continent) parts.push('洲 ' + rec.continent);
+  return parts.join(' · ');
 }
 
 function mapReadyHint(){
@@ -5799,7 +5913,7 @@ function mapBindEvents(){
   wrap.dataset.bound = '1';
   let drag = null;
   wrap.addEventListener('pointerdown', e=>{
-    if(e.target.closest('#mapTools')) return;
+    if(mapEventOverUI(e)) return;
     e.preventDefault();
     drag = {x: e.clientX, y: e.clientY, ox: MAP.x, oy: MAP.y, moved: false};
     wrap.classList.add('dragging');
@@ -5815,7 +5929,7 @@ function mapBindEvents(){
       mapApply();
       return;
     }
-    if(!MAP.ready) return;
+    if(!MAP.ready || mapEventOverUI(e)) return;
     const p = mapScreenToImage(e.clientX, e.clientY);
     const pid = mapProvAt(p.x, p.y);
     hud.textContent = mapInfo(pid);
@@ -5824,6 +5938,7 @@ function mapBindEvents(){
     wrap.classList.remove('dragging');
     const moved = drag && drag.moved;
     drag = null;
+    if(mapEventOverUI(e)) return;           // 抬起在 UI 上：不算点选
     if(moved || !MAP.ready) return;
     const p = mapScreenToImage(e.clientX, e.clientY);
     const pid = mapProvAt(p.x, p.y);
