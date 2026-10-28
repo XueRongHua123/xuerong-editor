@@ -913,10 +913,6 @@
       <div id="treeList" style="max-height:300px;overflow:auto"></div>
     </details>
     <details open>
-      <summary>事件树</summary>
-      <div class="mp-acts" style="padding:2px 0 6px"><button class="btn" id="evOpen" style="width:100%;background:var(--panel2);border:1px solid var(--line2);height:30px">事件树编辑</button></div>
-    </details>
-    <details open>
       <summary>国家精神</summary>
       <div id="ideaEntry" class="tabbtn">🧠 国家精神编辑器</div>
     </details>
@@ -936,9 +932,13 @@
       <summary>科技</summary>
       <div id="techEntry" class="tabbtn">🔬 科技编辑器</div>
     </details>
-    <details>
+    <details open>
       <summary>事件</summary>
-      <div id="eventEntry" class="tabbtn">📜 事件编辑器</div>
+      <div class="mp-acts" style="padding:2px 0 4px;gap:6px">
+        <button class="btn" id="evEntryTree" style="flex:1;background:var(--panel2);border:1px solid var(--line2);height:30px">事件树编辑</button>
+        <button class="btn" id="evEntryList" style="flex:1;background:var(--panel2);border:1px solid var(--line2);height:30px">事件编辑器</button>
+      </div>
+      <div id="eventEntry" class="tabbtn" style="display:none">📜 事件编辑器</div>
     </details>
     <details>
       <summary>统计</summary>
@@ -1175,9 +1175,13 @@
               <label>title 键</label>
               <input id="evEdTitle" placeholder="mvlv_jap.1.t">
               <div class="ev-p-hint" id="evEdTitleText"></div>
+              <label>标题文本（中文）</label>
+              <input id="evEdTitleCn" placeholder="留空则不写">
               <label>desc 键</label>
               <input id="evEdDesc" placeholder="mvlv_jap.1.d">
               <div class="ev-p-hint" id="evEdDescText"></div>
+              <label>描述文本（中文）</label>
+              <textarea id="evEdDescCn" rows="3" style="width:100%;box-sizing:border-box;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px 8px;font-size:12px;resize:vertical"></textarea>
               <div class="ev-p-opt" id="evEdOpts"></div>
               <div class="ev-p-acts">
                 <button class="btn" id="evEdSave" disabled>保存到文件</button>
@@ -4468,7 +4472,7 @@ function applyZoomFactor(factor, clientX, clientY){
   const ax = useMouse ? (clientX - rect.left) : rect.width / 2;
   const ay = useMouse ? (clientY - rect.top) : rect.height / 2;
   const k0 = view.k;
-  const k1 = Math.min(4, Math.max(0.08, k0 * factor));
+  const k1 = Math.min(32, Math.max(0.06, k0 * factor));   // 上限 32 倍：HOI4 的省界像素级编辑需要放大到很大
   if(Math.abs(k1 - k0) < 1e-4) return;
   const f = k1 / k0;
   // 让锚点下的场景坐标在缩放前后保持在同一屏幕位置
@@ -6277,13 +6281,20 @@ async function mapShowGfxMissing(){
   }
 
   function evBind(){
-    const btn = document.getElementById('evOpen');
+    const btn = document.getElementById('evEntryTree');
     if(!btn || btn.dataset.bound) return;
     btn.dataset.bound = '1';
     btn.onclick = ()=>{
       document.getElementById('evModal').classList.add('show');
       evLoadList();
     };
+    const listBtn = document.getElementById('evEntryList');
+    if(listBtn && !listBtn.dataset.bound){
+      listBtn.dataset.bound = '1';
+      listBtn.onclick = ()=>{
+        if(typeof openEvents === 'function') openEvents();
+      };
+    }
     document.getElementById('evClose').onclick = evClose;
     document.getElementById('evNew').onclick = async ()=>{
       const ns = prompt('新命名空间的名称（字母开头，只用字母数字下划线）：', 'my_events');
@@ -6444,6 +6455,8 @@ function makePannable(svg, body){
     document.getElementById('evEdDesc').value = r.desc || '';
     document.getElementById('evEdTitleText').textContent = r.titleText || '（无翻译）';
     document.getElementById('evEdDescText').textContent = (r.descText || '（无翻译）').slice(0, 160);
+    document.getElementById('evEdTitleCn').value = r.titleText || '';
+    document.getElementById('evEdDescCn').value = r.descText || '';
     const box = document.getElementById('evEdOpts');
     box.innerHTML = (r.options || []).map((o, i)=>
       '<div class="o-row"><b>选项 ' + (i + 1) + '</b>' +
@@ -6466,6 +6479,8 @@ function makePannable(svg, body){
       id: curEv.id,
       title: document.getElementById('evEdTitle').value.trim(),
       desc: document.getElementById('evEdDesc').value.trim(),
+      titleText: document.getElementById('evEdTitleCn').value.trim(),
+      descText: document.getElementById('evEdDescCn').value.trim(),
       options: opts.filter(Boolean)
     };
     edMsg('写入中…');
@@ -7063,7 +7078,7 @@ function mapBindEvents(){
     e.preventDefault();
     const r = wrap.getBoundingClientRect();
     const mx = e.clientX - r.left, my = e.clientY - r.top;
-    const k2 = Math.max(0.08, Math.min(4, MAP.k * (e.deltaY < 0 ? 1.16 : 0.86)));
+    const k2 = Math.max(0.06, Math.min(32, MAP.k * (e.deltaY < 0 ? 1.16 : 0.86)));
     MAP.x = mx - (mx - MAP.x) * (k2 / MAP.k);
     MAP.y = my - (my - MAP.y) * (k2 / MAP.k);
     MAP.k = k2;

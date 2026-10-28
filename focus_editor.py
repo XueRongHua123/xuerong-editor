@@ -5593,6 +5593,32 @@ def event_space_delete(ns, root=None):
             "msg": "已删除命名空间 %s 的 %d 个事件" % (ns, removed)}
 
 
+def _loc_write_pairs(root, pairs, lang="simp_chinese"):
+    """把 {key: text} 写进 zz_xuerong_evtext_l_<lang>.yml（只覆盖这些键）"""
+    if not pairs:
+        return ""
+    d = os.path.join(root, "localisation", lang)
+    os.makedirs(d, exist_ok=True)
+    fn = os.path.join(d, "zz_xuerong_evtext_l_%s.yml" % lang)
+    existing = {}
+    if os.path.exists(fn):
+        try:
+            line_re = re.compile(r'^\s*([A-Za-z0-9_.\-]+):\d*\s+"(.*)"\s*$')
+            for ln in io.open(fn, encoding="utf-8-sig", errors="replace").read().splitlines():
+                m = line_re.match(ln)
+                if m:
+                    existing[m.group(1)] = m.group(2)
+        except Exception:
+            pass
+    for k, v in pairs.items():
+        existing[k] = str(v).replace('"', "'").replace(chr(10), "\\n")
+    lines = ["l_%s:" % lang]
+    for k in sorted(existing):
+        lines.append(' %s:0 "%s"' % (k, existing[k]))
+    io.open(fn, "wb").write(b"\xef\xbb\xbf" + (chr(10).join(lines) + chr(10)).encode("utf-8"))
+    return os.path.basename(fn)
+
+
 def event_detail(eid, root=None):
     """读一个事件的 title / desc / 各 option 的名称与触发目标，供就地编辑"""
     eid = (eid or "").strip()
@@ -5644,7 +5670,8 @@ def event_detail(eid, root=None):
     return {"ok": False, "msg": "找不到事件 %s（可能不在本 mod 里）" % eid}
 
 
-def event_edit(eid, title=None, desc=None, options=None, root=None):
+def event_edit(eid, title=None, desc=None, options=None, root=None,
+               title_text=None, desc_text=None):
     """就地改事件的 title / desc / 各 option 的名称与触发目标。
 
     只替换匹配到的行，不动其它内容；改前 snapshot。"""
@@ -5740,13 +5767,36 @@ def event_edit(eid, title=None, desc=None, options=None, root=None):
                         state["this"] = False
                 out.append(ln)
             if not changed:
+                # 键名没变，但可能只改了中文文本 —— 那也要写进 yml
+                _p2 = {}
+                if title_text and title:
+                    _p2[title] = title_text
+                if desc_text and desc:
+                    _p2[desc] = desc_text
+                if _p2:
+                    _lf = _loc_write_pairs(root, _p2)
+                    reload_data()
+                    return {"ok": True, "id": eid, "file": os.path.relpath(p, root),
+                            "locFile": _lf, "changed": ["文本"],
+                            "msg": "已更新 %s 的文本（写进 %s）" % (eid, _lf)}
                 return {"ok": False, "msg": "没有实际改动（参数为空或未匹配到字段）"}
             snapshot(p)
             io.open(p, "wb").write(b"\xef\xbb\xbf" + "".join(out).encode("utf-8"))
+            # 中文文本写进本地化，不塞回事件文件
+            _pairs = {}
+            if title_text and title:
+                _pairs[title] = title_text
+            if desc_text and desc:
+                _pairs[desc] = desc_text
+            _locfn = _loc_write_pairs(root, _pairs) if _pairs else ""
+            if _pairs:
+                changed.append("文本")
             reload_data()
+            _msg = "已更新 %s 的 %s" % (eid, "、".join(sorted(set(changed))))
+            if _locfn:
+                _msg += "（文本写进 %s）" % _locfn
             return {"ok": True, "id": eid, "file": os.path.relpath(p, root),
-                    "changed": changed,
-                    "msg": "已更新 %s 的 %s" % (eid, "、".join(sorted(set(changed))))}
+                    "locFile": _locfn, "changed": changed, "msg": _msg}
     return {"ok": False, "msg": "找不到事件 %s" % eid}
 
 
@@ -8410,7 +8460,8 @@ class Handler(SimpleHTTPRequestHandler):
                                     bool(body.get("dry"))))
         elif self.path == "/api/event_edit":
             self._send(event_edit(body.get("id"), body.get("title"), body.get("desc"),
-                                  body.get("options"), body.get("root")))
+                                  body.get("options"), body.get("root"),
+                                  body.get("titleText"), body.get("descText")))
         elif self.path == "/api/refine_apply":
             self._send(refine_apply(body.get("pid") or 0, body.get("k") or 2,
                                     body.get("root"), body.get("base_pid")))
