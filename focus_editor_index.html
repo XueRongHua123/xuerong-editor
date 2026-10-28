@@ -574,6 +574,14 @@
   .ft-node text{fill:#c8d0d4;font-size:10px;text-anchor:middle;pointer-events:none}
   .ft-edge{stroke:#5a656b;stroke-width:2;fill:none}
   .ft-edge.mutex{stroke:#a06060;stroke-dasharray:5 4}
+  /* ---------- v1.9.6 日志行号跳转 ---------- */
+  .log-line{padding:2px 6px;border-radius:4px;font-family:Consolas,monospace;font-size:11.5px;
+    white-space:pre-wrap;word-break:break-all;cursor:default}
+  .log-line.clickable{cursor:pointer}
+  .log-line.clickable:hover{background:var(--panel2)}
+  .log-line .log-loc{color:var(--accent);margin-left:6px;font-size:10.5px}
+  .log-ex{white-space:pre;font-family:Consolas,monospace;font-size:12px;padding:1px 6px;border-radius:3px}
+  .log-ex.hit{background:color-mix(in srgb,var(--accent) 22%,transparent);font-weight:600}
   /* ---------- v1.9.2 图层预设 ---------- */
   .lt-preset-row{display:flex;flex-wrap:wrap;gap:4px;padding-bottom:6px}
   .lt-preset{flex:0 0 calc(33.33% - 3px);height:26px;font-size:11px;cursor:pointer;
@@ -1745,8 +1753,12 @@
 </div>
 <div id="logModal">
   <div class="diff-card">
-    <div class="diff-head"><b>游戏 error.log（最近相关行）</b><button class="btn" id="logClose">关闭</button></div>
-    <pre id="logBody" class="diff-body" style="max-height:560px"></pre>
+    <div class="diff-head"><b>游戏 error.log（最近相关行）</b><span class="k" id="logStat" style="margin-left:10px"></span><button class="btn" id="logClose">关闭</button></div>
+    <div id="logBody" class="diff-body" style="max-height:420px;overflow:auto"></div>
+    <div id="logJump" style="display:none;border-top:1px solid var(--line);padding:8px 12px;max-height:260px;overflow:auto">
+      <div class="k" id="logJumpHead" style="margin-bottom:6px"></div>
+      <div id="logJumpBody" style="font-family:Consolas,monospace;font-size:12px;line-height:1.55"></div>
+    </div>
   </div>
 </div>
 <div id="treeSet">
@@ -1941,12 +1953,8 @@ async function openLocCheck(){
   document.getElementById('locModal').classList.add('show');
 }
 async function openLog(){
-  const r = await fetch('/api/errorlog');
-  const j = await r.json();
-  const lines = j.lines || [];
-  document.getElementById('logBody').textContent = (j.path || '') + '\n\n' +
-    (lines.length ? lines.join('\n') : '没有发现相关的报错行。');
   document.getElementById('logModal').classList.add('show');
+  if(window.__logOpen) await window.__logOpen();
 }
 async function openBackups(){
   const t = curTree();
@@ -6825,6 +6833,62 @@ function makePannable(svg, body){
       if(window.mapRenderSelection) window.mapRenderSelection();
     }
   }
+})();
+
+// v1.9.6 日志行号跳转
+(async function(){
+  window.__logOpen = async function(){
+    const r = await (await fetch('/api/errorlog')).json();
+    const items = r.items || [];
+    const body = document.getElementById('logBody');
+    const stat = document.getElementById('logStat');
+    const jump = document.getElementById('logJump');
+    if(stat) stat.textContent = items.length
+      ? (items.length + ' 行，其中 ' + (r.withLoc || 0) + ' 行能定位到文件')
+      : '';
+    if(jump) jump.style.display = 'none';
+    if(!items.length){
+      body.innerHTML = '<div class="cm-empty">没有发现相关的报错行。</div>';
+      return;
+    }
+    const esc = function(t){
+      return (t || '').replace(/[<>&]/g, function(c){
+        return {'<':'&lt;','>':'&gt;','&':'&amp;'}[c];
+      });
+    };
+    body.innerHTML = items.map(function(it){
+      const loc = it.loc;
+      const cls = 'log-line' + (loc ? ' clickable' : '');
+      const tag = loc ? '<span class="log-loc">' + esc(loc.file) + ':' + loc.line + '</span>' : '';
+      const tip = loc ? ('点这里看 ' + loc.file + ' 第 ' + loc.line + ' 行') : '';
+      return '<div class="' + cls + '" data-file="' + (loc ? loc.file : '') +
+             '" data-line="' + (loc ? loc.line : '') + '" title="' + tip + '">' +
+             esc(it.text) + tag + '</div>';
+    }).join('');
+
+    body.querySelectorAll('.log-line.clickable').forEach(function(el){
+      el.onclick = async function(){
+        const f = el.dataset.file, ln = el.dataset.line;
+        const jr = await (await fetch('/api/file_excerpt?file=' + encodeURIComponent(f) +
+                                      '&line=' + encodeURIComponent(ln))).json();
+        const head = document.getElementById('logJumpHead');
+        const box = document.getElementById('logJumpBody');
+        jump.style.display = 'block';
+        if(!jr.ok){
+          head.textContent = jr.msg || '打不开';
+          box.innerHTML = '';
+          return;
+        }
+        head.textContent = jr.file + '　第 ' + jr.line + ' 行 / 共 ' + jr.total + ' 行';
+        box.innerHTML = (jr.excerpt || []).map(function(x){
+          return '<div class="log-ex' + (x.hit ? ' hit' : '') + '">' +
+                 String(x.n).padStart(4, ' ') + '  ' + esc(x.text) + '</div>';
+        }).join('');
+        const hit = box.querySelector('.log-ex.hit');
+        if(hit) hit.scrollIntoView({block:'center'});
+      };
+    });
+  };
 })();
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */

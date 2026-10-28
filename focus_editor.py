@@ -505,18 +505,61 @@ def missing_loc():
                 out.append({"tree": tid, "id": f["id"], "key": f["id"], "file": t["file"]})
     return out
 
+def _log_loc(ln):
+    """从一行日志里抠出「文件 + 行号」。HOI4 常见两种写法：
+        ... in file events/xxx.txt line 42
+        ... at events/xxx.txt:42
+    引擎自己的 cpp 位置（script_persistent.cpp:123）不是 mod 文件，忽略。"""
+    m = re.search(r'in file\s+"?([\w./\\-]+\.(?:txt|yml|gfx|gui))"?\s+line\s+(\d+)', ln, re.I)
+    if not m:
+        m = re.search(r'([\w./\\-]+\.(?:txt|yml|gfx|gui)):(\d+)', ln)
+    if m:
+        return {"file": m.group(1).replace(chr(92), "/"), "line": int(m.group(2))}
+    return None
+
+
 def error_log(limit=120):
+    """返回错误行 + 每行解析出的文件位置（用于跳转）"""
     p = os.path.join(os.path.expanduser("~"), "Documents", "Paradox Interactive",
                      "Hearts of Iron IV", "logs", "error.log")
-    lines = []
+    items = []
     if os.path.exists(p):
         try:
             raw = io.open(p, encoding="utf-8", errors="replace").read().splitlines()
-            keep = [ln for ln in raw if re.search(r'focus|national_focus|idea|mod/|Error', ln, re.I)]
-            lines = keep[-limit:]
+            keep = [(i, ln) for i, ln in enumerate(raw, 1)
+                    if re.search(r'focus|national_focus|idea|mod/|Error', ln, re.I)]
+            for i, ln in keep[-limit:]:
+                items.append({"n": i, "text": ln, "loc": _log_loc(ln)})
         except Exception as e:
-            lines = ["读取失败: %s" % e]
-    return {"path": p, "lines": lines}
+            items = [{"n": 0, "text": "读取失败: %s" % e, "loc": None}]
+    return {"path": p, "items": items,
+            "lines": [x["text"] for x in items],
+            "withLoc": sum(1 for x in items if x.get("loc"))}
+
+
+def file_excerpt(rel, line, root=None, span=6):
+    """取某个文件第 line 行前后 span 行，供日志跳转预览"""
+    rel = (rel or "").replace(chr(92), "/").strip("/")
+    if not rel:
+        return {"ok": False, "msg": "没有文件路径"}
+    cands = []
+    for base in mod_layers(_map_pick(root)) or [GAME]:
+        if base:
+            cands.append(os.path.join(base, rel.replace("/", os.sep)))
+    for c in cands:
+        if os.path.exists(c):
+            try:
+                lines = io.open(c, encoding="utf-8-sig", errors="replace").read().splitlines()
+            except Exception as e:
+                return {"ok": False, "msg": "读取失败：%s" % e}
+            line = max(1, min(int(line or 1), len(lines) or 1))
+            a = max(0, line - 1 - span)
+            b = min(len(lines), line + span)
+            return {"ok": True, "file": rel, "line": line, "total": len(lines),
+                    "from": a + 1, "to": b, "path": c,
+                    "excerpt": [{"n": a + i + 1, "text": lines[a + i],
+                                 "hit": (a + i + 1) == line} for i in range(b - a)]}
+    return {"ok": False, "msg": "在任何 mod 层与原版里都找不到 %s" % rel}
 
 def load_equipment(root):
     name = os.path.basename(root.rstrip("\\/")) or root
@@ -1500,6 +1543,9 @@ def countries_payload():
             "cores": len(c.get("states_core", [])),
             "ideas": len(c.get("ideas", [])),
             "issues": len(_country_issues(c)),
+            "capital": c.get("capital", ""),
+            "political_power": c.get("political_power", ""),
+            "ruling_party": c.get("ruling_party", ""),
             "orphan": bool(c.get("orphan_history")),
         })
     return {"count": len(items), "list": items}
@@ -8400,6 +8446,10 @@ class Handler(SimpleHTTPRequestHandler):
             self._send(lint_project())
         elif path_only == "/api/missing_loc":
             self._send({"items": missing_loc()})
+        elif path_only == "/api/file_excerpt":
+            _q = parse_qs(urlparse(self.path).query)
+            self._send(file_excerpt(_q.get("file", [""])[0], _q.get("line", ["1"])[0],
+                                    _q.get("root", [None])[0]))
         elif path_only == "/api/errorlog":
             self._send(error_log())
         elif path_only == "/api/report":
