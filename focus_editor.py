@@ -5087,6 +5087,170 @@ def loc_generate(root=None, keys=None, lang="simp_chinese", dry=False):
                 added, os.path.basename(fn))}
 
 
+# ref: CWTools validator "referenced sprites and graphics files exist"
+_GFX_CACHE = {}
+
+
+def _gfx_collect(root, layers, include_vanilla=True):
+    """收集 sprite 定义 → {spriteName: texturefile}，以及 texture 文件集合
+
+    原版的 interface/*.gfx 有 145 个文件、几万个 sprite，只在第一次调用时扫一遍。"""
+    key = (os.path.abspath(root or ""), include_vanilla)
+    hit = _GFX_CACHE.get(key)
+    if hit:
+        return hit
+
+    sprites = {}
+    textures = set()
+
+    def _scan(base):
+        d = os.path.join(base or "", "interface")
+        if not os.path.isdir(d):
+            return
+        for _dp, _dn, files in os.walk(d):
+            for fn in files:
+                if not fn.endswith(".gfx"):
+                    continue
+                p = os.path.join(_dp, fn)
+                try:
+                    text = strip_comments(io.open(p, encoding="utf-8-sig",
+                                                  errors="replace").read())
+                except Exception:
+                    continue
+                # 用 brace 配对取每个 spriteType 块：块内还有 frames/instances 等嵌套，
+                # 非贪婪正则会在第一个 } 处截断，导致大量 sprite 漏收。
+                # 变体：spriteType / corneredTileSpriteType / frameAnimatedSpriteType / progressbartype
+                for m in re.finditer(r'(?m)^\s*([A-Za-z_]*[Ss]priteType|progressbartype)\s*=\s*\{',
+                                     text):
+                    b = text.find("{", m.end() - 1)
+                    e = brace_match(text, b)
+                    if e <= b:
+                        continue
+                    body = text[b + 1:e - 1]
+                    # name 可以带引号也可以不带（name = GFX_xxx）
+                    nm = re.search(r'(?m)^\s*name\s*=\s*"?([^"\s\}]+)"?', body)
+                    if not nm:
+                        continue
+                    name = nm.group(1)
+                    tx = re.search(r'(?m)^\s*texturefile\s*=\s*"?([^"\s\}]+)"?', body)
+                    sprites[name] = tx.group(1) if tx else ""
+                    if tx:
+                        textures.add(tx.group(1).replace(chr(92), "/").lower())
+
+    if include_vanilla and GAME:
+        _scan(GAME)
+    for b in (layers or []):
+        if b:
+            _scan(b)
+    _GFX_CACHE[key] = (sprites, textures)
+    return sprites, textures
+
+
+def _gfx_refs(root, layers):
+    """扫 mod 脚本里的 sprite 引用 → {spriteName: (位置描述, 文件)}"""
+    refs = {}
+
+    def _note(name, where, f):
+        name = (name or "").strip()
+        if len(name) <= 4 or not name.startswith("GFX_"):
+            return          # icon = aluminium / generic 这种不是 sprite；GFX_ 空名也跳过
+        if name not in refs:
+            refs[name] = [where, f]
+
+    # 国策 icon / 精神 picture / 事件 picture / 决议 icon / 装备 picture
+    # sprite 名可能带非 ASCII（GFX_94式戦車 这种），[A-Za-z0-9_.-] 会把名字截断
+    patterns = [
+        (r'icon\s*=\s*"?([^"\s\}]+)"?', "icon"),
+        (r'picture\s*=\s*"?([^"\s\}]+)"?', "picture"),
+    ]
+    for rel_dir in ("common/national_focus", "common/ideas", "common/decisions",
+                    "common/decisions/categories", "events", "common/units/equipment"):
+        d = os.path.join(root, rel_dir)
+        if not os.path.isdir(d):
+            continue
+        for _dp, _dn, files in os.walk(d):
+            for fn in files:
+                if not fn.endswith(".txt"):
+                    continue
+                p = os.path.join(_dp, fn)
+                try:
+                    text = strip_comments(io.open(p, encoding="utf-8-sig",
+                                                  errors="replace").read())
+                except Exception:
+                    continue
+                for pat, where in patterns:
+                    for m in re.finditer(pat, text):
+                        _note(m.group(1), where, os.path.basename(p))
+    return refs
+
+
+def gfx_missing(root=None, limit=600):
+    """列出引用了但没定义的 sprite，以及定义了但贴图文件不存在的 sprite"""
+    root = _map_pick(root)
+    layers = mod_layers(root)
+    sprites, textures = _gfx_collect(root, layers)
+    refs = _gfx_refs(root, layers)
+    if not refs:
+        return {"ok": True, "total": 0, "missing": [],
+                "msg": "脚本里没有找到 sprite 引用"}
+
+    missing = []
+    by_kind = {}
+    for name, (where, f) in refs.items():
+        if name in sprites:
+            continue
+        # 纯色/文字类的值不是 sprite（比如 icon = 3 已被正则过滤，这里防空）
+        missing.append({"name": name, "where": where, "file": f})
+        by_kind[where] = by_kind.get(where, 0) + 1
+    missing.sort(key=lambda x: (x["where"], x["name"]))
+
+    # 顺带查：mod 自己定义的 sprite，贴图文件是否真的存在
+    mod_sprites = {}
+    for b in (layers or []):
+        if not b or os.path.abspath(b) == os.path.abspath(GAME or ""):
+            continue
+        s2, _t2 = _gfx_collect(b, [], include_vanilla=False)
+        mod_sprites.update(s2)
+    bad_texture = []
+    for name, tx in mod_sprites.items():
+        if not tx:
+            continue
+        if not _gfx_texture_exists(tx, layers):
+            bad_texture.append({"name": name, "texture": tx})
+
+    return {"ok": True, "total": len(missing), "by_kind": by_kind,
+            "refs": len(refs), "defined": len(sprites),
+            "missing": missing[:limit], "truncated": len(missing) > limit,
+            "bad_texture": bad_texture[:limit],
+            "bad_texture_total": len(bad_texture),
+            "msg": "引用 %d 个 sprite，缺 %d 个；贴图文件缺失 %d 个" % (
+                len(refs), len(missing), len(bad_texture))}
+
+
+def _gfx_texture_exists(rel, layers):
+    """贴图文件是否存在于某一层（忽略大小写，游戏在 Windows 上不区分）"""
+    rel = (rel or "").replace(chr(92), "/").strip("/")
+    if not rel:
+        return True
+    low = rel.lower()
+    for base in (layers or []):
+        if not base:
+            continue
+        cand = os.path.join(base, rel.replace("/", os.sep))
+        if os.path.exists(cand):
+            return True
+        # 大小写不一致时按目录列举比对
+        d = os.path.dirname(cand)
+        if os.path.isdir(d):
+            try:
+                for fn in os.listdir(d):
+                    if fn.lower() == os.path.basename(cand).lower():
+                        return True
+            except Exception:
+                pass
+    return False
+
+
 def _terrain_colors(root):
     """从 common/terrain/*.txt 读各地形类别的游戏内配色 {name: (r,g,b)}。
     mod 定义了同名类别就覆盖原版；读不到就返回空字典。"""
@@ -7428,6 +7592,10 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/log":
             _q = parse_qs(urlparse(self.path).query)
             self._send(read_error_log((_q.get("path", [""])[0] or None)))
+        elif path_only == "/api/gfx_missing":
+            _q = parse_qs(urlparse(self.path).query)
+            self._send(gfx_missing(_q.get("root", [None])[0],
+                                   int(_q.get("limit", ["600"])[0])))
         elif path_only == "/api/loc_missing":
             _q = parse_qs(urlparse(self.path).query)
             self._send(loc_missing(_q.get("root", [None])[0],

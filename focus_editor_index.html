@@ -1112,6 +1112,7 @@
           <button class="btn" id="mckTabRank" style="font-size:11px">省份排行</button>
           <button class="btn" id="mckRepair" style="font-size:11px" title="自动修能修的问题">一键修复</button>
           <button class="btn" id="mckLoc" style="font-size:11px" title="检查脚本引用的本地化键是否都有定义">本地化</button>
+          <button class="btn" id="mckGfx" style="font-size:11px" title="检查引用的 sprite 是否都有 gfx 定义">贴图</button>
           <div id="mckStats"></div>
           <button class="btn" id="mckRun">重新检查</button>
           <button class="btn" id="mckClose">关闭</button>
@@ -5880,6 +5881,41 @@ async function mapShowLocMissing(){
     if(g.ok) mapShowLocMissing();
   };
 }
+// v1.3.2 gfx / sprite 引用检查（参考 CWTools 的 sprite 存在性校验）
+async function mapShowGfxMissing(){
+  const list = document.getElementById('mckList');
+  const stats = document.getElementById('mckStats');
+  list.innerHTML = '<div class="cm-empty">扫描中（要读原版 145 个 gfx，约 3 秒）…</div>';
+  if(stats) stats.textContent = '';
+  const r = await (await fetch('/api/gfx_missing?limit=600')).json();
+  if(!r.ok){ list.innerHTML = '<div class="cm-empty">' + escapeHtml(r.msg || '扫描失败') + '</div>'; return; }
+  const bad = r.bad_texture_total || 0;
+  if(stats) stats.innerHTML = '<span class="w" style="margin-right:8px">缺 ' + (r.total || 0) + '</span>'
+    + '<span class="k">' + (r.defined || 0) + ' 已定义</span>'
+    + (bad ? '<span class="w" style="margin-left:8px">贴图缺 ' + bad + '</span>' : '');
+  let html = '';
+  if(!r.total && !bad){
+    list.innerHTML = '<div class="cm-empty">' + escapeHtml(r.msg || '全部都有定义') + '</div>';
+    return;
+  }
+  if(r.total){
+    html += '<div class="mck-row"><div><div class="mck-t">引用了但没定义 · ' + r.total + ' 个</div>'
+      + '<div class="mck-d">游戏里会显示成空白方块或报错</div></div></div>';
+    html += (r.missing || []).map(x=>
+      '<div class="mck-row"><div><div class="mck-t" style="font-family:monospace">' + escapeHtml(x.name) + '</div>'
+      + '<div class="mck-d">' + escapeHtml(x.where) + '　' + escapeHtml(x.file || '') + '</div></div></div>'
+    ).join('');
+  }
+  if(bad){
+    html += '<div class="mck-row"><div><div class="mck-t">定义了但贴图文件不存在 · ' + bad + ' 个</div>'
+      + '<div class="mck-d">sprite 存在但 dds 缺失，加载时会报找不到文件</div></div></div>';
+    html += (r.bad_texture || []).map(x=>
+      '<div class="mck-row"><div><div class="mck-t" style="font-family:monospace">' + escapeHtml(x.name) + '</div>'
+      + '<div class="mck-d">' + escapeHtml(x.texture) + '</div></div></div>'
+    ).join('');
+  }
+  list.innerHTML = html;
+}
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -6714,6 +6750,7 @@ document.getElementById('mckTabCheck').onclick = mapRunCheck;
 document.getElementById('mckTabRank').onclick = mapShowRank;
 document.getElementById('mckRepair').onclick = mapRepair;
 document.getElementById('mckLoc').onclick = mapShowLocMissing;
+document.getElementById('mckGfx').onclick = mapShowGfxMissing;
 document.getElementById('mckClose').onclick = ()=>{ document.getElementById('mapCheckModal').classList.remove('show'); };
 
 document.getElementById('mapSearch').addEventListener('keydown', e=>{ if(e.key === 'Enter') mapSearchGo(); });
