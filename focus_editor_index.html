@@ -528,8 +528,9 @@
   #evCard{width:min(1400px,calc(100% - 40px));height:calc(100% - 60px);display:flex;flex-direction:column;
     background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:var(--shadow)}
   #evHead{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);flex:0 0 auto}
-  #evBody{flex:1;overflow:auto;background:#14171a}
-  #evSvg{display:block}
+  #evBody{flex:1;overflow:hidden;background:#14171a;cursor:grab;position:relative}
+  #evBody.dragging{cursor:grabbing}
+  #evSvg{display:block;width:100%;height:100%}
   .ev-node rect{fill:#232a2e;stroke:#4a555c;stroke-width:2;rx:6}
   .ev-node:hover rect{stroke:var(--accent)}
   .ev-node.ext rect{fill:#1c2024;stroke:#3a4248;stroke-dasharray:4 3}
@@ -545,9 +546,9 @@
   #ftCard{width:min(1400px,calc(100% - 40px));height:calc(100% - 60px);display:flex;flex-direction:column;
     background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:var(--shadow)}
   #ftHead{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);flex:0 0 auto}
-  #ftBody{flex:1;overflow:auto;background:#14171a;cursor:grab}
+  #ftBody{flex:1;overflow:hidden;background:#14171a;cursor:grab;position:relative}
   #ftBody.dragging{cursor:grabbing}
-  #ftSvg{display:block}
+  #ftSvg{display:block;width:100%;height:100%}
   .ft-node{cursor:pointer}
   .ft-node rect{fill:#232a2e;stroke:#4a555c;stroke-width:2;rx:8}
   .ft-node:hover rect{stroke:var(--accent)}
@@ -896,7 +897,7 @@
     </details>
     <details open>
       <summary>事件树</summary>
-      <div class="mp-acts" style="padding:2px 0 6px"><button class="btn" id="evOpen" style="width:100%;background:var(--panel2);border:1px solid var(--line2);height:30px">打开事件树编辑</button></div>
+      <div class="mp-acts" style="padding:2px 0 6px"><button class="btn" id="evOpen" style="width:100%;background:var(--panel2);border:1px solid var(--line2);height:30px">事件树编辑</button></div>
     </details>
     <details open>
       <summary>国家精神</summary>
@@ -5973,10 +5974,12 @@ async function mapShowGfxMissing(){
     const maxY = Math.max(...nodes.map(n=>n.y));
     const W = (maxX - minX + 1) * CELL + PAD * 2;
     const H = (maxY - minY + 1) * CELL + PAD * 2;
-    svg.setAttribute('width', W);
-    svg.setAttribute('height', H);
+    // 内容尺寸存 data-*；SVG 元素本身填满容器，视野完全由 viewBox 控制
+    svg.setAttribute('data-w', W);
+    svg.setAttribute('data-h', H);
     svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
     if(!svg._pan){ svg._pan = makePannable(svg, document.getElementById('ftBody')); }
+    setTimeout(()=>{ if(svg._pan) svg._pan(); }, 30);
 
     const px = n => (n.x - minX) * CELL + PAD;
     const py = n => (n.y - minY) * CELL + PAD;
@@ -6133,20 +6136,35 @@ async function mapShowGfxMissing(){
     nodes.forEach(n=>{ (layers[depth[n.id]] = layers[depth[n.id]] || []).push(n); });
     Object.keys(layers).forEach(k=> layers[k].sort((a,b)=>a.id.localeCompare(b.id, 'en', {numeric:true})));
 
+    // 同层节点太多时换行：否则 12 层横排会拍成 15:1 的细条，全览时看不清
+    const MAX_PER_ROW = 7;
     const pos = {};
-    let maxW = 0;
+    let maxW = 0, rowCursor = 0;
     Object.keys(layers).map(Number).sort((a,b)=>a-b).forEach(d=>{
-      layers[d].forEach((n, i)=>{
-        pos[n.id] = { x: i * (NW + GX) + 10, y: d * (NH + GY) + 10 };
+      const items = layers[d];
+      const rows = Math.ceil(items.length / MAX_PER_ROW) || 1;
+      items.forEach((n, i)=>{
+        const rr = Math.floor(i / MAX_PER_ROW), cc = i % MAX_PER_ROW;
+        pos[n.id] = { x: cc * (NW + GX) + 10, y: (rowCursor + rr) * (NH + GY) + 10 };
       });
-      maxW = Math.max(maxW, layers[d].length * (NW + GX));
+      maxW = Math.max(maxW, Math.min(items.length, MAX_PER_ROW) * (NW + GX));
+      rowCursor += rows;
     });
-    const maxD = Math.max(...Object.keys(layers).map(Number));
-    const W = maxW + 20, H = (maxD + 1) * (NH + GY) + 20;
-    svg.setAttribute('width', W);
-    svg.setAttribute('height', H);
+    // 层与层之间多留一点空隙，读起来像一层一层的
+    let extra = 0;
+    Object.keys(layers).map(Number).sort((a,b)=>a-b).forEach(d=>{
+      const rows = Math.ceil(layers[d].length / MAX_PER_ROW) || 1;
+      layers[d].forEach((n)=>{ pos[n.id].y += extra * (NH + GY); });
+      extra += 0.7;      // 每层之间的额外间隙（按行高比例）
+      rowCursor;
+    });
+    const W = maxW + 20, H = rowCursor * (NH + GY) + extra * (NH + GY) + 20;
+    // 内容尺寸存 data-*；SVG 元素本身填满容器，视野完全由 viewBox 控制
+    svg.setAttribute('data-w', W);
+    svg.setAttribute('data-h', H);
     svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
     if(!svg._pan){ svg._pan = makePannable(svg, document.getElementById('evBody')); }
+    setTimeout(()=>{ if(svg._pan) svg._pan(); }, 30);
 
     let out = '<defs><marker id="evArrow" markerWidth="7" markerHeight="7" refX="6" refY="2.5" orient="auto">'
       + '<path d="M0,0 L6,2.5 L0,5 z" fill="#5a656b"/></marker></defs>';
@@ -6257,34 +6275,49 @@ async function mapShowGfxMissing(){
   else document.addEventListener('DOMContentLoaded', evBind);
 })();
 
-// v1.6.0 通用：SVG 预览的滚轮缩放 + 左键拖动（操作 viewBox）
+// v1.6.0 通用：SVG 预览的滚轮缩放 + 左键拖动（只操作 viewBox）
+// v1.6.1 关键：viewBox 的宽高比必须锁定成容器的比例。
+// 否则 preserveAspectRatio 会按「较小的一边」重新缩放内容，拖动时画面会突然缩成一条。
 function makePannable(svg, body){
   let vb = null;
+
+  function containerAR(){
+    const r = svg.getBoundingClientRect();
+    return (r.width > 1 && r.height > 1) ? (r.width / r.height) : (16 / 9);
+  }
   function readVB(){
     const v = (svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number);
     if(v.length === 4 && v.every(n=>isFinite(n))) vb = {x:v[0], y:v[1], w:v[2], h:v[3]};
   }
   function writeVB(){ if(vb) svg.setAttribute('viewBox', vb.x + ' ' + vb.y + ' ' + vb.w + ' ' + vb.h); }
-  readVB();
+  // 把 viewBox 的高锁成与容器一致（宽度为准）
+  function lockAR(){
+    const ar = containerAR();
+    vb.h = vb.w / ar;
+  }
 
-  // 滚轮缩放：以鼠标位置为锚点
+  readVB();
+  if(vb){ lockAR(); writeVB(); }
+
+  // 滚轮缩放：以鼠标位置为中心，宽高一起变（比例锁死）
   body.addEventListener('wheel', e=>{
     readVB();
     if(!vb) return;
     e.preventDefault();
-    const r = body.getBoundingClientRect();
+    const r = svg.getBoundingClientRect();
+    if(r.width < 1 || r.height < 1) return;
     const mx = (e.clientX - r.left) / r.width;
     const my = (e.clientY - r.top) / r.height;
     const k = e.deltaY > 0 ? 1.12 : (1 / 1.12);
-    const nw = Math.max(60, Math.min(vb.w * 8, vb.w * k));
-    const nh = nw * (vb.h / vb.w);
+    const nw = Math.max(60, Math.min(vb.w * 14, vb.w * k));
+    const nh = nw / containerAR();
     vb.x += (vb.w - nw) * mx;
     vb.y += (vb.h - nh) * my;
     vb.w = nw; vb.h = nh;
     writeVB();
   }, {passive: false});
 
-  // 左键拖动平移（只有背景拖动，节点上的拖动留给节点自己）
+  // 左键拖动平移（宽高不变，所以内容不会重新缩放）
   let dragging = false, lx = 0, ly = 0;
   body.addEventListener('mousedown', e=>{
     if(e.button !== 0) return;
@@ -6297,12 +6330,13 @@ function makePannable(svg, body){
   });
   window.addEventListener('mousemove', e=>{
     if(!dragging || !vb) return;
-    const r = body.getBoundingClientRect();
+    const r = svg.getBoundingClientRect();
+    if(r.width < 1) return;
     const dx = (e.clientX - lx) / r.width * vb.w;
     const dy = (e.clientY - ly) / r.height * vb.h;
     vb.x -= dx; vb.y -= dy;
     lx = e.clientX; ly = e.clientY;
-    writeVB();
+    writeVB();      // 只改 x/y，宽高不动 → 画面不会跳
   });
   window.addEventListener('mouseup', ()=>{
     if(!dragging) return;
@@ -6310,20 +6344,14 @@ function makePannable(svg, body){
     body.classList.remove('dragging');
   });
 
-  // 适应窗口
   return function fit(){
-    readVB();
-    if(!vb) return;
-    const r = body.getBoundingClientRect();
-    const srcW = Number(svg.getAttribute('width')) || vb.w;
-    const srcH = Number(svg.getAttribute('height')) || vb.h;
-    const k = Math.min(r.width / srcW, r.height / srcH, 1);
-    vb = {x: (srcW - srcW * k) / 2 / k, y: (srcH - srcH * k) / 2 / k,
-          w: srcW, h: srcH};
-    // 用 viewBox 直接设成全部范围（缩放交给浏览器）
-    vb = {x: 0, y: 0, w: srcW / (k || 1), h: srcH / (k || 1)};
-    vb = {x: (srcW - srcW / (k || 1)) / 2, y: (srcH - srcH / (k || 1)) / 2,
-          w: srcW / (k || 1), h: srcH / (k || 1)};
+    const srcW = Number(svg.getAttribute('data-w')) || 1000;
+    const srcH = Number(svg.getAttribute('data-h')) || 1000;
+    const ar = containerAR();
+    // 取「能装下整块内容」的最小 viewBox（保持容器比例），再居中
+    let w = Math.max(srcW, srcH * ar) * 1.04;
+    let h = w / ar;
+    vb = {x: (srcW - w) / 2, y: (srcH - h) / 2, w: w, h: h};
     writeVB();
   };
 }
