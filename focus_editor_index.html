@@ -521,6 +521,23 @@
   .lt-op:hover,.lt-group label.on .lt-op{opacity:1}
   .lt-group label{justify-content:flex-start}
 
+/* ---------- v1.7.0 事件就地编辑 ---------- */
+#evMain{flex:1;display:flex;min-height:0}
+#evBody{flex:1;min-width:0}
+#evEditPane{width:320px;flex:0 0 320px;border-left:1px solid var(--line);
+  display:flex;flex-direction:column;background:var(--panel);overflow:hidden}
+.ev-p-head{padding:10px 12px;border-bottom:1px solid var(--line);font-size:12px;color:var(--t2)}
+.ev-p-id{margin-left:8px;color:var(--accent);font-family:Consolas,monospace}
+.ev-p-body{padding:10px 12px;overflow:auto;flex:1}
+.ev-p-body label{display:block;font-size:11px;color:var(--t3);margin:8px 0 3px}
+.ev-p-body input{width:100%;height:28px;background:var(--input);border:1px solid var(--line);
+  color:var(--text);border-radius:6px;padding:0 8px;font-size:12px;box-sizing:border-box;font-family:Consolas,monospace}
+.ev-p-hint{font-size:11px;color:var(--t3);margin:3px 0 6px;line-height:1.5;word-break:break-all}
+.ev-p-opt{border-top:1px solid var(--line);margin-top:10px;padding-top:8px}
+.ev-p-opt .o-row{margin-bottom:8px;padding:6px 8px;background:var(--panel2);border-radius:6px}
+.ev-p-opt .o-row b{font-size:11px;color:var(--t2)}
+.ev-p-acts{display:flex;gap:6px;margin-top:12px}
+.ev-p-acts .btn{flex:1;height:30px;background:var(--panel2);border:1px solid var(--line2)}
 /* ---------- v1.5.0 事件树预览 ---------- */
   #evModal{position:fixed;inset:0;z-index:123;display:none;place-items:center;
     background:rgba(8,10,9,.74);backdrop-filter:blur(3px)}
@@ -1150,7 +1167,26 @@
           <button class="btn" id="evFit">适应</button>
           <button class="btn" id="evClose">关闭</button>
         </div>
-        <div id="evBody"><svg id="evSvg"></svg></div>
+        <div id="evMain">
+          <div id="evBody"><svg id="evSvg"></svg></div>
+          <div id="evEditPane">
+            <div class="ev-p-head">事件详情<span class="ev-p-id"></span></div>
+            <div class="ev-p-body">
+              <label>title 键</label>
+              <input id="evEdTitle" placeholder="mvlv_jap.1.t">
+              <div class="ev-p-hint" id="evEdTitleText"></div>
+              <label>desc 键</label>
+              <input id="evEdDesc" placeholder="mvlv_jap.1.d">
+              <div class="ev-p-hint" id="evEdDescText"></div>
+              <div class="ev-p-opt" id="evEdOpts"></div>
+              <div class="ev-p-acts">
+                <button class="btn" id="evEdSave" disabled>保存到文件</button>
+                <button class="btn" id="evEdOpen">打开完整编辑器</button>
+              </div>
+              <div class="ev-p-hint" id="evEdMsg">点节点加载</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     <div id="updModal">
@@ -6201,6 +6237,7 @@ async function mapShowGfxMissing(){
         evSel = n.id;
         const fb = document.getElementById('evFocus');
         if(fb) fb.disabled = false;
+        if(n.kind !== 'external' && window.evLoadToEditor) window.evLoadToEditor(n.id);
         info.textContent = n.id + '　' + (n.name || '（无标题）')
           + (n.file ? '　' + n.file : '　（不在本 mod 里）')
           + '　深度 ' + depth[n.id];
@@ -6355,6 +6392,72 @@ function makePannable(svg, body){
     writeVB();
   };
 }
+
+// v1.7.0 事件就地编辑
+(function(){
+  let curEv = null;
+
+  function edMsg(t, bad){
+    const el = document.getElementById('evEdMsg');
+    if(el){ el.textContent = t; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  async function loadEvent(eid){
+    const sv = document.getElementById('evEdSave');
+    if(sv) sv.disabled = true;
+    edMsg('读取中…');
+    const r = await (await fetch('/api/event_detail?id=' + encodeURIComponent(eid))).json();
+    if(!r.ok){ edMsg(r.msg || '读取失败', true); curEv = null; return; }
+    curEv = r;
+    document.querySelector('.ev-p-id').textContent = r.id + (r.file ? '　' + r.file : '');
+    document.getElementById('evEdTitle').value = r.title || '';
+    document.getElementById('evEdDesc').value = r.desc || '';
+    document.getElementById('evEdTitleText').textContent = r.titleText || '（无翻译）';
+    document.getElementById('evEdDescText').textContent = (r.descText || '（无翻译）').slice(0, 160);
+    const box = document.getElementById('evEdOpts');
+    box.innerHTML = (r.options || []).map((o, i)=>
+      '<div class="o-row"><b>选项 ' + (i + 1) + '</b>' +
+      '<label>name 键</label><input data-oi="' + i + '" data-k="name" value="' + (o.name || '') + '">' +
+      '<label>触发事件</label><input data-oi="' + i + '" data-k="target" value="' + (o.target || '') + '">' +
+      '</div>').join('') || '<div class="ev-p-hint">这个事件没有 option</div>';
+    if(sv) sv.disabled = false;
+    edMsg('改完点「保存到文件」');
+  }
+
+  async function saveEvent(){
+    if(!curEv) return;
+    const opts = [];
+    document.querySelectorAll('#evEdOpts input').forEach(inp=>{
+      const i = Number(inp.dataset.oi);
+      opts[i] = opts[i] || {};
+      opts[i][inp.dataset.k] = inp.value.trim();
+    });
+    const body = {
+      id: curEv.id,
+      title: document.getElementById('evEdTitle').value.trim(),
+      desc: document.getElementById('evEdDesc').value.trim(),
+      options: opts.filter(Boolean)
+    };
+    edMsg('写入中…');
+    const r = await (await fetch('/api/event_edit', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})).json();
+    edMsg(r.msg || (r.ok ? '已保存' : '保存失败'), !r.ok);
+    if(r.ok) status(r.msg);
+  }
+
+  function bindEd(){
+    const sv = document.getElementById('evEdSave');
+    if(!sv || sv.dataset.bound) return;
+    sv.dataset.bound = '1';
+    sv.onclick = saveEvent;
+    document.getElementById('evEdOpen').onclick = ()=>{
+      if(curEv && typeof window.openEventById === 'function') window.openEventById(curEv.id);
+    };
+  }
+  window.evLoadToEditor = function(eid){ bindEd(); loadEvent(eid); };
+  if(document.readyState !== 'loading') bindEd();
+  else document.addEventListener('DOMContentLoaded', bindEd);
+})();
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
