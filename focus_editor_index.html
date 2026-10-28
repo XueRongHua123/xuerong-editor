@@ -6446,6 +6446,21 @@ function makePannable(svg, body){
     body.classList.remove('dragging');
   });
 
+  // 窗口尺寸变了要重新校正视野比例（否则 viewBox 还是旧比例，内容会偏）
+  let resizeFitTimer = null;
+  window.addEventListener('resize', ()=>{
+    if(resizeFitTimer) clearTimeout(resizeFitTimer);
+    resizeFitTimer = setTimeout(()=>{
+      resizeFitTimer = null;
+      const r = svg.getBoundingClientRect();
+      if(r.width < 1 || r.height < 1) return;
+      readVB();
+      if(!vb) return;
+      lockAR();
+      writeVB();
+    }, 180);
+  });
+
   return function fit(){
     const srcW = Number(svg.getAttribute('data-w')) || 1000;
     const srcH = Number(svg.getAttribute('data-h')) || 1000;

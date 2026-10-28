@@ -4506,7 +4506,8 @@ def map_build(force=False, root=None):
     _terr_img.save(os.path.join(dirp, "terrain.png"))
     Image.frombytes("RGB", (w, h), bytes(contbuf)).save(os.path.join(dirp, "continent.png"))
     Image.frombytes("RGB", (w, h), bytes(idbuf)).save(os.path.join(dirp, "prov_id.png"))
-    im.resize((max(1, w // 2), max(1, h // 2)), Image.BILINEAR).save(os.path.join(dirp, "base.png"))
+    # 底图用全分辨率：缩进一半的话放大后是糊的（游戏地图本来就只有这个尺寸，没得再高）
+    im.save(os.path.join(dirp, "base.png"))
 
     centers = {}
     counts = cnts
