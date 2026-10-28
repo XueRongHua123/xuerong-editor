@@ -2535,16 +2535,29 @@ def _refine_load_ids(root):
     return ids, w, h
 
 
-def _refine_seeds(px, w, k):
-    """最远点采样：种子尽量分散"""
-    cx = sum(p % w for p in px) // len(px)
-    cy = sum(p // w for p in px) // len(px)
-    first = min(px, key=lambda i: (i % w - cx) ** 2 + (i // w - cy) ** 2)
+def _refine_grow_units(unit_ids, neighbors, k, coord=None):
+    """通用水位生长：把一组单元分成 k 组，每组尽量等量，组内连通。
+
+    unit_ids: 单元 id 列表
+    neighbors: {unit_id: [相邻 unit_id, ...]}
+    k: 分成几组
+    coord: {unit_id: (x, y)} —— 用于选种子；缺省则按 unit_ids 顺序取
+
+    返回 {group_i: [unit_id, ...]}
+    """
+    from collections import deque
+    units = list(unit_ids)
+    if not units:
+        return {}
+    k = max(1, min(k, len(units)))
+    c = coord or {u: (i, 0) for i, u in enumerate(units)}
+
+    # 最远点采样选种子
+    cx = sum(c[u][0] for u in units) / len(units)
+    cy = sum(c[u][1] for u in units) / len(units)
+    first = min(units, key=lambda u: (c[u][0] - cx) ** 2 + (c[u][1] - cy) ** 2)
     seeds = [first]
-    dist = {}
-    for p in px:
-        dx, dy = p % w - first % w, p // w - first // w
-        dist[p] = dx * dx + dy * dy
+    dist = {u: (c[u][0] - c[first][0]) ** 2 + (c[u][1] - c[first][1]) ** 2 for u in units}
     guard = 0
     while len(seeds) < k and guard < 2000:
         guard += 1
@@ -2552,91 +2565,93 @@ def _refine_seeds(px, w, k):
         if dist[nxt] <= 0:
             break
         seeds.append(nxt)
-        for p in px:
-            dx, dy = p % w - nxt % w, p // w - nxt // w
-            d = dx * dx + dy * dy
-            if d < dist[p]:
-                dist[p] = d
-    return seeds
+        for u in units:
+            d = (c[u][0] - c[nxt][0]) ** 2 + (c[u][1] - c[nxt][1]) ** 2
+            if d < dist[u]:
+                dist[u] = d
 
-
-def _refine_split(ids, w, h, pid, k):
-    """同步水位生长：每轮各长一层，到预算就停；剩余像素归最近的块。"""
-    from collections import deque
-    px = [i for i in range(len(ids)) if ids[i] == pid]
-    if not px:
-        return None
-    if k > len(px):
-        k = max(1, len(px))
-    seeds = _refine_seeds(px, w, k)
     K = len(seeds)
-    total = len(px)
+    total = len(units)
     budget = [total // K + (1 if i < total % K else 0) for i in range(K)]
     owner = {}
     grown = [0] * K
     fronts = []
-    for _k, s in enumerate(seeds):
-        owner[s] = _k
-        grown[_k] = 1
+    for i, s in enumerate(seeds):
+        owner[s] = i
+        grown[i] = 1
         fronts.append([s])
     active = True
     guard = 0
     while active and guard < 200000:
         guard += 1
         active = False
-        for _k in range(K):
-            if grown[_k] >= budget[_k] or not fronts[_k]:
+        for i in range(K):
+            if grown[i] >= budget[i] or not fronts[i]:
                 continue
             nxt = []
-            for i in fronts[_k]:
-                x, y = i % w, i // w
-                for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
-                    if nx < 0 or ny < 0 or nx >= w or ny >= h:
-                        continue
-                    j = ny * w + nx
-                    if ids[j] != pid or j in owner:
-                        continue
-                    owner[j] = _k
-                    grown[_k] += 1
-                    nxt.append(j)
-                    if grown[_k] >= budget[_k]:
-                        break
-                if grown[_k] >= budget[_k]:
+            for u in fronts[i]:
+                for nb in (neighbors.get(u) or []):
+                    if nb not in owner:
+                        owner[nb] = i
+                        grown[i] += 1
+                        nxt.append(nb)
+                        if grown[i] >= budget[i]:
+                            break
+                if grown[i] >= budget[i]:
                     break
-            fronts[_k] = nxt
-            if grown[_k] < budget[_k] and nxt:
+            fronts[i] = nxt
+            if grown[i] < budget[i] and nxt:
                 active = True
-    # 剩余像素
-    rest = [i for i in px if i not in owner]
+    # 剩余单元归最近的已分配邻居
+    rest = [u for u in units if u not in owner]
     if rest:
-        q = deque()
-        for i in rest:
-            x, y = i % w, i // w
-            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
-                if 0 <= nx < w and 0 <= ny < h and (ny * w + nx) in owner:
-                    q.append(i)
-                    break
+        q = deque(rest)
         while q:
-            i = q.popleft()
-            if i in owner:
+            u = q.popleft()
+            if u in owner:
                 continue
-            x, y = i % w, i // w
             best = None
-            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
-                if 0 <= nx < w and 0 <= ny < h:
-                    j = ny * w + nx
-                    if j in owner:
-                        best = owner[j]
-                        break
+            for nb in (neighbors.get(u) or []):
+                if nb in owner:
+                    best = owner[nb]
+                    break
             if best is None:
                 continue
-            owner[i] = best
-            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
-                if 0 <= nx < w and 0 <= ny < h:
-                    j = ny * w + nx
-                    if ids[j] == pid and j not in owner:
-                        q.append(j)
-    return {"owner": owner, "seeds": seeds, "px": px}
+            owner[u] = best
+            for nb in (neighbors.get(u) or []):
+                if nb not in owner:
+                    q.append(nb)
+
+    groups = {}
+    for u, g in owner.items():
+        groups.setdefault(g, []).append(u)
+    return groups
+
+
+def _refine_split(ids, w, h, pid, k):
+    """省细化：像素为单元（保留原接口，内部走通用逻辑）"""
+    px = [i for i in range(len(ids)) if ids[i] == pid]
+    if not px:
+        return None
+    # 像素邻居按 4 邻域现算太慢，直接用座标构造邻居（只在同省内）
+    pxset = set(px)
+    nb = {}
+    for i in px:
+        x, y = i % w, i // w
+        lst = []
+        for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+            if 0 <= nx < w and 0 <= ny < h:
+                j = ny * w + nx
+                if j in pxset:
+                    lst.append(j)
+        nb[i] = lst
+    coord = {i: (i % w, i // w) for i in px}
+    groups = _refine_grow_units(px, nb, k, coord)
+    owner = {}
+    for g, members in groups.items():
+        for i in members:
+            owner[i] = g
+    return {"owner": owner, "seeds": [], "px": px}
 
 
 def refine_preview(pid, k=2, root=None):
@@ -2661,7 +2676,9 @@ def refine_preview(pid, k=2, root=None):
         xs = [p % w for p in pts]
         ys = [p // w for p in pts]
         parts.append({"i": kk, "px": cnt[kk],
-                      "bbox": [min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1]})
+                      "bbox": [min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1],
+                      # 描边用：只回包围盒内的相对坐标，前端按比例画
+                      "pts": [(p % w - min(xs)) * 100000 + (p // w - min(ys)) for p in pts][:20000]})
     return {"ok": True, "pid": pid, "k": len(cnt), "total": len(res["px"]),
             "parts": parts, "msg": "切成 %d 块，面积 %s" % (
                 len(cnt), sorted(cnt.values(), reverse=True))}
