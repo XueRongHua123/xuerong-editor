@@ -2503,6 +2503,300 @@ def _scan_cross(allpx, w, h):
     return out
 
 
+_REFINE_IDS_CACHE = {}
+
+
+def _refine_load_ids(root):
+    """载入 省号数组（按 provinces.bmp + definition.csv 的 mtime 缓存）"""
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    layers = mod_layers(root)
+    bmp, _ = _layers_find("map/provinces.bmp", layers)
+    csvp, _ = _layers_find("map/definition.csv", layers)
+    if not bmp or not csvp:
+        return None, 0, 0
+    key = (bmp, os.path.getmtime(bmp), csvp, os.path.getmtime(csvp))
+    hit = _REFINE_IDS_CACHE.get("cur")
+    if hit and hit[0] == key:
+        return hit[1], hit[2], hit[3]
+    with Image.open(bmp) as im:
+        w, h = im.size
+        raw = im.convert("RGB").tobytes()
+    rgb2pid = {}
+    with io.open(csvp, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            p = line.strip().split(";")
+            if len(p) >= 8 and p[0].isdigit():
+                rgb2pid[(int(p[1]), int(p[2]), int(p[3]))] = int(p[0])
+    ids = [0] * (w * h)
+    for i in range(w * h):
+        ids[i] = rgb2pid.get((raw[i * 3], raw[i * 3 + 1], raw[i * 3 + 2]), 0)
+    _REFINE_IDS_CACHE["cur"] = (key, ids, w, h)
+    return ids, w, h
+
+
+def _refine_seeds(px, w, k):
+    """最远点采样：种子尽量分散"""
+    cx = sum(p % w for p in px) // len(px)
+    cy = sum(p // w for p in px) // len(px)
+    first = min(px, key=lambda i: (i % w - cx) ** 2 + (i // w - cy) ** 2)
+    seeds = [first]
+    dist = {}
+    for p in px:
+        dx, dy = p % w - first % w, p // w - first // w
+        dist[p] = dx * dx + dy * dy
+    guard = 0
+    while len(seeds) < k and guard < 2000:
+        guard += 1
+        nxt = max(dist, key=dist.get)
+        if dist[nxt] <= 0:
+            break
+        seeds.append(nxt)
+        for p in px:
+            dx, dy = p % w - nxt % w, p // w - nxt // w
+            d = dx * dx + dy * dy
+            if d < dist[p]:
+                dist[p] = d
+    return seeds
+
+
+def _refine_split(ids, w, h, pid, k):
+    """同步水位生长：每轮各长一层，到预算就停；剩余像素归最近的块。"""
+    from collections import deque
+    px = [i for i in range(len(ids)) if ids[i] == pid]
+    if not px:
+        return None
+    if k > len(px):
+        k = max(1, len(px))
+    seeds = _refine_seeds(px, w, k)
+    K = len(seeds)
+    total = len(px)
+    budget = [total // K + (1 if i < total % K else 0) for i in range(K)]
+    owner = {}
+    grown = [0] * K
+    fronts = []
+    for _k, s in enumerate(seeds):
+        owner[s] = _k
+        grown[_k] = 1
+        fronts.append([s])
+    active = True
+    guard = 0
+    while active and guard < 200000:
+        guard += 1
+        active = False
+        for _k in range(K):
+            if grown[_k] >= budget[_k] or not fronts[_k]:
+                continue
+            nxt = []
+            for i in fronts[_k]:
+                x, y = i % w, i // w
+                for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                    if nx < 0 or ny < 0 or nx >= w or ny >= h:
+                        continue
+                    j = ny * w + nx
+                    if ids[j] != pid or j in owner:
+                        continue
+                    owner[j] = _k
+                    grown[_k] += 1
+                    nxt.append(j)
+                    if grown[_k] >= budget[_k]:
+                        break
+                if grown[_k] >= budget[_k]:
+                    break
+            fronts[_k] = nxt
+            if grown[_k] < budget[_k] and nxt:
+                active = True
+    # 剩余像素
+    rest = [i for i in px if i not in owner]
+    if rest:
+        q = deque()
+        for i in rest:
+            x, y = i % w, i // w
+            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if 0 <= nx < w and 0 <= ny < h and (ny * w + nx) in owner:
+                    q.append(i)
+                    break
+        while q:
+            i = q.popleft()
+            if i in owner:
+                continue
+            x, y = i % w, i // w
+            best = None
+            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if 0 <= nx < w and 0 <= ny < h:
+                    j = ny * w + nx
+                    if j in owner:
+                        best = owner[j]
+                        break
+            if best is None:
+                continue
+            owner[i] = best
+            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if 0 <= nx < w and 0 <= ny < h:
+                    j = ny * w + nx
+                    if ids[j] == pid and j not in owner:
+                        q.append(j)
+    return {"owner": owner, "seeds": seeds, "px": px}
+
+
+def refine_preview(pid, k=2, root=None):
+    """预览切分：不写盘，返回每块的像素数与包围盒"""
+    pid = int(pid or 0)
+    k = max(2, min(64, int(k or 2)))
+    if pid <= 0:
+        return {"ok": False, "msg": "先选一个省"}
+    root = _map_pick(root)
+    ids, w, h = _refine_load_ids(root)
+    if not ids:
+        return {"ok": False, "msg": "读不到 provinces.bmp / definition.csv"}
+    res = _refine_split(ids, w, h, pid, k)
+    if not res:
+        return {"ok": False, "msg": "省 %d 没有像素" % pid}
+    from collections import Counter
+    owner = res["owner"]
+    cnt = Counter(owner.values())
+    parts = []
+    for kk in sorted(cnt):
+        pts = [i for i, v in owner.items() if v == kk]
+        xs = [p % w for p in pts]
+        ys = [p // w for p in pts]
+        parts.append({"i": kk, "px": cnt[kk],
+                      "bbox": [min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1]})
+    return {"ok": True, "pid": pid, "k": len(cnt), "total": len(res["px"]),
+            "parts": parts, "msg": "切成 %d 块，面积 %s" % (
+                len(cnt), sorted(cnt.values(), reverse=True))}
+
+
+def refine_apply(pid, k=2, root=None, base_pid=None):
+    """应用切分：分配新省号 → 写 bmp + definition.csv"""
+    pid = int(pid or 0)
+    k = max(2, min(64, int(k or 2)))
+    if pid <= 0:
+        return {"ok": False, "msg": "先选一个省"}
+    root = _map_pick(root)
+    layers = mod_layers(root)
+    bmp, _ = _layers_find("map/provinces.bmp", layers)
+    csvp, _ = _layers_find("map/definition.csv", layers)
+    if not bmp or not csvp:
+        return {"ok": False, "msg": "找不到地图文件"}
+    if is_under_game(bmp):
+        return {"ok": False, "msg": "地图来自原版，只读"}
+    ids, w, h = _refine_load_ids(root)
+    if not ids:
+        return {"ok": False, "msg": "读不到省数据"}
+    res = _refine_split(ids, w, h, pid, k)
+    if not res:
+        return {"ok": False, "msg": "省 %d 没有像素" % pid}
+    owner = res["owner"]
+
+    # 读 definition.csv：拿省号上限与已用 RGB
+    rows = []
+    used_rgb = set()
+    max_pid = 0
+    with io.open(csvp, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            s = line.rstrip("\r\n")
+            rows.append(s)
+            p = s.split(";")
+            if len(p) >= 8 and p[0].isdigit():
+                n = int(p[0])
+                max_pid = max(max_pid, n)
+                used_rgb.add((int(p[1]), int(p[2]), int(p[3])))
+    # 原省信息（地形/洲等沿用）
+    src = None
+    for s in rows:
+        p = s.split(";")
+        if len(p) >= 8 and p[0].isdigit() and int(p[0]) == pid:
+            src = p
+            break
+    if not src:
+        return {"ok": False, "msg": "definition.csv 里没有省 %d" % pid}
+
+    from collections import Counter
+    cnt = Counter(owner.values())
+    keys = sorted(cnt)
+    # 第一块沿用原省号，其余分配新号
+    assign = {keys[0]: pid}
+    nid = max_pid + 1
+    for kk in keys[1:]:
+        while nid in used_rgb_ids(rows) or nid == pid:
+            nid += 1
+        assign[kk] = nid
+        nid += 1
+
+    # 新 RGB
+    new_rows = []
+    rgb_map = {keys[0]: (int(src[1]), int(src[2]), int(src[3]))}
+    for kk in keys[1:]:
+        rgb = _refine_free_rgb(used_rgb)
+        used_rgb.add(rgb)
+        rgb_map[kk] = rgb
+        row = list(src)
+        row[0] = str(assign[kk])
+        row[1], row[2], row[3] = str(rgb[0]), str(rgb[1]), str(rgb[2])
+        new_rows.append(";".join(row))
+
+    if not new_rows:
+        return {"ok": False, "msg": "只有一块，不需要新增"}
+
+    # 写 definition.csv
+    snapshot(csvp)
+    body = chr(10).join(rows + new_rows) + chr(10)
+    io.open(csvp, "wb").write(body.encode("utf-8"))
+
+    # 写 bmp：只改这块区域内像素
+    xs = [p % w for p in owner]
+    ys = [p // w for p in owner]
+    bx, by = min(xs), min(ys)
+    bw, bh = max(xs) - bx + 1, max(ys) - by + 1
+    before = bmp_read_rect(bmp, bx, by, bw, bh)
+    if before is None:
+        return {"ok": False, "msg": "读 bmp 区域失败"}
+    after = list(before)
+    for i, kk in owner.items():
+        if assign[kk] == pid:
+            continue
+        _o = (i // w - by) * bw + (i % w - bx)
+        if 0 <= _o < len(after):
+            after[_o] = rgb_map[kk]
+    _lay_ws = _refine_out_bmp(bmp)
+    if _lay_ws != bmp:
+        os.makedirs(os.path.dirname(_lay_ws) or ".", exist_ok=True)
+        shutil.copyfile(bmp, _lay_ws)
+        snapshot(_lay_ws)
+        bmp = _lay_ws
+    bmp_write_rect(bmp, bx, by, bw, bh, after)
+    _REFINE_IDS_CACHE.pop("cur", None)
+
+    return {"ok": True, "pid": pid, "new_ids": [assign[kk] for kk in keys[1:]],
+            "parts": len(keys), "pixels": len(owner), "rect": [bx, by, bw, bh],
+            "msg": "已切成 %d 块，新增省号 %s" % (len(keys), [assign[kk] for kk in keys[1:]])}
+
+
+def used_rgb_ids(rows):
+    out = set()
+    for s in rows:
+        p = s.split(";")
+        if len(p) >= 8 and p[0].isdigit():
+            out.add(int(p[0]))
+    return out
+
+
+def _refine_free_rgb(used):
+    """找一个未被使用的省色（避开 0,0,0 与已有色）"""
+    for r in range(1, 256):
+        for g in range(1, 256, 3):
+            for b in range(1, 256, 7):
+                if (r, g, b) not in used:
+                    return (r, g, b)
+    return (250, 250, 250)
+
+
+def _refine_out_bmp(path):
+    """输出模式下把源 bmp 映射到 output/ 的副本"""
+    return _out_path(path)
+
+
 def map_repair_cross(root=None, apply_fix=False, limit=2000):
     """修十字交叉像素：把 2x2 的 `A B / B A` 解成 `A A / B B` 或 `A B / A B`。
     选择依据：看 A 在上方还是左方的邻域更多，优先保持那个方向的连通。"""
@@ -6949,6 +7243,10 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/log":
             _q = parse_qs(urlparse(self.path).query)
             self._send(read_error_log((_q.get("path", [""])[0] or None)))
+        elif path_only == "/api/refine_preview":
+            _q = parse_qs(urlparse(self.path).query)
+            self._send(refine_preview(_q.get("pid", ["0"])[0], _q.get("k", ["2"])[0],
+                                      _q.get("root", [None])[0]))
         elif path_only == "/api/map_repair_cross":
             _q = parse_qs(urlparse(self.path).query)
             _ap = _q.get("apply", ["0"])[0] in ("1", "true", "yes")
@@ -7231,6 +7529,9 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 ok, msg = load_mod_root(ds[0])
                 self._send({"ok": ok, "msg": msg})
+        elif self.path == "/api/refine_apply":
+            self._send(refine_apply(body.get("pid") or 0, body.get("k") or 2,
+                                    body.get("root"), body.get("base_pid")))
         elif self.path == "/api/output_apply":
             self._send(output_apply_back())
         elif self.path == "/api/playset_save":
