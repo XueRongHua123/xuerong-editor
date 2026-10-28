@@ -882,7 +882,7 @@
       <summary>国策树</summary>
       <input id="search" placeholder="搜索焦点 id / 名称...">
       <div id="searchHits"></div>
-      <div class="mp-acts" style="padding:4px 0"><button class="btn" id="ftOpen">图形预览</button></div>
+      <div class="mp-acts" style="padding:4px 0"><button class="btn" id="ftOpen" style="width:100%;background:var(--panel2);border:1px solid var(--line2);height:30px">图形预览</button></div>
       <div id="treeList" style="max-height:300px;overflow:auto"></div>
     </details>
     <details open>
@@ -1116,6 +1116,7 @@
           <select id="ftPick" style="min-width:200px"></select>
           <span class="k" id="ftInfo"></span>
           <span style="margin-left:auto"></span>
+          <button class="btn" id="ftEdit" title="在编辑器里定位到选中节点" disabled>在编辑器中打开</button>
           <button class="btn" id="ftFit" title="缩放到全部">适应</button>
           <button class="btn" id="ftClose">关闭</button>
         </div>
@@ -6028,11 +6029,18 @@ async function mapShowGfxMissing(){
     svg.innerHTML = out;
 
     svg.querySelectorAll('.ft-node').forEach(el=>{
+      el.ondblclick = ()=>{
+        el.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+        const eb = document.getElementById('ftEdit');
+        if(eb && !eb.disabled) eb.click();
+      };
       el.onclick = ()=>{
         svg.querySelectorAll('.ft-node').forEach(o=>o.classList.remove('sel'));
         el.classList.add('sel');
         const n = idx[el.dataset.id];
         ftSel = n;
+        const eb = document.getElementById('ftEdit');
+        if(eb) eb.disabled = false;
         info.textContent = (n.name || n.id) + '　[' + n.id + ']　(' + n.x + ',' + n.y + ')'
           + (n.cost ? '　成本 ' + n.cost : '')
           + (n.prereq.length ? '　前置 ' + n.prereq.map(g=>g.join('|')).join(' + ') : '')
@@ -6047,6 +6055,22 @@ async function mapShowGfxMissing(){
     btn.dataset.bound = '1';
     btn.onclick = ftOpen;
     document.getElementById('ftClose').onclick = ftClose;
+    document.getElementById('ftEdit').onclick = ()=>{
+      if(!ftSel || !ftData) return;
+      const tid = ftData.tree, fid = ftSel.id;
+      ftClose();
+      if(typeof openTreeById === 'function') openTreeById(tid);
+      setTimeout(()=>{
+        const el = document.querySelector('#viewport .node[data-id="' + fid + '"]');
+        if(el){
+          el.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+          el.scrollIntoView({block:'center', inline:'center', behavior:'smooth'});
+          status('已定位到 ' + fid);
+        } else {
+          status('编辑器里没找到 ' + fid, true);
+        }
+      }, 260);
+    };
     document.getElementById('ftFit').onclick = ()=>{
       const svg = document.getElementById('ftSvg');
       const body = document.getElementById('ftBody');
