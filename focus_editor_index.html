@@ -1184,6 +1184,7 @@
           <div id="sideTabs">
             <button class="side-tab on" data-tab="layers">图层</button>
             <button class="side-tab" data-tab="edit">编辑</button>
+            <button class="side-tab" data-tab="refine">细化</button>
           </div>
           <div class="side-pane on" id="pane-layers">
             <div id="mapTools">
@@ -1271,6 +1272,21 @@
             <div class="mp-row" style="padding-top:0"><span class="mp-k" id="nsStat">—</span></div>
           </div>
           </div><!-- /pane-edit -->
+          <div class="side-pane" id="pane-refine">
+            <h4>细化当前省</h4>
+            <div class="mp-k" style="line-height:1.6;margin-bottom:8px">
+              把选中的省切成若干块，形状随机而自然，面积尽量均分。
+              第一块沿用原省号，其余分配新号并写进 definition.csv。
+            </div>
+            <div class="mp-row"><label>块数</label>
+              <input type="number" id="rfK" value="4" min="2" max="64" style="width:70px">
+              <span class="mp-k">建议 2–8</span></div>
+            <div class="mp-acts">
+              <button class="btn" id="rfPreview">预览</button>
+              <button class="btn" id="rfApply" disabled>应用到地图</button>
+            </div>
+            <div class="mp-row" style="padding-top:0"><span class="mp-k" id="rfStat">先预览，确认后再应用</span></div>
+          </div>
         </div><!-- /mapSide -->
         </div><!-- /mapBody -->
         <div id="mapStatus">
@@ -5757,6 +5773,71 @@ async function mapRepair(){
   }
 })();
 
+// v1.3.0 省份细化
+(function(){
+  let lastPid = 0, lastK = 0, previewOk = false;
+
+  function rfStat(msg, bad){
+    const el = document.getElementById('rfStat');
+    if(el){ el.textContent = msg; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  async function rfDoPreview(){
+    const pid = MAP.lastPid;
+    const k = Number(document.getElementById('rfK').value || 4);
+    if(!pid){ rfStat('先在图上点一个省', true); return; }
+    rfStat('计算中…');
+    document.getElementById('rfApply').disabled = true;
+    try{
+      const r = await (await fetch('/api/refine_preview?pid=' + pid + '&k=' + k)).json();
+      if(!r.ok){ rfStat(r.msg || '预览失败', true); previewOk = false; return; }
+      previewOk = true;
+      lastPid = pid; lastK = r.k;
+      const sizes = (r.parts || []).map(p=>p.px).sort((a,b)=>b-a);
+      rfStat('省 ' + pid + ' 切成 ' + r.k + ' 块，面积 ' + sizes.join(' / ') +
+             '（共 ' + r.total + ' 像素）');
+      document.getElementById('rfApply').disabled = false;
+    }catch(e){ rfStat('预览失败：' + e.message, true); }
+  }
+
+  async function rfDoApply(){
+    const pid = MAP.lastPid;
+    const k = Number(document.getElementById('rfK').value || 4);
+    if(!pid){ rfStat('先在图上点一个省', true); return; }
+    if(!previewOk || pid !== lastPid || k !== lastK){
+      rfStat('参数变了，先点一次「预览」', true); return;
+    }
+    if(!confirm('把省 ' + pid + ' 切成 ' + k + ' 块？会改写 provinces.bmp 和 definition.csv（有备份）。')) return;
+    rfStat('写入中…');
+    const btn = document.getElementById('rfApply');
+    btn.disabled = true;
+    try{
+      const r = await (await fetch('/api/refine_apply', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({pid: pid, k: k})})).json();
+      if(!r.ok){ rfStat(r.msg || '应用失败', true); btn.disabled = false; return; }
+      rfStat(r.msg + '，正在重建图层…');
+      status(r.msg || '已细化');
+      previewOk = false;
+      try{ await mapBuild(true); }catch(e){}
+      if(window.mapLoadMeta) mapLoadMeta();
+    }catch(e){ rfStat('应用失败：' + e.message, true); btn.disabled = false; }
+  }
+
+  function rfBind(){
+    const pv = document.getElementById('rfPreview');
+    if(!pv || pv.dataset.bound) return;
+    pv.dataset.bound = '1';
+    pv.onclick = rfDoPreview;
+    document.getElementById('rfApply').onclick = rfDoApply;
+    document.getElementById('rfK').addEventListener('input', ()=>{
+      previewOk = false;
+      document.getElementById('rfApply').disabled = true;
+    });
+  }
+  window.mapBindRefine = rfBind;
+})();
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -5916,6 +5997,7 @@ function mapBindV081(){
   if(window.mapBindPlayset) window.mapBindPlayset();
   if(window.mapBindSideTabs) window.mapBindSideTabs();
   if(window.mapBindOutput) window.mapBindOutput();
+  if(window.mapBindRefine) window.mapBindRefine();
   mapSetMode('view');
 }
 
