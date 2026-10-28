@@ -574,6 +574,13 @@
   .ft-node text{fill:#c8d0d4;font-size:10px;text-anchor:middle;pointer-events:none}
   .ft-edge{stroke:#5a656b;stroke-width:2;fill:none}
   .ft-edge.mutex{stroke:#a06060;stroke-dasharray:5 4}
+  /* ---------- v1.9.2 图层预设 ---------- */
+  .lt-preset-row{display:flex;flex-wrap:wrap;gap:4px;padding-bottom:6px}
+  .lt-preset{flex:0 0 calc(33.33% - 3px);height:26px;font-size:11px;cursor:pointer;
+    background:var(--panel2);border:1px solid var(--line2);color:var(--t2);border-radius:6px}
+  .lt-preset:hover{color:var(--accent);border-color:var(--accent)}
+  .lt-preset.on{background:color-mix(in srgb,var(--accent) 18%,var(--panel2));
+    border-color:var(--accent);color:var(--accent);font-weight:600}
   /* ---------- v1.9.0 矢量省界 ---------- */
   #mapEdgeCanvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:4}
   /* ---------- v1.2.1 选中省份高亮 ---------- */
@@ -1298,6 +1305,17 @@
             <div id="mapTools">
             <h4>图层 <button class="lt-toggle" id="mapLayerToggle" title="折叠/展开">−</button></h4>
             <div class="lt-body">
+            <div class="lt-group" id="ltPresets">
+              <div class="lt-title">预设</div>
+              <div class="lt-preset-row">
+                <button class="lt-preset" data-preset="terrain">地形</button>
+                <button class="lt-preset" data-preset="state">州</button>
+                <button class="lt-preset" data-preset="prov">省色块</button>
+                <button class="lt-preset" data-preset="polit">政治</button>
+                <button class="lt-preset" data-preset="region">战略区</button>
+                <button class="lt-preset" data-preset="raw">原始</button>
+              </div>
+            </div>
             <div class="lt-group"><div class="lt-title">数据</div>
               <label><input type="checkbox" id="mapLProv" checked>省色块<input type="range" class="lt-op" data-op="prov" min="0" max="100" value="100" title="省色块 不透明度"></label>
               <label><input type="checkbox" id="mapLPolit">政治（按国家）<input type="range" class="lt-op" data-op="polit" min="0" max="100" value="90" title="政治（按国家） 不透明度"></label>
@@ -6610,6 +6628,65 @@ function makePannable(svg, body){
   window.addEventListener('resize', ()=> window.mapDrawVectorEdges(true));
 })();
 
+// v1.9.2 图层预设
+// 图层组合自己试很难试对（比如州视图必须关掉底图才看得清），给几个一键预设。
+(function(){
+  const PRESETS = {
+    terrain: { on: ['terrain'], off: ['prov','polit','state','region','continent','base'] },
+    state:   { on: ['state'],   off: ['prov','polit','terrain','region','continent','base'] },
+    prov:    { on: ['prov'],    off: ['polit','terrain','state','region','continent','base'] },
+    polit:   { on: ['polit'],   off: ['prov','terrain','state','region','continent','base'] },
+    region:  { on: ['region'],  off: ['prov','polit','terrain','state','continent','base'] },
+    raw:     { on: ['base'],    off: ['prov','polit','terrain','state','region','continent'] },
+  };
+  const ID = { prov:'mapLProv', polit:'mapLPolit', terrain:'mapLTerrain', state:'mapLState',
+               region:'mapLRegion', continent:'mapLContinent', base:'mapLBase' };
+  const OP = { prov:'prov', polit:'polit', terrain:'terrain', state:'state',
+               region:'region', continent:'continent', base:'base' };
+
+  function applyPreset(name){
+    const p = PRESETS[name];
+    if(!p) return;
+    (p.on || []).forEach(k=>{
+      const el = document.getElementById(ID[k]);
+      if(el) el.checked = true;
+      const op = document.querySelector('.lt-op[data-op="' + OP[k] + '"]');
+      if(op) op.value = 100;
+    });
+    (p.off || []).forEach(k=>{
+      const el = document.getElementById(ID[k]);
+      if(el) el.checked = false;
+    });
+    // 省界始终开（矢量描边，不影响别的图层）
+    const e = document.getElementById('mapLEdges');
+    if(e && name !== 'raw') e.checked = false;
+    if(typeof mapApplyLayers === 'function') mapApplyLayers();
+    document.querySelectorAll('.lt-preset').forEach(b=>{
+      b.classList.toggle('on', b.dataset.preset === name);
+    });
+    try{ localStorage.setItem('xuerong_layer_preset', name); }catch(err){}
+  }
+  window.mapApplyPreset = applyPreset;
+
+  function bindPresets(){
+    const row = document.getElementById('ltPresets');
+    if(!row || row.dataset.bound) return;
+    row.dataset.bound = '1';
+    row.querySelectorAll('.lt-preset').forEach(b=>{
+      b.onclick = ()=> applyPreset(b.dataset.preset);
+    });
+    // 手动改任何图层就取消预设高亮
+    document.querySelectorAll('.lt-group label input[type=checkbox]').forEach(cb=>{
+      cb.addEventListener('change', ()=>{
+        document.querySelectorAll('.lt-preset').forEach(b=>b.classList.remove('on'));
+      });
+    });
+  }
+  window.mapBindPresets = bindPresets;
+  if(document.readyState !== 'loading') bindPresets();
+  else document.addEventListener('DOMContentLoaded', bindPresets);
+})();
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -6828,12 +6905,12 @@ async function mapLoadMeta(root){
     metaEl.style.color = '';
     MAP.meta = d.meta || {};
     // 省特别多时（1 万以上），「省色块」缩略看就是一片噪点，默认改用地形视图
-    if(!MAP._viewInited && (MAP.meta.provinces || 0) > 8000){
+    if(!MAP._viewInited){
       MAP._viewInited = true;
-      const pv = document.getElementById('mapLProv');
-      const tv = document.getElementById('mapLTerrain');
-      if(pv && tv){ pv.checked = false; tv.checked = true; }
-      status('省数较多（' + MAP.meta.provinces + '），默认显示地形视图；需要看省时可勾「省色块」');
+      let saved = '';
+      try{ saved = localStorage.getItem('xuerong_layer_preset') || ''; }catch(e){}
+      const want = saved || ((MAP.meta.provinces || 0) > 8000 ? 'terrain' : 'prov');
+      if(window.mapApplyPreset) setTimeout(()=> window.mapApplyPreset(want), 60);
     }
     if(!MAP._viewInited) MAP._viewInited = true;
     MAP.w = MAP.meta.w || MAP.w;
