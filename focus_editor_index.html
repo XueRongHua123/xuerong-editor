@@ -6789,9 +6789,9 @@ function mapApplyLayers(){
 function mapApply(){
   const stack = document.getElementById('mapStack');
   stack.style.transform = 'translate(' + MAP.x + 'px,' + MAP.y + 'px) scale(' + MAP.k + ')';
-  // 放大到 1.4 倍以上改用插值渲染：边界不再是一格一格的楼梯，整体观感顺滑
-  // 1:1 及以下保持像素锐利，方便看单像素细节（涂色/描边时用）
-  stack.classList.toggle('smooth', MAP.k > 1.4);
+  // 只有缩得很小（<0.35）时才用插值抗摩尔纹；
+  // 放大时一律 pixelated —— 插值会把边界糊成一团，高倍下反而比锯齿更难看。
+  stack.classList.toggle('smooth', MAP.k < 0.35);
   mapUpdateStatus();
 }
 
