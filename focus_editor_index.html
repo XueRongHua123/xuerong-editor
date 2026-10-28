@@ -520,7 +520,8 @@
   .lt-group label > span, .lt-group label{text-overflow:ellipsis}
   .lt-op:hover,.lt-group label.on .lt-op{opacity:1}
   .lt-group label{justify-content:flex-start}
-  /* ---------- v1.5.0 事件树预览 ---------- */
+
+/* ---------- v1.5.0 事件树预览 ---------- */
   #evModal{position:fixed;inset:0;z-index:123;display:none;place-items:center;
     background:rgba(8,10,9,.74);backdrop-filter:blur(3px)}
   #evModal.show{display:grid}
@@ -891,8 +892,11 @@
       <input id="search" placeholder="搜索焦点 id / 名称...">
       <div id="searchHits"></div>
       <div class="mp-acts" style="padding:4px 0"><button class="btn" id="ftOpen" style="width:100%;background:var(--panel2);border:1px solid var(--line2);height:30px">图形预览</button></div>
-      <div class="mp-acts" style="padding:2px 0 6px"><button class="btn" id="evOpen" style="width:100%;background:var(--panel2);border:1px solid var(--line2);height:30px">事件树预览</button></div>
       <div id="treeList" style="max-height:300px;overflow:auto"></div>
+    </details>
+    <details open>
+      <summary>事件树</summary>
+      <div class="mp-acts" style="padding:2px 0 6px"><button class="btn" id="evOpen" style="width:100%;background:var(--panel2);border:1px solid var(--line2);height:30px">打开事件树编辑</button></div>
     </details>
     <details open>
       <summary>国家精神</summary>
@@ -1134,10 +1138,14 @@
     <div id="evModal">
       <div id="evCard">
         <div id="evHead">
-          <b>事件树预览</b>
+          <b>事件树编辑</b>
           <select id="evPick" style="min-width:200px"></select>
           <span class="k" id="evInfo"></span>
           <span style="margin-left:auto"></span>
+          <button class="btn" id="evNew" title="新建一个事件命名空间">新建</button>
+          <button class="btn" id="evDel" title="删除当前命名空间的所有事件">删除</button>
+          <button class="btn" id="evFocus" title="只显示从当前选中事件能触发的下游" disabled>只看下游</button>
+          <button class="btn" id="evAll" title="显示整个命名空间">显示全部</button>
           <button class="btn" id="evFit">适应</button>
           <button class="btn" id="evClose">关闭</button>
         </div>
@@ -5968,6 +5976,7 @@ async function mapShowGfxMissing(){
     svg.setAttribute('width', W);
     svg.setAttribute('height', H);
     svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    if(!svg._pan){ svg._pan = makePannable(svg, document.getElementById('ftBody')); }
 
     const px = n => (n.x - minX) * CELL + PAD;
     const py = n => (n.y - minY) * CELL + PAD;
@@ -6046,12 +6055,7 @@ async function mapShowGfxMissing(){
     };
     document.getElementById('ftFit').onclick = ()=>{
       const svg = document.getElementById('ftSvg');
-      const body = document.getElementById('ftBody');
-      const w = Number(svg.getAttribute('width')) || 1;
-      const h = Number(svg.getAttribute('height')) || 1;
-      const k = Math.min(body.clientWidth / w, body.clientHeight / h, 1);
-      svg.style.transformOrigin = '0 0';
-      svg.style.transform = 'scale(' + k + ')';
+      if(svg._pan) svg._pan();
     };
   }
   window.mapBindFocusTree = ftBind;
@@ -6063,7 +6067,7 @@ async function mapShowGfxMissing(){
 // v1.5.0 事件树预览（参考 HOI4 Mod Utilities 的 Event tree preview）
 (function(){
   const NW = 130, NH = 34, GX = 26, GY = 26;
-  let evData = null;
+  let evData = null, evSel = null, evOnlyDown = false;
 
   function evClose(){ document.getElementById('evModal').classList.remove('show'); }
 
@@ -6075,7 +6079,7 @@ async function mapShowGfxMissing(){
     sel.innerHTML = (r.spaces || []).map(x=>
       '<option value="' + x.id + '">' + x.id + '（' + x.count + ' 事件）</option>').join('');
     sel.dataset.loaded = '1';
-    sel.onchange = ()=> evDraw(sel.value);
+    sel.onchange = ()=>{ evOnlyDown = false; evSel = null; evDraw(sel.value); };
     if(sel.value) evDraw(sel.value);
   }
 
@@ -6088,8 +6092,24 @@ async function mapShowGfxMissing(){
     evData = g;
     info.textContent = g.msg;
 
-    const nodes = g.nodes || [], edges = g.edges || [];
+    let nodes = g.nodes || [], edges = g.edges || [];
     if(!nodes.length){ svg.innerHTML = ''; return; }
+    // 只看下游：从选中事件出发做可达性，消掉无关分支（第一层太长时的主要痛点）
+    if(evOnlyDown && evSel && nodes.some(x=>x.id === evSel)){
+      const adj2 = {};
+      edges.forEach(e=>{ (adj2[e.from] = adj2[e.from] || []).push(e.to); });
+      const keep = new Set([evSel]);
+      const q2 = [evSel];
+      let guard2 = 0;
+      while(q2.length && guard2++ < 20000){
+        const cur = q2.shift();
+        for(const nx of (adj2[cur] || [])){
+          if(!keep.has(nx)){ keep.add(nx); q2.push(nx); }
+        }
+      }
+      nodes = nodes.filter(n=>keep.has(n.id));
+      edges = edges.filter(e=>keep.has(e.from) && keep.has(e.to));
+    }
 
     // 分层：按「触发的深度」排；根 = 没有入边的事件
     const indeg = {}, adj = {};
@@ -6126,6 +6146,7 @@ async function mapShowGfxMissing(){
     svg.setAttribute('width', W);
     svg.setAttribute('height', H);
     svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    if(!svg._pan){ svg._pan = makePannable(svg, document.getElementById('evBody')); }
 
     let out = '<defs><marker id="evArrow" markerWidth="7" markerHeight="7" refX="6" refY="2.5" orient="auto">'
       + '<path d="M0,0 L6,2.5 L0,5 z" fill="#5a656b"/></marker></defs>';
@@ -6159,10 +6180,14 @@ async function mapShowGfxMissing(){
       el.onclick = ()=>{
         const n = nodes.find(x=>x.id === el.dataset.id);
         if(!n) return;
+        evSel = n.id;
+        const fb = document.getElementById('evFocus');
+        if(fb) fb.disabled = false;
         info.textContent = n.id + '　' + (n.name || '（无标题）')
           + (n.file ? '　' + n.file : '　（不在本 mod 里）')
           + '　深度 ' + depth[n.id];
       };
+      el.ondblclick = ()=>{ if(typeof openEventById === 'function') openEventById(el.dataset.id); };
     });
   }
 
@@ -6175,20 +6200,133 @@ async function mapShowGfxMissing(){
       evLoadList();
     };
     document.getElementById('evClose').onclick = evClose;
+    document.getElementById('evNew').onclick = async ()=>{
+      const ns = prompt('新命名空间的名称（字母开头，只用字母数字下划线）：', 'my_events');
+      if(!ns) return;
+      const r = await (await fetch('/api/event_space_create?ns=' + encodeURIComponent(ns))).json();
+      status(r.msg || (r.ok ? '已创建' : '创建失败'), !r.ok);
+      if(r.ok){
+        const sel = document.getElementById('evPick');
+        sel.dataset.loaded = '';
+        sel.innerHTML = '';
+        await evLoadList();
+        sel.value = r.ns;
+        evDraw(r.ns);
+      }
+    };
+    document.getElementById('evDel').onclick = async ()=>{
+      const sel = document.getElementById('evPick');
+      const ns = sel.value;
+      if(!ns){ status('先选一个命名空间', true); return; }
+      if(!confirm('删除命名空间 ' + ns + ' 的所有事件？会改动 events/ 下的文件（有备份）。')) return;
+      const r = await (await fetch('/api/event_space_delete?ns=' + encodeURIComponent(ns))).json();
+      status(r.msg || (r.ok ? '已删除' : '删除失败'), !r.ok);
+      if(r.ok){
+        sel.dataset.loaded = '';
+        sel.innerHTML = '';
+        await evLoadList();
+      }
+    };
+    document.getElementById('evFocus').onclick = ()=>{
+      if(!evSel){ return; }
+      evOnlyDown = true;
+      evDraw(document.getElementById('evPick').value);
+    };
+    document.getElementById('evAll').onclick = ()=>{
+      evOnlyDown = false;
+      evDraw(document.getElementById('evPick').value);
+    };
     document.getElementById('evFit').onclick = ()=>{
       const svg = document.getElementById('evSvg');
-      const body = document.getElementById('evBody');
-      const w = Number(svg.getAttribute('width')) || 1;
-      const h = Number(svg.getAttribute('height')) || 1;
-      const k = Math.min(body.clientWidth / w, body.clientHeight / h, 1);
-      svg.style.transformOrigin = '0 0';
-      svg.style.transform = 'scale(' + k + ')';
+      if(svg._pan) svg._pan();
     };
   }
+  // 双击节点 → 打开事件编辑器并选中（复用已有的 openEvents / selectEvent）
+  window.openEventById = function(eid){
+    const e = ((window.DATA && DATA.events) || []).find(x=>x.id === eid);
+    if(!e){ status('找不到事件 ' + eid, true); return; }
+    evClose();
+    if(typeof openEvents === 'function'){
+      openEvents();
+      if(typeof selectEvent === 'function') selectEvent(e);
+      status('已打开事件 ' + eid);
+    }
+  };
   window.mapBindEventTree = evBind;
   if(document.readyState !== 'loading') evBind();
   else document.addEventListener('DOMContentLoaded', evBind);
 })();
+
+// v1.6.0 通用：SVG 预览的滚轮缩放 + 左键拖动（操作 viewBox）
+function makePannable(svg, body){
+  let vb = null;
+  function readVB(){
+    const v = (svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number);
+    if(v.length === 4 && v.every(n=>isFinite(n))) vb = {x:v[0], y:v[1], w:v[2], h:v[3]};
+  }
+  function writeVB(){ if(vb) svg.setAttribute('viewBox', vb.x + ' ' + vb.y + ' ' + vb.w + ' ' + vb.h); }
+  readVB();
+
+  // 滚轮缩放：以鼠标位置为锚点
+  body.addEventListener('wheel', e=>{
+    readVB();
+    if(!vb) return;
+    e.preventDefault();
+    const r = body.getBoundingClientRect();
+    const mx = (e.clientX - r.left) / r.width;
+    const my = (e.clientY - r.top) / r.height;
+    const k = e.deltaY > 0 ? 1.12 : (1 / 1.12);
+    const nw = Math.max(60, Math.min(vb.w * 8, vb.w * k));
+    const nh = nw * (vb.h / vb.w);
+    vb.x += (vb.w - nw) * mx;
+    vb.y += (vb.h - nh) * my;
+    vb.w = nw; vb.h = nh;
+    writeVB();
+  }, {passive: false});
+
+  // 左键拖动平移（只有背景拖动，节点上的拖动留给节点自己）
+  let dragging = false, lx = 0, ly = 0;
+  body.addEventListener('mousedown', e=>{
+    if(e.button !== 0) return;
+    if(e.target.closest && e.target.closest('.ft-node, .ev-node')) return;
+    readVB();
+    if(!vb) return;
+    dragging = true; lx = e.clientX; ly = e.clientY;
+    body.classList.add('dragging');
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', e=>{
+    if(!dragging || !vb) return;
+    const r = body.getBoundingClientRect();
+    const dx = (e.clientX - lx) / r.width * vb.w;
+    const dy = (e.clientY - ly) / r.height * vb.h;
+    vb.x -= dx; vb.y -= dy;
+    lx = e.clientX; ly = e.clientY;
+    writeVB();
+  });
+  window.addEventListener('mouseup', ()=>{
+    if(!dragging) return;
+    dragging = false;
+    body.classList.remove('dragging');
+  });
+
+  // 适应窗口
+  return function fit(){
+    readVB();
+    if(!vb) return;
+    const r = body.getBoundingClientRect();
+    const srcW = Number(svg.getAttribute('width')) || vb.w;
+    const srcH = Number(svg.getAttribute('height')) || vb.h;
+    const k = Math.min(r.width / srcW, r.height / srcH, 1);
+    vb = {x: (srcW - srcW * k) / 2 / k, y: (srcH - srcH * k) / 2 / k,
+          w: srcW, h: srcH};
+    // 用 viewBox 直接设成全部范围（缩放交给浏览器）
+    vb = {x: 0, y: 0, w: srcW / (k || 1), h: srcH / (k || 1)};
+    vb = {x: (srcW - srcW / (k || 1)) / 2, y: (srcH - srcH / (k || 1)) / 2,
+          w: srcW / (k || 1), h: srcH / (k || 1)};
+    writeVB();
+  };
+}
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
