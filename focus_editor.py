@@ -2487,6 +2487,68 @@ def _csv_path_for(root):
     return csvp, prov
 
 
+def _save_point_undo(bmp, changes):
+    """把「像素索引 → 原 RGB」存成紧凑二进制（4 字节索引 + 3 字节 RGB）。
+
+    散布型改动（十字交叉修复）用包围盒备份会长到几十 MB，实际只改了几百个像素。"""
+    import struct
+    os.makedirs(MAP_UNDO_DIR, exist_ok=True)
+    seq = int(time.time() * 1000)
+    fn = os.path.join(MAP_UNDO_DIR, "pt%d.bin" % seq)
+    buf = bytearray()
+    buf += struct.pack("<I", len(changes))
+    for idx, rgb in changes:
+        buf += struct.pack("<I", idx)
+        buf += bytes((rgb[0], rgb[1], rgb[2]))
+    io.open(fn, "wb").write(bytes(buf))
+    return fn
+
+
+def _load_point_undo(fn):
+    """读回点级备份 → [(idx, (r,g,b)), ...]"""
+    import struct
+    raw = io.open(fn, "rb").read()
+    if len(raw) < 4:
+        return []
+    n = struct.unpack("<I", raw[:4])[0]
+    out = []
+    off = 4
+    for _ in range(n):
+        if off + 7 > len(raw):
+            break
+        idx = struct.unpack("<I", raw[off:off + 4])[0]
+        r, g, b = raw[off + 4], raw[off + 5], raw[off + 6]
+        out.append((idx, (r, g, b)))
+        off += 7
+    return out
+
+
+def _apply_point_undo(entry):
+    """把点级备份写回 bmp（按行分组批量写，减少 IO）"""
+    bmp = entry.get("bmp")
+    pts = _load_point_undo(entry.get("file") or "")
+    if not bmp or not pts:
+        return 0
+    info = bmp_info(bmp)
+    if not info:
+        return 0
+    w, h = info["w"], info["h"]
+    # 按包围盒一次读、逐点改、一次写
+    xs = [i % w for i, _ in pts]
+    ys = [i // w for i, _ in pts]
+    bx, by = min(xs), min(ys)
+    bw, bh = max(xs) - bx + 1, max(ys) - by + 1
+    rect = bmp_read_rect(bmp, bx, by, bw, bh)
+    if rect is None:
+        return 0
+    for idx, rgb in pts:
+        o = (idx // w - by) * bw + (idx % w - bx)
+        if 0 <= o < len(rect):
+            rect[o] = rgb
+    bmp_write_rect(bmp, bx, by, bw, bh, rect)
+    return len(pts)
+
+
 def _scan_cross(allpx, w, h):
     """找出所有 2x2 十字模式：左上==右下 且 右上==左下 且 A!=B。返回 [(x, y, A, B)]"""
     out = []
@@ -2886,31 +2948,28 @@ def map_repair_cross(root=None, apply_fix=False, limit=2000):
         result["sample"] = [{"x": x, "y": y} for (x, y, _c) in changes[:20]]
         return result
 
-    # 应用：只改像素，用区块撤销
+    # 应用：点级备份（散布改动用包围盒会备份整幅图，30+ MB，实际只改几百个像素）
+    # 多轮迭代只记「第一次遇到该像素时的原值」，最后统一存成一个 undo 条目，
+    # 否则撤销只能退回到上一轮，而不是修复前的状态。
     xs = [c[0] for c in changes]
     ys = [c[1] for c in changes]
     x0, x1 = max(0, min(xs)), min(w - 1, max(xs))
     y0, y1 = max(0, min(ys)), min(h - 1, max(ys))
     bw, bh = x1 - x0 + 1, y1 - y0 + 1
     before = bmp_read_rect(bmp, x0, y0, bw, bh)
+    if before is None:
+        return {"ok": False, "msg": "读 bmp 区域失败"}
     after = list(before)
+    orig_vals = {}
     for (cx, cy, rgb) in changes:
-        idx = (cy - y0) * bw + (cx - x0)
-        if 0 <= idx < len(after):
-            after[idx] = rgb
-    os.makedirs(MAP_UNDO_DIR, exist_ok=True)
-    seq = int(time.time() * 1000)
-    fn = os.path.join(MAP_UNDO_DIR, "cross%d.bin" % seq)
-    with open(fn, "wb") as f:
-        for (r, g, b) in before:
-            f.write(bytes((r, g, b)))
+        o = (cy - y0) * bw + (cx - x0)
+        if 0 <= o < len(after):
+            gi = cy * w + cx
+            if gi not in orig_vals:
+                orig_vals[gi] = tuple(before[o])
+            after[o] = rgb
     bmp_write_rect(bmp, x0, y0, bw, bh, after)
-    MAP_EDIT["undo"].append({"file": fn, "bmp": bmp, "x": x0, "y": y0, "w": bw, "h": bh,
-                             "count": len(changes), "kind": "cross"})
-    MAP_EDIT["redo"] = []
     result["applied"] = len(changes)
-    result["rect"] = [x0, y0, bw, bh]
-    result["undo_depth"] = len(MAP_EDIT["undo"])
 
     # 改像素会产生新的交叉，迭代几轮直到不再减少
     rounds = 1
@@ -2925,21 +2984,34 @@ def map_repair_cross(root=None, apply_fix=False, limit=2000):
         for (x, y, a, b) in cs2:
             up = allpx2[(y - 1) * w + x] if y > 0 else None
             left = allpx2[y * w + (x - 1)] if x > 0 else None
-            ch2.append((x + 1 if (left == a or up != a) else x, y if (left == a or up != a) else y + 1, a))
+            ch2.append((x + 1 if (left == a or up != a) else x,
+                        y if (left == a or up != a) else y + 1, a))
         xs2 = [c[0] for c in ch2]
         ys2 = [c[1] for c in ch2]
         ax0, ax1 = max(0, min(xs2)), min(w - 1, max(xs2))
         ay0, ay1 = max(0, min(ys2)), min(h - 1, max(ys2))
         aw, ah = ax1 - ax0 + 1, ay1 - ay0 + 1
         bef2 = bmp_read_rect(bmp, ax0, ay0, aw, ah)
+        if bef2 is None:
+            break
         aft2 = list(bef2)
         for (cx, cy, rgb) in ch2:
             _i = (cy - ay0) * aw + (cx - ax0)
             if 0 <= _i < len(aft2):
+                gi2 = cy * w + cx
+                if gi2 not in orig_vals:
+                    orig_vals[gi2] = tuple(bef2[_i])
                 aft2[_i] = rgb
         bmp_write_rect(bmp, ax0, ay0, aw, ah, aft2)
         result["applied"] += len(ch2)
         rounds += 1
+
+    # 所有轮次合成一个 undo 条目
+    _pts = [(gi, rgb) for gi, rgb in orig_vals.items()]
+    _fn = _save_point_undo(bmp, _pts)
+    MAP_EDIT["undo"].append({"file": _fn, "bmp": bmp, "kind": "points",
+                             "count": len(_pts), "rect": [x0, y0, bw, bh]})
+    MAP_EDIT["redo"] = []
 
     result["rounds"] = rounds
     result["remaining"] = prev
@@ -3701,6 +3773,12 @@ def map_edit_undo():
     if not MAP_EDIT["undo"]:
         return {"ok": False, "msg": "没有可撤销的地图编辑"}
     u = MAP_EDIT["undo"].pop()
+    # 点级备份（十字交叉修复等散布型改动）：逐点写回，不记录 redo
+    if u.get("kind") == "points":
+        n = _apply_point_undo(u)
+        MAP_EDIT["redo"] = []
+        return {"ok": True, "restored": n, "kind": "points",
+                "msg": "已撤销 %d 个像素的改动（点级备份，不支持重做）" % n}
     cur = bmp_read_rect(u["bmp"], u["x"], u["y"], u["w"], u["h"])
     prev = []
     with open(u["file"], "rb") as f:

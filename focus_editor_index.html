@@ -7377,6 +7377,23 @@ function mapBindEvents(){
     }
   });
   wrap.addEventListener('dblclick', e=>{
+    // 非省视图里双击 = 下钻到省（单击选的是州/国家/战略区）
+    const unit = window.MAP_PICK_UNIT || 'prov';
+    if(unit !== 'prov' && MAP.ready){
+      const p = mapScreenToImage(e.clientX, e.clientY);
+      const pid = mapProvAt(p.x, p.y);
+      if(pid){
+        window.MAP_PICK_UNIT = 'prov';
+        const box = document.getElementById('selBox');
+        if(box) box.innerHTML = '';
+        mapShowOps(pid, ((MAP.idx && MAP.idx[String(pid)]) || {}).state || 0);
+        const cb = document.getElementById('mapLProv');
+        if(cb && !cb.checked){ cb.checked = true; mapApplyLayers(); }
+        status('已下钻到省 ' + pid + '（双击州视图可回到整州）');
+        if(window.mapRenderSelection) window.mapRenderSelection();
+        return;
+      }
+    }
     if(!MAP.lastState) return;
     document.getElementById('mapModal').classList.remove('show');
     if(typeof openStates === 'function') openStates(MAP.lastState);
