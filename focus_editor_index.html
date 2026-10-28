@@ -1111,6 +1111,7 @@
           <button class="btn" id="mckTabCheck" style="font-size:11px">检查</button>
           <button class="btn" id="mckTabRank" style="font-size:11px">省份排行</button>
           <button class="btn" id="mckRepair" style="font-size:11px" title="自动修能修的问题">一键修复</button>
+          <button class="btn" id="mckLoc" style="font-size:11px" title="检查脚本引用的本地化键是否都有定义">本地化</button>
           <div id="mckStats"></div>
           <button class="btn" id="mckRun">重新检查</button>
           <button class="btn" id="mckClose">关闭</button>
@@ -5838,6 +5839,47 @@ async function mapRepair(){
   window.mapBindRefine = rfBind;
 })();
 
+// v1.3.1 缺失本地化（参考 CWTools 的 code action）
+let LOC_MISS = null;
+async function mapShowLocMissing(){
+  const list = document.getElementById('mckList');
+  const stats = document.getElementById('mckStats');
+  list.innerHTML = '<div class="cm-empty">扫描中…</div>';
+  if(stats) stats.textContent = '';
+  const r = await (await fetch('/api/loc_missing?limit=600')).json();
+  if(!r.ok){ list.innerHTML = '<div class="cm-empty">' + escapeHtml(r.msg || '扫描失败') + '</div>'; return; }
+  LOC_MISS = r;
+  const kinds = r.by_kind || {};
+  if(stats) stats.innerHTML = r.total
+    ? ('<span class="w" style="margin-right:8px">缺 ' + r.total + '</span><span class="k">' + (r.defined || 0) + ' 已定义</span>')
+    : '<span class="k">全部都有定义</span>';
+  if(!r.total){
+    list.innerHTML = '<div class="cm-empty">' + (r.msg || '没有缺失') + '</div>';
+    return;
+  }
+  const tag = {focus:'国策', event:'事件', idea:'精神'};
+  const head = '<div class="mck-row" style="align-items:center">'
+    + '<div><div class="mck-t">缺 ' + r.total + ' 个本地化键</div>'
+    + '<div class="mck-d">' + Object.keys(kinds).map(k=>(tag[k]||k)+' ' + kinds[k]).join(' · ')
+    + '　游戏里会直接显示键名</div></div>'
+    + '<button class="btn" id="locGen" style="font-size:11px">生成占位</button></div>';
+  const rows = (r.missing || []).map(x=>
+    '<div class="mck-row"><div><div class="mck-t" style="font-family:monospace">' + escapeHtml(x.key) + '</div>'
+    + '<div class="mck-d">' + (tag[x.kind] || x.kind) + '　' + escapeHtml(x.file || '') + '</div></div></div>'
+  ).join('');
+  list.innerHTML = head + rows + (r.truncated ? '<div class="cm-empty">只显示前 600 条</div>' : '');
+  const btn = document.getElementById('locGen');
+  if(btn) btn.onclick = async ()=>{
+    if(!confirm('把 ' + r.total + ' 个缺失的键写进 zz_xuerong_autogen_l_simp_chinese.yml？' + String.fromCharCode(10) + '占位值就是键名，之后自己改。')) return;
+    btn.disabled = true; btn.textContent = '写入中…';
+    const g = await (await fetch('/api/loc_generate', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({keys: (r.missing || []).map(x=>x.key)})})).json();
+    status(g.msg || (g.ok ? '已生成' : '生成失败'), !g.ok);
+    btn.textContent = g.ok ? ('已写 ' + (g.written || 0)) : '失败';
+    if(g.ok) mapShowLocMissing();
+  };
+}
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -6671,6 +6713,7 @@ document.getElementById('mckRun').onclick = mapRunCheck;
 document.getElementById('mckTabCheck').onclick = mapRunCheck;
 document.getElementById('mckTabRank').onclick = mapShowRank;
 document.getElementById('mckRepair').onclick = mapRepair;
+document.getElementById('mckLoc').onclick = mapShowLocMissing;
 document.getElementById('mckClose').onclick = ()=>{ document.getElementById('mapCheckModal').classList.remove('show'); };
 
 document.getElementById('mapSearch').addEventListener('keydown', e=>{ if(e.key === 'Enter') mapSearchGo(); });
