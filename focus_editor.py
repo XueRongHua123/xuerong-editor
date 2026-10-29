@@ -9433,7 +9433,26 @@ def _post_json(url, payload, headers, timeout=90):
         return json.loads(r.read().decode("utf-8", "replace"))
 
 # v0.69 AI 流式输出
-def ai_chat_stream(cfg, prompt, context, emit):
+def _ai_messages(system, prompt, context, history, max_turns=12):
+    """把历史消息 + 当前提问拼成 messages 数组。
+
+    history: [{"role": "user"/"assistant", "content": "..."}]
+    只保留最近 max_turns 轮，避免上下文过长把模型窗口挤爆。"""
+    msgs = [{"role": "system", "content": system}]
+    hist = list(history or [])
+    if len(hist) > max_turns * 2:
+        hist = hist[-max_turns * 2:]
+    for h in hist:
+        role = h.get("role")
+        content = (h.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            msgs.append({"role": role, "content": content})
+    cur = prompt if not context else (context + "\n\n---\n\n" + prompt)
+    msgs.append({"role": "user", "content": cur})
+    return msgs
+
+
+def ai_chat_stream(cfg, prompt, context, emit, history=None):
     """逐块把模型输出交给 emit(chunk)。返回 (ok, 错误信息)。
 
     OpenAI 兼容 / Ollama / Anthropic / Gemini 都支持；解析失败时退回一次性返回。
@@ -9443,7 +9462,8 @@ def ai_chat_stream(cfg, prompt, context, emit):
     key = cfg.get("api_key") or ""
     model = cfg.get("model") or ""
     system = cfg.get("system") or DEFAULT_AI["system"]
-    text = prompt if not context else (context + "\n\n---\n\n" + prompt)
+    msgs = _ai_messages(system, prompt, context, history)
+    text = msgs[-1]["content"]
     if not base:
         return False, "请填写 Base URL"
 
@@ -9455,8 +9475,7 @@ def ai_chat_stream(cfg, prompt, context, emit):
     try:
         if provider in ("openai", "deepseek", "ollama", "custom"):
             body = {"model": model, "temperature": 0.3, "stream": True,
-                    "messages": [{"role": "system", "content": system},
-                                 {"role": "user", "content": text}]}
+                    "messages": msgs}
             with _open(base + "/chat/completions", body,
                        {"Authorization": "Bearer " + key} if key else {}) as r:
                 for raw in r:
@@ -9530,7 +9549,7 @@ def ai_chat_stream(cfg, prompt, context, emit):
         return False, "请求失败: %s" % e
 
 
-def ai_chat(cfg, prompt, context=""):
+def ai_chat(cfg, prompt, context="", history=None):
 
     provider = (cfg.get("provider") or "openai").lower()
     base = (cfg.get("base_url") or "").rstrip("/")
@@ -10233,9 +10252,11 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path == "/api/ai_chat":
             _cfg = load_ai()
             if body.get("stream"):
-                self._ai_stream(_cfg, body.get("prompt") or "", body.get("context") or "")
+                self._ai_stream(_cfg, body.get("prompt") or "", body.get("context") or "",
+                                body.get("history") or [])
             else:
-                ok, msg = ai_chat(_cfg, body.get("prompt") or "", body.get("context") or "")
+                ok, msg = ai_chat(_cfg, body.get("prompt") or "", body.get("context") or "",
+                                  body.get("history") or [])
                 self._send({"ok": ok, "msg": msg})
         elif self.path == "/api/shared_add":
             ok, msg = add_shared_focus(body.get("root"), body.get("id"))

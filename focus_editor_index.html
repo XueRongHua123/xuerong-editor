@@ -3161,12 +3161,52 @@ function aiPushHistory(prompt, answer){
   renderAIHistory();
 }
 
+// v1.16.0 多轮上下文：把最近问答转成 messages（时间正序，AI_HISTORY 是新的在前）
+function aiHistoryMessages(){
+  const n = Number(document.getElementById('aiCtxTurns')?.value || 6);
+  const list = AI_HISTORY.slice(0, Math.max(0, n)).slice().reverse();
+  const msgs = [];
+  list.forEach(function(h){
+    if(h.q) msgs.push({role: 'user', content: String(h.q)});
+    if(h.a) msgs.push({role: 'assistant', content: String(h.a)});
+  });
+  return msgs;
+}
+
+function aiClearCtx(){
+  AI_HISTORY = [];
+  renderAIHistory();
+  aiUpdateMeta('上下文已清空');
+  status('AI 上下文已清空');
+}
+
 function renderAIHistory(){
   const box = document.getElementById('aiHistory');
   if(!box) return;
-  if(!AI_HISTORY.length){ box.innerHTML = ''; return; }
-  box.innerHTML = '<div class="k" style="margin:2px 0 2px">最近提问（点一下回填）</div>' +
+  // 控制条始终显示：历史为空时也要能选轮数、能清空
+  const ctrl = '<div class="k" style="margin:2px 0 2px;display:flex;align-items:center;gap:6px">'
+    + '上下文 <select id="aiCtxTurns" style="height:20px;font-size:11px;background:var(--input);'
+    + 'border:1px solid var(--line);color:var(--text);border-radius:4px">'
+    + [0,2,4,6,8,12].map(function(n){
+        return '<option value="' + n + '"' + (n === 6 ? ' selected' : '') + '>' + n + ' 轮</option>';
+      }).join('')
+    + '</select>'
+    + '<button class="btn" id="aiClearCtx" style="height:20px;font-size:11px;padding:0 6px">清空</button>'
+    + '</div>';
+  if(!AI_HISTORY.length){
+    box.innerHTML = ctrl + '<div class="k" style="color:var(--t3)">（暂无历史，多轮上下文未启用）</div>';
+    const cb0 = document.getElementById('aiClearCtx');
+    if(cb0){ cb0.onclick = aiClearCtx; }
+    return;
+  }
+  box.innerHTML = ctrl
+    + '<div class="k" style="margin:2px 0 2px">最近提问（点一下回填）</div>' +
     AI_HISTORY.map((h, i)=>'<div class="ai-h" data-i="' + i + '">' + h.t + ' · ' + escapeHtml(h.q.slice(0, 60)) + '</div>').join('');
+  const cb = document.getElementById('aiClearCtx');
+  if(cb && !cb.dataset.bound){
+    cb.dataset.bound = '1';
+    cb.onclick = aiClearCtx;
+  }
   box.querySelectorAll('.ai-h').forEach(el=>{
     el.onclick = ()=>{
       const h = AI_HISTORY[Number(el.dataset.i)];
@@ -3698,7 +3738,10 @@ async function sendAI(){
   let acc = '', finished = false;
   try{
     const r = await fetch('/api/ai_chat', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({prompt, context: document.getElementById('aiContext').value, stream: true}),
+      body: JSON.stringify({prompt,
+                            context: document.getElementById('aiContext').value,
+                            stream: true,
+                            history: aiHistoryMessages()}),
       signal: aiAbort.signal});
     if(!r.ok || !r.body){ throw new Error('HTTP ' + r.status); }
     const reader = r.body.getReader();
