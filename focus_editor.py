@@ -319,12 +319,37 @@ def load_game_loc():
                 except Exception:
                     pass
 
+def _layer_dirs(sub, root):
+    """某类资源在叠加链里的目录列表（子 mod 在前，便于后加载覆盖前）。
+
+    老的 loader 都是「扫 root 下一个目录」，加载纯 submod 时父 mod 的同类文件读不到。
+    全部改用它之后，即使 ROOTS 只有 submod，也能沿 mod_layers 读到父 mod 与原版。"""
+    out = []
+    seen = set()
+    for base in reversed(mod_layers(root) or []):
+        if not base:
+            continue
+        d = os.path.join(base, sub.replace("/", os.sep))
+        if not os.path.isdir(d):
+            continue
+        ab = os.path.abspath(d)
+        if ab in seen:
+            continue
+        seen.add(ab)
+        out.append((base, d))
+    return out
+
+
 def load_mod(root):
     root = os.path.abspath(root)
     name = os.path.basename(root.rstrip("\\/")) or root
-    nf = os.path.join(root, "common", "national_focus")
     count = 0
-    for fn in (sorted(f for f in os.listdir(nf) if f.endswith(".txt")) if os.path.isdir(nf) else []):
+    _nf_pairs = []
+    for _b, _d in _layer_dirs("common/national_focus", root):
+        _src = os.path.basename(_b.rstrip("\\/")) or _b
+        for _f in (sorted(f for f in os.listdir(_d) if f.endswith(".txt")) if os.path.isdir(_d) else []):
+            _nf_pairs.append((_src, _d, _f))
+    for name, nf, fn in _nf_pairs:
         text = strip_comments(io.open(os.path.join(nf, fn), encoding="utf-8", errors="replace").read())
         rel = os.path.join("common", "national_focus", fn)
         for start, end, body in find_blocks(text, "shared_focus"):
@@ -459,6 +484,10 @@ def reload_data():
     global COUNTRIES, STATES
     COUNTRIES = {}
     STATES = {}
+    # 逐层加载会把 load_states / load_countries 这类内部已经走 _layer_files 的
+    # 函数重复执行（它们每次都处理整条链），州数会从 818 涨到 1081。
+    # 所以这里保持只遍历 ROOTS；「父 mod 的 ideas/techs/equipment 读不到」这件事
+    # 记在 BACKLOG，等把这批 loader 改成走 _layer_files 之后再统一改。
     total = 0
     for r in ROOTS:
         total += load_mod(r)
@@ -492,24 +521,27 @@ def _add_idea(key, body, file, source):
 
 def load_ideas(root):
     name = os.path.basename(root.rstrip("\\/")) or root
-    d = os.path.join(root, "common", "ideas")
-    if not os.path.isdir(d):
-        return 0
     n = 0
-    for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
-        rel = os.path.join("common", "ideas", fn)
-        raw = io.open(os.path.join(d, fn), encoding="utf-8", errors="replace", newline="").read()
-        text = strip_comments(raw)
-        for s, e, body in find_blocks(text, "ideas"):
-            for k, v, b in top_items(body):
-                if not b:
-                    continue
-                if _looks_like_idea(v):
-                    _add_idea(k, v, rel, name); n += 1
-                else:
-                    for k2, v2, b2 in top_items(v):
-                        if b2 and _looks_like_idea(v2):
-                            _add_idea(k2, v2, rel, name); n += 1
+    for base, d in _layer_dirs("common/ideas", root):
+        src = os.path.basename(base.rstrip("\\/")) or base
+        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+            rel = os.path.join("common", "ideas", fn)
+            try:
+                raw = io.open(os.path.join(d, fn), encoding="utf-8",
+                              errors="replace", newline="").read()
+            except Exception:
+                continue
+            text = strip_comments(raw)
+            for _s, _e, body in find_blocks(text, "ideas"):
+                for k, v, b in top_items(body):
+                    if not b:
+                        continue
+                    if _looks_like_idea(v):
+                        _add_idea(k, v, rel, src); n += 1
+                    else:
+                        for k2, v2, b2 in top_items(v):
+                            if b2 and _looks_like_idea(v2):
+                                _add_idea(k2, v2, rel, src); n += 1
     return n
 
 def missing_loc():
@@ -581,55 +613,54 @@ def file_excerpt(rel, line, root=None, span=6):
 
 def load_equipment(root):
     name = os.path.basename(root.rstrip("\\/")) or root
-    d = os.path.join(root, "common", "units", "equipment")
-    if not os.path.isdir(d):
-        return 0
     n = 0
-    for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
-        rel = os.path.join("common", "units", "equipment", fn)
-        text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
-        for s, e, body in find_blocks(text, "equipments"):
-            for k, v, b in top_items(body):
-                if not b:
-                    continue
-                yr = re.search(r'(?m)^\s*year\s*=\s*(\d+)', v)
-                bd = re.search(r'(?m)^\s*is_buildable\s*=\s*(\w+)', v)
-                props = {}
-                for pk in ("year", "is_buildable", "type", "reliability", "maximum_speed",
-                           "defense", "breakthrough", "hardness", "soft_attack", "hard_attack",
-                           "air_attack", "armor", "piercing", "build_cost_ic",
-                           "is_archetype", "archetype", "can_be_produced", "group_by",
-                           "interface_category"):
-                    m2 = re.search(r'(?m)^\s*%s\s*=\s*([^\s#]+)' % pk, v)
-                    if m2 and not m2.group(1).startswith("{"):
-                        props[pk] = m2.group(1)
-                slots = []
-                for sm in re.finditer(r'module_slots\s*=\s*\{', v):
-                    sb = v.find('{', sm.start())
-                    se = brace_match(v, sb)
-                    sbody = v[sb + 1:se - 1]
-                    for sk, sv, sbb in top_items(sbody):
-                        if not sbb:
-                            continue
-                        req = re.search(r'(?m)^\s*required\s*=\s*(\w+)', sv)
-                        cats = []
-                        cmm = re.search(r'allowed_module_categories\s*=\s*\{', sv)
-                        if cmm:
-                            cb = sv.find('{', cmm.start())
-                            ce = brace_match(sv, cb)
-                            cats = re.findall(r'[A-Za-z0-9_]+', sv[cb + 1:ce - 1])
-                        slots.append({"slot": sk,
-                                      "required": (req.group(1).lower() == "yes") if req else False,
-                                      "categories": cats})
-                EQUIPMENTS[k] = {"id": k, "file": rel, "source": name,
-                                 "name": LOC.get(k, k),
-                                 "year": yr.group(1) if yr else "",
-                                 "buildable": bd.group(1) if bd else "",
-                                 "slots": slots,
-                                 "picture": (re.search(r'(?m)^\s*picture\s*=\s*"?([A-Za-z0-9_]+)"?', v) or [None, ""])[1],
-                                 "props": props,
-                                 "raw": "%s = {\n%s\n}" % (k, v.strip())}
-                n += 1
+    for base, d in _layer_dirs("common/units/equipment", root):
+      name = os.path.basename(base.rstrip("\\/")) or base
+      for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+          rel = os.path.join("common", "units", "equipment", fn)
+          text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
+          for s, e, body in find_blocks(text, "equipments"):
+              for k, v, b in top_items(body):
+                  if not b:
+                      continue
+                  yr = re.search(r'(?m)^\s*year\s*=\s*(\d+)', v)
+                  bd = re.search(r'(?m)^\s*is_buildable\s*=\s*(\w+)', v)
+                  props = {}
+                  for pk in ("year", "is_buildable", "type", "reliability", "maximum_speed",
+                             "defense", "breakthrough", "hardness", "soft_attack", "hard_attack",
+                             "air_attack", "armor", "piercing", "build_cost_ic",
+                             "is_archetype", "archetype", "can_be_produced", "group_by",
+                             "interface_category"):
+                      m2 = re.search(r'(?m)^\s*%s\s*=\s*([^\s#]+)' % pk, v)
+                      if m2 and not m2.group(1).startswith("{"):
+                          props[pk] = m2.group(1)
+                  slots = []
+                  for sm in re.finditer(r'module_slots\s*=\s*\{', v):
+                      sb = v.find('{', sm.start())
+                      se = brace_match(v, sb)
+                      sbody = v[sb + 1:se - 1]
+                      for sk, sv, sbb in top_items(sbody):
+                          if not sbb:
+                              continue
+                          req = re.search(r'(?m)^\s*required\s*=\s*(\w+)', sv)
+                          cats = []
+                          cmm = re.search(r'allowed_module_categories\s*=\s*\{', sv)
+                          if cmm:
+                              cb = sv.find('{', cmm.start())
+                              ce = brace_match(sv, cb)
+                              cats = re.findall(r'[A-Za-z0-9_]+', sv[cb + 1:ce - 1])
+                          slots.append({"slot": sk,
+                                        "required": (req.group(1).lower() == "yes") if req else False,
+                                        "categories": cats})
+                  EQUIPMENTS[k] = {"id": k, "file": rel, "source": name,
+                                   "name": LOC.get(k, k),
+                                   "year": yr.group(1) if yr else "",
+                                   "buildable": bd.group(1) if bd else "",
+                                   "slots": slots,
+                                   "picture": (re.search(r'(?m)^\s*picture\s*=\s*"?([A-Za-z0-9_]+)"?', v) or [None, ""])[1],
+                                   "props": props,
+                                   "raw": "%s = {\n%s\n}" % (k, v.strip())}
+                  n += 1
     return n
 
 def _looks_tech(body):
@@ -639,11 +670,14 @@ def _looks_tech(body):
 
 def load_techs(root):
     name = os.path.basename(root.rstrip("\\/")) or root
-    d = os.path.join(root, "common", "technologies")
-    if not os.path.isdir(d):
-        return 0
     n = 0
-    for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+    _tech_files = []
+    for _b, _d in _layer_dirs("common/technologies", root):
+        if not os.path.isdir(_d):
+            continue
+        for _f in sorted(f for f in os.listdir(_d) if f.endswith(".txt")):
+            _tech_files.append((_d, _f))
+    for d, fn in _tech_files:
         rel = os.path.join("common", "technologies", fn)
         text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
         macros = {}
@@ -801,9 +835,12 @@ def load_countries(root):
             c["color_derived"] = True
 
     # 开局历史
-    d = os.path.join(root, "history", "countries")
-    if os.path.isdir(d):
-        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+    _hist_pairs = []
+    for _b, _d in _layer_dirs("history/countries", root):
+        for _f in sorted(f for f in os.listdir(_d) if f.endswith(".txt")):
+            _hist_pairs.append((_b, _d, _f))
+    for _hb, d, fn in _hist_pairs:
+        if True:
             m = re.match(r'([A-Z0-9]{2,4})\s*-\s*(.+)\.txt$', fn, re.I)
             tag = m.group(1).upper() if m else fn[:-4].strip().upper()[:4]
             text = _read_text(os.path.join(d, fn))
@@ -1035,8 +1072,10 @@ def load_states(root):
     return n
 
 
+# HOI4 1.19 的 state_category 全集（缺 large_town / city 会让这两类州保存失败）
 STATE_CATEGORIES = ("wasteland", "enclave", "tiny_island", "small_island", "pastoral",
-                    "rural", "town", "large_city", "metropolis", "megalopolis")
+                    "rural", "town", "large_town", "city", "large_city",
+                    "metropolis", "megalopolis")
 STATE_BUILDINGS = ("infrastructure", "arms_factory", "industrial_complex", "dockyard",
                    "air_base", "anti_air_building", "radar_station", "synthetic_refinery",
                    "fuel_silo", "rocket_site", "nuclear_reactor")
@@ -4775,8 +4814,13 @@ def _find_state_of_prov(pid):
 
 
 def _state_file_for(sid):
-    """按州 id 找文件路径：(root, rel, path)"""
-    for root in ROOTS:
+    """按州 id 找文件路径：(root, rel, path)。按叠加链最高优先级找。"""
+    _bases = []
+    for _r in (ROOTS or []):
+        for _b in (mod_layers(_r) or [_r]):
+            if _b and os.path.abspath(_b) not in [os.path.abspath(x) for x in _bases]:
+                _bases.append(_b)
+    for root in reversed(_bases):
         d = os.path.join(root, "history", "states")
         if not os.path.isdir(d):
             continue
@@ -7682,6 +7726,155 @@ def _prov_type_map(root):
     return out
 
 
+def _supply_dir_write(root):
+    """补给区写到哪：链顶 mod 的 map/supplyareas"""
+    root = _map_pick(root)
+    base = root if root else (ROOTS[-1] if ROOTS else "")
+    if not base:
+        return None, None
+    d = _out_path(base, os.path.join("map", "supplyareas")) if OUTPUT_MODE else \
+        os.path.join(base, "map", "supplyareas")
+    os.makedirs(d, exist_ok=True)
+    return base, d
+
+
+def supply_area_save(sid, value=None, states=None, name=None, root=None):
+    """新建或修改一个补给区。
+
+    sid 已存在就改（value / states / name），不存在就新建文件。
+    写法沿用 HOI4 的 supply_area={ id name value states }。"""
+    root = _map_pick(root)
+    try:
+        sid = int(sid)
+    except Exception:
+        return {"ok": False, "msg": "补给区 id 不合法"}
+    base, d = _supply_dir_write(root)
+    if not d:
+        return {"ok": False, "msg": "找不到可写的 mod 目录"}
+
+    # 找现有文件
+    exist_path = None
+    for _b, _d in _layer_dirs("map/supplyareas", root):
+        for fn in sorted(os.listdir(_d)):
+            if not fn.endswith(".txt"):
+                continue
+            p = os.path.join(_d, fn)
+            try:
+                t = strip_comments(io.open(p, encoding="utf-8-sig", errors="replace").read())
+            except Exception:
+                continue
+            for m in re.finditer(r'supply_area\s*=\s*\{', t):
+                b = t.find("{", m.end() - 1)
+                e = brace_match(t, b)
+                if e <= b:
+                    continue
+                body = t[b + 1:e - 1]
+                mm = re.search(r'(?m)^\s*id\s*=\s*(\d+)', body)
+                if mm and int(mm.group(1)) == sid:
+                    exist_path = p
+                    break
+            if exist_path:
+                break
+        if exist_path:
+            break
+
+    # 现有值（改的时候保留没传的字段）
+    cur_value, cur_states, cur_name = 12, [], "SUPPLYAREA_%d" % sid
+    if exist_path:
+        try:
+            t = strip_comments(io.open(exist_path, encoding="utf-8-sig", errors="replace").read())
+            b = t.find("{", t.find("supply_area"))
+            e = brace_match(t, b)
+            body = t[b + 1:e - 1]
+            mv = re.search(r'(?m)^\s*value\s*=\s*(\d+)', body)
+            if mv:
+                cur_value = int(mv.group(1))
+            mn = re.search(r'(?m)^\s*name\s*=\s*"([^"]*)"', body)
+            if mn:
+                cur_name = mn.group(1)
+            ms = re.search(r'states\s*=\s*\{([^}]*)\}', body)
+            if ms:
+                cur_states = [int(x) for x in re.findall(r'\d+', ms.group(1))]
+        except Exception:
+            pass
+
+    if value not in (None, ""):
+        try:
+            cur_value = int(value)
+        except Exception:
+            return {"ok": False, "msg": "value 必须是整数"}
+    if name:
+        cur_name = str(name)
+    if states:
+        try:
+            cur_states = sorted({int(x) for x in states})
+        except Exception:
+            return {"ok": False, "msg": "states 列表不合法"}
+    if not cur_states:
+        return {"ok": False, "msg": "至少要给一个州"}
+
+    # 州必须存在
+    bad = [x for x in cur_states if str(x) not in STATES and x not in STATES]
+    if bad:
+        return {"ok": False, "msg": "这些州不存在：%s" % bad[:5]}
+
+    fn = os.path.basename(exist_path) if exist_path else ("%d-SupplyArea.txt" % sid)
+    path = os.path.join(d, fn)
+    inner = "\n" + "".join("\t\t%d\n" % x for x in cur_states) + "\t"
+    body = ('supply_area={\n\tid=%d\n\tname="%s"\n\tvalue=%d\n\tstates={%s}\n}\n'
+            % (sid, cur_name, cur_value, inner))
+    io.open(path, "wb").write(b"\xef\xbb\xbf" + body.encode("utf-8"))
+    reload_data()
+    return {"ok": True, "id": sid, "file": os.path.basename(path),
+            "value": cur_value, "states": cur_states,
+            "created": not bool(exist_path),
+            "msg": "%s补给区 %d（value=%d，%d 个州）" % (
+                "已新建" if not exist_path else "已更新", sid, cur_value, len(cur_states))}
+
+
+def supply_area_delete(sid, root=None):
+    """删除一个补给区：只从当前 mod 层的文件里摘，原版不动"""
+    root = _map_pick(root)
+    try:
+        sid = int(sid)
+    except Exception:
+        return {"ok": False, "msg": "id 不合法"}
+    base, d = _supply_dir_write(root)
+    if not d:
+        return {"ok": False, "msg": "找不到可写的 mod 目录"}
+    # 只处理自己目录里的文件
+    for fn in sorted(os.listdir(d)):
+        if not fn.endswith(".txt"):
+            continue
+        p = os.path.join(d, fn)
+        try:
+            t = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        except Exception:
+            continue
+        ct = strip_comments(t)
+        found = False
+        for m in re.finditer(r'supply_area\s*=\s*\{', ct):
+            b = ct.find("{", m.end() - 1)
+            e = brace_match(ct, b)
+            if e <= b:
+                continue
+            mm = re.search(r'(?m)^\s*id\s*=\s*(\d+)', ct[b + 1:e - 1])
+            if mm and int(mm.group(1)) == sid:
+                found = True
+                break
+        if not found:
+            continue
+        try:
+            snapshot(p)
+            os.remove(p)
+        except Exception as ex:
+            return {"ok": False, "msg": "删除失败：%s" % ex}
+        reload_data()
+        return {"ok": True, "id": sid, "msg": "已删除补给区 %d（%s）" % (sid, fn)}
+    return {"ok": False,
+            "msg": "补给区 %d 不在当前 mod 层里（可能来自原版或父 mod，只读）" % sid}
+
+
 def _terrain_colors(root):
     """从 common/terrain/*.txt 读各地形类别的游戏内配色 {name: (r,g,b)}。
     mod 定义了同名类别就覆盖原版；读不到就返回空字典。"""
@@ -10396,6 +10589,12 @@ class Handler(SimpleHTTPRequestHandler):
                                       body.get("root")))
         elif self.path == "/api/equipment_delete":
             self._send(equipment_delete(body.get("id"), body.get("root")))
+        elif self.path == "/api/supply_save":
+            self._send(supply_area_save(body.get("id"), body.get("value"),
+                                        body.get("states"), body.get("name"),
+                                        body.get("root")))
+        elif self.path == "/api/supply_delete":
+            self._send(supply_area_delete(body.get("id"), body.get("root")))
         elif self.path == "/api/adj_edit":
             self._send(adjacency_edit(body.get("line"), body.get("type"),
                                       body.get("root")))

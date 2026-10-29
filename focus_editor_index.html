@@ -1552,6 +1552,16 @@
             <div class="mp-k" id="supStat">—</div>
             <div class="mp-acts"><button class="btn" id="supRefresh">刷新补给区</button></div>
             <div id="supList" style="max-height:260px;overflow:auto;margin-top:8px"></div>
+            <div style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px">
+              <div class="mp-k">新建 / 修改补给区</div>
+              <div class="mp-acts">
+                <input id="supId" placeholder="id" style="height:26px;width:60px">
+                <input id="supValue" placeholder="value" style="height:26px;width:70px">
+                <button class="btn" id="supNewBtn">保存</button>
+              </div>
+              <input id="supStates" placeholder="州号 空格分隔" style="width:100%;box-sizing:border-box;height:26px;margin-top:4px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:5px;padding:0 6px">
+              <div class="mp-k" id="supMsg" style="min-height:16px;line-height:1.5"></div>
+            </div>
           </div>
           </div><!-- /pane-edit -->
 
@@ -7036,7 +7046,26 @@ function makePannable(svg, body){
         + '<button class="btn" id="stOwnerSave">保存</button>'
         + '</div>'
         + '<div class="mp-k" id="stOwnerMsg" style="min-height:16px"></div>'
-        + '<div class="mp-k" style="margin-top:8px">批量增减省</div>'
+        + '<div class="mp-k" style="margin-top:10px">类别与人力</div>'
+        + '<div class="mp-acts">'
+        + '<select id="mvCat" style="height:26px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:5px">'
+        + ['wasteland','enclave','tiny_island','small_island','pastoral','rural','town','large_town','city','large_city','metropolis','megalopolis'].map(function(c){
+            return '<option value="' + c + '">' + c + '</option>';
+          }).join('')
+        + '</select>'
+        + '<input id="mvManpower" placeholder="人力" style="height:26px;width:90px">'
+        + '<button class="btn" id="mvCatSave">保存</button>'
+        + '</div>'
+        + '<div class="mp-k" id="mvCatMsg" style="min-height:16px"></div>'
+        + '<div class="mp-k" style="margin-top:10px">核心领土</div>'
+        + '<input id="mvCores" placeholder="TAG 空格分隔，如 GER POL" style="width:100%;box-sizing:border-box;height:26px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:5px;padding:0 6px">'
+        + '<div class="mp-acts" style="margin-top:4px"><button class="btn" id="mvCoresSave">保存核心</button></div>'
+        + '<div class="mp-k" id="mvCoresMsg" style="min-height:16px"></div>'
+        + '<div class="mp-k" style="margin-top:10px">建筑位</div>'
+        + '<div id="mvBuildings" style="max-height:200px;overflow:auto"></div>'
+        + '<div class="mp-acts" style="margin-top:4px"><button class="btn" id="mvBldSave">保存建筑</button></div>'
+        + '<div class="mp-k" id="mvBldMsg" style="min-height:16px"></div>'
+        + '<div class="mp-k" style="margin-top:10px">批量增减省</div>'
         + '<div class="mp-k" id="stProvInfo" style="color:var(--t3)">（用地图框选省后操作）</div>'
         + '<div class="mp-acts">'
         + '<button class="btn" id="stProvAdd">并入此州</button>'
@@ -8125,6 +8154,170 @@ function makePannable(svg, body){
     }
   }
   window.mapBindOrphan = bind;
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.0 州视图编辑补全：类别 / 人力 / cores / 建筑位
+(function(){
+  let SD = null;
+  const BUILDINGS = ['infrastructure','arms_factory','industrial_complex','air_base',
+    'anti_air_building','synthetic_refinery','dockyard','naval_base','rocket_site',
+    'radar_station','nuclear_reactor','supply_hub'];
+
+  function m(t, id, bad){
+    const el = document.getElementById(id);
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  async function loadSD(){
+    const sid = window.__curStateId;
+    if(!sid) return;
+    try{
+      SD = await (await fetch('/api/state?id=' + sid + '&full=1')).json();
+    }catch(e){ SD = null; }
+    if(!SD) return;
+    const cat = document.getElementById('mvCat');
+    if(cat && SD.category){
+      for(const op of cat.options){ if(op.value === SD.category){ cat.value = SD.category; break; } }
+    }
+    const mp = document.getElementById('mvManpower');
+    if(mp && SD.manpower != null) mp.value = SD.manpower;
+    const co = document.getElementById('mvCores');
+    if(co) co.value = (SD.cores || []).join(' ');
+    const box = document.getElementById('mvBuildings');
+    if(box){
+      const cur = SD.buildings || {};
+      box.innerHTML = BUILDINGS.map(function(b){
+        const v = (cur[b] != null ? cur[b] : '');
+        return '<div style="display:flex;gap:6px;align-items:center;padding:1px 0">'
+          + '<span style="width:148px;font-size:11.5px;font-family:Consolas,monospace;color:var(--t2)">' + b + '</span>'
+          + '<input class="mv-bld" data-b="' + b + '" value="' + v + '" placeholder="0"'
+          + ' style="flex:1;height:22px;font-size:11.5px;font-family:Consolas,monospace;'
+          + 'background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:0 5px">'
+          + '</div>';
+      }).join('');
+    }
+  }
+
+  async function save(kind){
+    const sid = window.__curStateId;
+    if(!sid) return;
+    const fields = {};
+    let mid = 'mvCatMsg';
+    if(kind === 'cat'){
+      const cat = document.getElementById('mvCat');
+      const mp = document.getElementById('mvManpower');
+      if(cat) fields.category = cat.value;
+      if(mp && mp.value.trim()) fields.manpower = mp.value.trim();
+    } else if(kind === 'cores'){
+      mid = 'mvCoresMsg';
+      const co = document.getElementById('mvCores');
+      fields.cores = ((co && co.value) || '').trim().split(/\s+/).filter(Boolean)
+        .map(function(x){ return x.toUpperCase(); });
+    } else {
+      mid = 'mvBldMsg';
+      const b = {};
+      document.querySelectorAll('#mvBuildings .mv-bld').forEach(function(inp){
+        const v = inp.value.trim();
+        if(v !== '' && !isNaN(Number(v))) b[inp.dataset.b] = Number(v);
+      });
+      fields.buildings = b;
+    }
+    m('写入中…', mid);
+    const r = await (await fetch('/api/state_save', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id: sid, fields: fields})})).json();
+    m(r.msg || (r.ok ? '已保存' : '失败'), mid, !r.ok);
+    if(r.ok) status(r.msg);
+  }
+
+  function bindSD(){
+    if((window.MAP_PICK_UNIT || 'prov') !== 'state') return;
+    [['mvCatSave', function(){ save('cat'); }],
+     ['mvCoresSave', function(){ save('cores'); }],
+     ['mvBldSave', function(){ save('bld'); }]].forEach(function(p){
+      const el = document.getElementById(p[0]);
+      if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
+    });
+    if(document.getElementById('mvCat')) loadSD();
+  }
+
+  const orig = window.mapShowOps;
+  if(typeof orig === 'function'){
+    window.mapShowOps = function(){
+      const r = orig.apply(this, arguments);
+      setTimeout(bindSD, 180);
+      return r;
+    };
+  }
+})();
+
+// v1.22.0 补给区增删改
+(function(){
+  function msg(t, bad){
+    const el = document.getElementById('supMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  async function loadSup(){
+    const stat = document.getElementById('supStat');
+    const box = document.getElementById('supList');
+    if(stat) stat.textContent = '读取中…';
+    const r = await (await fetch('/api/supply_areas')).json();
+    if(!r.ok){ if(stat) stat.textContent = r.msg || '失败'; return; }
+    if(stat) stat.textContent = r.msg;
+    if(!box) return;
+    box.innerHTML = (r.items || []).map(function(a){
+      return '<div style="display:flex;align-items:center;gap:6px;padding:2px 6px;'
+        + 'font-size:11.5px;font-family:Consolas,monospace">'
+        + '<span style="flex:1">区 ' + a.id + '　价值 ' + a.value + '　' + a.count + ' 州</span>'
+        + '<button class="btn sup-del" data-id="' + a.id + '" style="height:20px;font-size:10px;padding:0 6px">删</button>'
+        + '<button class="btn sup-edit" data-id="' + a.id + '" data-v="' + a.value + '"'
+        + ' data-s="' + (a.states || []).join(' ') + '" style="height:20px;font-size:10px;padding:0 6px">改</button>'
+        + '</div>';
+    }).join('');
+    box.querySelectorAll('.sup-del').forEach(function(b){
+      b.onclick = async function(){
+        if(!confirm('删除补给区 ' + b.dataset.id + '？')) return;
+        const r2 = await (await fetch('/api/supply_delete', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({id: Number(b.dataset.id)})})).json();
+        msg(r2.msg || '', !r2.ok);
+        if(r2.ok){ status(r2.msg); await loadSup(); }
+      };
+    });
+    box.querySelectorAll('.sup-edit').forEach(function(b){
+      b.onclick = function(){
+        document.getElementById('supId').value = b.dataset.id;
+        document.getElementById('supValue').value = b.dataset.v;
+        document.getElementById('supStates').value = b.dataset.s;
+        msg('已填入表单，改完点保存');
+      };
+    });
+  }
+
+  async function saveSup(){
+    const id = Number(document.getElementById('supId').value || 0);
+    const val = document.getElementById('supValue').value.trim();
+    const st = document.getElementById('supStates').value.trim();
+    if(!id){ msg('填 id', true); return; }
+    const states = st ? st.split(/\s+/).map(Number).filter(function(x){ return x > 0; }) : null;
+    msg('写入中…');
+    const r = await (await fetch('/api/supply_save', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id: id, value: val || null, states: states})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await loadSup(); }
+  }
+
+  function bind(){
+    const b = document.getElementById('supNewBtn');
+    if(b && !b.dataset.bound){ b.dataset.bound = '1'; b.onclick = saveSup; }
+    const rf = document.getElementById('supRefresh');
+    if(rf && !rf.dataset.bound2){ rf.dataset.bound2 = '1'; rf.addEventListener('click', loadSup); }
+  }
+  window.mapBindSupply = bind;
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);
 })();
