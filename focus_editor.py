@@ -6423,6 +6423,160 @@ def supply_areas(root=None):
             "msg": "共 %d 个补给区" % len(items)}
 
 
+def bmp_write_rect_8(path, x0, y0, w, h, values):
+    """8 位索引图（terrain.bmp 这类）的矩形写入，每像素 1 字节。
+
+    bmp_write_rect 只处理 24 位；索引图必须单独写，否则会把 P 模式 bmp 改成 RGB，
+    HOI4 就读不出来了。"""
+    info = bmp_info(path)
+    if not info or info.get("bpp") != 8:
+        return False
+    bpp_bytes = info.get("bytes_pp") or 1
+    if bpp_bytes != 1:
+        return False
+    row_bytes = info["row"]
+    W, H = info["w"], info["h"]
+    if x0 < 0 or y0 < 0 or x0 + w > W or y0 + h > H:
+        return False
+    with open(path, "r+b") as f:
+        for r in range(h):
+            y = y0 + r
+            fy = y if info.get("top_down") else (H - 1 - y)
+            off = info["offset"] + fy * row_bytes + x0
+            f.seek(off)
+            f.write(bytes(values[r * w:(r + 1) * w]))
+    return True
+
+
+def _terrain_type_to_index(root):
+    """类型名 → terrain.bmp 里的索引（同一类型有多个索引时取第一个）"""
+    idx2type, _tex = _terrain_tex_map(root)
+    out = {}
+    for i in sorted(idx2type):
+        t = idx2type[i]
+        if t not in out:
+            out[t] = i
+    return out, idx2type
+
+
+def terrain_types(root=None):
+    """列出可用的地形类型（按 definition.csv 里实际出现的 + terrain.txt 定义的）"""
+    root = _map_pick(root)
+    t2i, idx2type = _terrain_type_to_index(root)
+    # 统计每个类型有多少省
+    cnt = {}
+    csvp, _ = _layers_find("map/definition.csv", mod_layers(root))
+    if csvp:
+        try:
+            with io.open(csvp, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    p = line.strip().split(";")
+                    if len(p) >= 8 and p[0].isdigit():
+                        cnt[p[6]] = cnt.get(p[6], 0) + 1
+        except Exception:
+            pass
+    items = []
+    for t in sorted(set(list(t2i.keys()) + list(cnt.keys()))):
+        items.append({"type": t, "index": t2i.get(t), "count": cnt.get(t, 0),
+                      "writable": t2i.get(t) is not None})
+    return {"ok": True, "items": items, "count": len(items),
+            "msg": "共 %d 种地形类型" % len(items)}
+
+
+def prov_terrain_set(pid, terrain, root=None):
+    """把某个省的地形改成指定类型。
+
+    同时做两件事：
+      1. definition.csv 第 7 列（地形名）
+      2. terrain.bmp 里该省所有像素的索引改成该类型对应的索引
+    只改 definition.csv 不改 bmp 的话，游戏读的是 bmp，改了等于没改。
+    """
+    pid = int(pid or 0)
+    terrain = (terrain or "").strip()
+    if pid <= 0 or not terrain:
+        return {"ok": False, "msg": "参数不完整"}
+    root = _map_pick(root)
+    layers = mod_layers(root)
+    csvp, csvbase = _layers_find("map/definition.csv", layers)
+    tbmp, tbase = _layers_find("map/terrain.bmp", layers)
+    if not csvp:
+        return {"ok": False, "msg": "找不到 definition.csv"}
+    if not tbmp:
+        return {"ok": False, "msg": "找不到 terrain.bmp"}
+    # terrain.bmp 与 provinces.bmp 必须同源，否则改 bmp 没有意义（会画出错误的地形）
+    pbmp, pbase = _layers_find("map/provinces.bmp", layers)
+    if os.path.abspath(tbase or "") != os.path.abspath(pbase or ""):
+        return {"ok": False,
+                "msg": "terrain.bmp 与 provinces.bmp 不同源（mod 换了地图没换地形图），改地形会错位"}
+
+    t2i, idx2type = _terrain_type_to_index(root)
+    if terrain not in t2i:
+        return {"ok": False, "msg": "terrain.txt 里没有类型 %s（可选：%s）" % (
+            terrain, "、".join(sorted(t2i.keys())[:8]))}
+    new_idx = t2i[terrain]
+
+    # 1) 改 definition.csv
+    raw = io.open(csvp, encoding="utf-8", errors="replace").read()
+    lines = raw.splitlines(True)
+    old_type = None
+    hit = False
+    for i, ln in enumerate(lines):
+        p = ln.rstrip("\r\n").split(";")
+        if len(p) >= 8 and p[0].isdigit() and int(p[0]) == pid:
+            old_type = p[6]
+            if old_type == terrain:
+                return {"ok": True, "changed": False,
+                        "msg": "省 %d 已经是 %s，无需改动" % (pid, terrain)}
+            p[6] = terrain
+            tail = chr(10) if ln.endswith(chr(10)) else ""
+            lines[i] = ";".join(p) + tail
+            hit = True
+            break
+    if not hit:
+        return {"ok": False, "msg": "definition.csv 里没有省 %d" % pid}
+
+    # 2) 改 terrain.bmp 里该省的像素
+    ids, w, h = _refine_load_ids(root)
+    if not ids:
+        return {"ok": False, "msg": "读不到省号数组"}
+    px = [i for i in range(len(ids)) if ids[i] == pid]
+    if not px:
+        return {"ok": False, "msg": "省 %d 在地图上没有像素" % pid}
+    xs = [p % w for p in px]
+    ys = [p // w for p in px]
+    bx, by = min(xs), min(ys)
+    bw, bh = max(xs) - bx + 1, max(ys) - by + 1
+    # 读原索引（用 Pillow 读整块更稳）
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    with Image.open(tbmp) as im:
+        if im.size != (w, h):
+            return {"ok": False, "msg": "terrain.bmp 尺寸与地图不符"}
+        crop = im.crop((bx, by, bx + bw, by + bh))
+        buf = list(crop.tobytes())
+    for p in px:
+        o = (p // w - by) * bw + (p % w - bx)
+        if 0 <= o < len(buf):
+            buf[o] = new_idx
+
+    snapshot(csvp)
+    snapshot(tbmp)
+    io.open(csvp, "wb").write(b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
+    if not bmp_write_rect_8(tbmp, bx, by, bw, bh, buf):
+        return {"ok": False, "msg": "terrain.bmp 写入失败（不是 8 位索引图）"}
+
+    # 地形变了，缓存与图层都要失效
+    try:
+        _REFINE_IDS_CACHE.pop("cur", None)
+    except Exception:
+        pass
+    return {"ok": True, "changed": True, "pid": pid,
+            "from": old_type, "to": terrain, "index": new_idx,
+            "pixels": len(px), "rect": [bx, by, bw, bh],
+            "msg": "省 %d 地形 %s → %s（%d 像素，索引 %d），需重建图层" % (
+                pid, old_type, terrain, len(px), new_idx)}
+
+
 def _terrain_colors(root):
     """从 common/terrain/*.txt 读各地形类别的游戏内配色 {name: (r,g,b)}。
     mod 定义了同名类别就覆盖原版；读不到就返回空字典。"""
@@ -8764,6 +8918,8 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/log":
             _q = parse_qs(urlparse(self.path).query)
             self._send(read_error_log((_q.get("path", [""])[0] or None)))
+        elif path_only == "/api/terrain_types":
+            self._send(terrain_types(_map_pick(None)))
         elif path_only == "/api/supply_areas":
             self._send(supply_areas(_map_pick(None)))
         elif path_only == "/api/railways":
@@ -9086,6 +9242,9 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 ok, msg = load_mod_root(ds[0])
                 self._send({"ok": ok, "msg": msg})
+        elif self.path == "/api/terrain_set":
+            self._send(prov_terrain_set(body.get("pid"), body.get("terrain"),
+                                        body.get("root")))
         elif self.path == "/api/railway_edit":
             self._send(railway_edit(body.get("index"), body.get("level"),
                                     body.get("provs"), body.get("root")))

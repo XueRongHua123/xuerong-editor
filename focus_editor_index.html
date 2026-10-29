@@ -1355,6 +1355,13 @@
           <div class="mp-row"><span class="mp-k">州</span><b class="mp-v" id="msState">—</b></div>
           <div class="mp-row"><span class="mp-k">战略区</span><b class="mp-v" id="msRegion">—</b></div>
           <div class="mp-row"><span class="mp-k">像素</span><b class="mp-v dim" id="msPx">—</b></div>
+          <div class="mp-row"><span class="mp-k">地形</span><b class="mp-v" id="msTerrain">—</b></div>
+          <h4>改地形</h4>
+          <div class="mp-acts">
+            <select id="msTerrainSel" style="height:28px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:6px"></select>
+            <button class="btn" id="msTerrainApply">应用</button>
+          </div>
+          <div class="mp-k" id="msTerrainMsg" style="min-height:16px;line-height:1.5"></div>
           <h4>操作</h4>
           <div class="mp-acts">
             <input id="msTarget" placeholder="目标州号" style="height:28px">
@@ -7122,6 +7129,89 @@ function makePannable(svg, body){
   else document.addEventListener('DOMContentLoaded', bind);
 })();
 
+// v1.12.0 地形编辑
+(function(){
+  let TYPES = null, curPid = 0;
+
+  async function loadTypes(){
+    if(TYPES) return TYPES;
+    try{
+      const r = await (await fetch('/api/terrain_types')).json();
+      TYPES = (r.items || []).filter(function(x){ return x.writable; });
+    }catch(e){ TYPES = []; }
+    const sel = document.getElementById('msTerrainSel');
+    if(sel){
+      sel.innerHTML = TYPES.map(function(x){
+        return '<option value="' + x.type + '">' + x.type +
+               (x.count ? ' (' + x.count + ')' : '') + '</option>';
+      }).join('');
+    }
+    return TYPES;
+  }
+
+  function tmsg(t, bad){
+    const el = document.getElementById('msTerrainMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  // 选中省变化时同步显示
+  const origShow = window.mapShowOps;
+  if(typeof origShow === 'function'){
+    window.mapShowOps = function(pid, sid){
+      const r = origShow.apply(this, arguments);
+      curPid = pid;
+      loadTypes().then(function(){
+        const rec = (MAP.idx && MAP.idx[String(pid)]) || {};
+        const el = document.getElementById('msTerrain');
+        if(el) el.textContent = rec.terrain || '未知';
+        const sel = document.getElementById('msTerrainSel');
+        if(sel && rec.terrain){
+          for(const op of sel.options){ if(op.value === rec.terrain){ sel.value = rec.terrain; break; } }
+        }
+        tmsg('');
+      });
+      return r;
+    };
+  }
+
+  async function apply(){
+    const sel = document.getElementById('msTerrainSel');
+    if(!sel || !curPid){ tmsg('先在地图上选一个省', true); return; }
+    const want = sel.value;
+    tmsg('写入中…');
+    const r = await (await fetch('/api/terrain_set', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pid: curPid, terrain: want})})).json();
+    tmsg(r.msg || (r.ok ? '已应用' : '失败'), !r.ok);
+    if(r.ok){
+      status(r.msg);
+      const el = document.getElementById('msTerrain');
+      if(el) el.textContent = want;
+      if(MAP.idx && MAP.idx[String(curPid)]) MAP.idx[String(curPid)].terrain = want;
+      // 地形图变了，自动重建地形层（否则地图上还是旧颜色）
+      tmsg(r.msg + '　正在重建地形图层…');
+      try{
+        const br = await (await fetch('/api/map_build', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({force:true})})).json();
+        tmsg(r.msg + (br.ok ? '　图层已重建' : '　图层重建失败'), !br.ok);
+        if(br.ok && window.mapReloadLayers) window.mapReloadLayers();
+      }catch(e){ tmsg(r.msg + '　图层重建失败：' + e.message, true); }
+    }
+  }
+
+  function bind(){
+    const b = document.getElementById('msTerrainApply');
+    if(!b || b.dataset.bound) return;
+    b.dataset.bound = '1';
+    b.onclick = apply;
+    loadTypes();
+  }
+  window.mapBindTerrain = bind;
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -7366,6 +7456,15 @@ async function mapLoadMeta(root){
     mapReadyHint();
   }catch(e){ metaEl.textContent = '读取失败：' + e.message; }
 }
+
+// 图层文件重建后强制重载（src 相同浏览器会用缓存，必须先清空）
+window.mapReloadLayers = function(){
+  ['mapBase','mapPolit','mapRegion','mapTerrain','mapContinent','mapProv'].forEach(function(id){
+    const el = document.getElementById(id);
+    if(el) el.setAttribute('src', '');
+  });
+  if(typeof mapLoadAssets === 'function') mapLoadAssets();
+};
 
 async function mapLoadAssets(){
   const set = (id, name, opacity)=>{
