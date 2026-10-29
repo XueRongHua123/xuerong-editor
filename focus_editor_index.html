@@ -7023,7 +7023,17 @@ function makePannable(svg, body){
         + '<button class="btn" id="stProvAdd">并入此州</button>'
         + '<button class="btn" id="stProvDel">移出此州</button>'
         + '</div>'
-        + '<div class="mp-k" id="stProvMsg" style="min-height:16px"></div>';
+        + '<div class="mp-k" id="stProvMsg" style="min-height:16px"></div>'
+        + '<div class="mp-k" style="margin-top:10px">拆分这个州</div>'
+        + '<div class="mp-acts">'
+        + '<span class="mp-k">份数</span>'
+        + '<select id="stRefineK" style="height:26px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:5px">'
+        + [2,3,4,5,6].map(function(n){ return '<option value="' + n + '"' + (n===3?' selected':'') + '>' + n + '</option>'; }).join('')
+        + '</select>'
+        + '<button class="btn" id="stRefinePreview">预览</button>'
+        + '<button class="btn" id="stRefineApply">应用</button>'
+        + '</div>'
+        + '<div class="mp-k" id="stRefineMsg" style="min-height:16px;line-height:1.6"></div>';
     } else if(unit === 'country'){
       const c = countryOf(pid);
       if(!c){ return { unit: 'country', empty: true, html: '<div class="mp-k">这块地没有归属国</div>' }; }
@@ -7991,6 +8001,58 @@ function makePannable(svg, body){
     window.mapShowOps = function(){
       const r = origShow.apply(this, arguments);
       setTimeout(bindStateUI, 120);
+      return r;
+    };
+  }
+})();
+
+// v1.18.0 州细化
+(function(){
+  function rmsg(t, bad){
+    const el = document.getElementById('stRefineMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  async function preview(){
+    const sid = window.__curStateId;
+    if(!sid){ rmsg('先选一个州', true); return; }
+    const k = Number((document.getElementById('stRefineK') || {}).value || 3);
+    rmsg('计算中…');
+    const r = await (await fetch('/api/state_refine_preview?sid=' + sid + '&k=' + k)).json();
+    if(!r.ok){ rmsg(r.msg || '失败', true); return; }
+    const lines = [r.msg];
+    (r.warnings || []).forEach(function(w){ lines.push('⚠ ' + w); });
+    (r.parts || []).forEach(function(p){
+      lines.push('组 ' + (p.i + 1) + '：' + p.count + ' 省　' + p.provs.slice(0, 6).join(',') + (p.count > 6 ? '…' : ''));
+    });
+    rmsg(lines.join(String.fromCharCode(10)));
+  }
+
+  async function apply(){
+    const sid = window.__curStateId;
+    if(!sid){ rmsg('先选一个州', true); return; }
+    const k = Number((document.getElementById('stRefineK') || {}).value || 3);
+    if(!confirm('把州 ' + sid + ' 拆成 ' + k + ' 份？第 1 组留在原州，其余各建新州（有备份）。')) return;
+    rmsg('拆分中…');
+    const r = await (await fetch('/api/state_refine', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({sid: sid, k: k})})).json();
+    rmsg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); }
+  }
+
+  // 绑到州视图的渲染流程
+  const orig = window.mapShowOps;
+  if(typeof orig === 'function'){
+    window.mapShowOps = function(){
+      const r = orig.apply(this, arguments);
+      setTimeout(function(){
+        if((window.MAP_PICK_UNIT || 'prov') !== 'state') return;
+        const b1 = document.getElementById('stRefinePreview');
+        if(b1 && !b1.dataset.bound){ b1.dataset.bound = '1'; b1.onclick = preview; }
+        const b2 = document.getElementById('stRefineApply');
+        if(b2 && !b2.dataset.bound){ b2.dataset.bound = '1'; b2.onclick = apply; }
+      }, 160);
       return r;
     };
   }

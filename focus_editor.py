@@ -7394,6 +7394,153 @@ def equipment_list(root=None, query=None):
                 len(items), ("（含 %s）" % query) if q else "")}
 
 
+def _state_prov_list(sid):
+    """某个州的省列表"""
+    s = STATES.get(int(sid)) if isinstance(STATES, dict) else None
+    if not s:
+        for v in (STATES.values() if isinstance(STATES, dict) else []):
+            if int(v.get("id") or 0) == int(sid):
+                s = v
+                break
+    if not s:
+        return []
+    return [int(x) for x in (s.get("provinces") or [])]
+
+
+def state_refine_preview(sid, k=2, root=None):
+    """预览：把州 sid 的省分成 k 组。
+
+    用的是和省份细化同一套算法 _refine_grow_units：
+    单元 = 省，邻居 = 省邻接图，坐标 = 省质心。
+    """
+    root = _map_pick(root)
+    try:
+        sid = int(sid)
+        k = max(2, min(8, int(k or 2)))
+    except Exception:
+        return {"ok": False, "msg": "参数不合法"}
+    provs = _state_prov_list(sid)
+    if len(provs) < k:
+        return {"ok": False,
+                "msg": "州 %d 只有 %d 个省，拆不成 %d 份" % (sid, len(provs), k)}
+
+    allnb = _all_prov_neighbors(root)
+    pset = set(provs)
+    nb = {p: [x for x in (allnb.get(p) or []) if x in pset] for p in provs}
+
+    # 质心：从省号数组现算（前端才有 centers.json，后端用像素均值）
+    ids, w, h = _refine_load_ids(root)
+    sums = {}
+    if ids:
+        for i, pid in enumerate(ids):
+            if pid in pset:
+                acc = sums.get(pid)
+                x, y = i % w, i // w
+                if acc is None:
+                    sums[pid] = [x, y, 1]
+                else:
+                    acc[0] += x
+                    acc[1] += y
+                    acc[2] += 1
+    centers = {}
+    for p in provs:
+        a = sums.get(p)
+        if a and a[2]:
+            centers[p] = (a[0] / a[2], a[1] / a[2])
+        else:
+            centers[p] = (0.0, 0.0)
+
+    groups = _refine_grow_units(provs, nb, k, centers)
+    parts = []
+    for gi in sorted(groups):
+        mem = sorted(groups[gi])
+        parts.append({"i": gi, "count": len(mem), "provs": mem})
+
+    # 警告
+    warn = []
+    s = STATES.get(sid) or {}
+    owner = s.get("owner") or s.get("owner_tag") or ""
+    if owner:
+        warn.append("新州会继承归属国 %s 与 cores" % owner)
+    vps = s.get("victory_points") or []
+    if vps:
+        warn.append("原州有 %d 个胜利点，拆分后只留在第 1 组" % len(vps))
+    if s.get("category"):
+        warn.append("新州类别沿用 %s，人力沿用原值（不会按面积重算）" % s.get("category"))
+
+    return {"ok": True, "sid": sid, "k": len(parts), "total": len(provs),
+            "parts": parts, "warnings": warn,
+            "msg": "州 %d 的 %d 个省拆成 %d 份：%s" % (
+                sid, len(provs), len(parts),
+                " / ".join(str(p["count"]) for p in parts))}
+
+
+def _state_fields_from(sid):
+    """从原州提取要继承的字段"""
+    s = STATES.get(sid) or {}
+    return {
+        "owner": s.get("owner") or s.get("owner_tag") or "",
+        "cores": list(s.get("cores") or s.get("states_core") or []),
+        "category": s.get("category") or "rural",
+        "manpower": str(s.get("manpower") or ""),
+    }
+
+
+def state_refine_apply(sid, k=2, root=None):
+    """应用：第 1 组留在原州，其余各组建成新州（继承归属国/核心/类别/人力）。"""
+    pv = state_refine_preview(sid, k, root)
+    if not pv.get("ok"):
+        return pv
+    root = _map_pick(root)
+    sid = pv["sid"]
+    parts = pv["parts"]
+    base = _state_fields_from(sid)
+
+    # 1) 原州只留第一组
+    first = parts[0]["provs"]
+    _r, _rel, fpath = _state_file_for(sid)
+    if not fpath:
+        return {"ok": False, "msg": "找不到州 %d 的文件" % sid}
+    if is_under_game(_r or ""):
+        return {"ok": False, "msg": "州 %d 来自原版，只读" % sid}
+    try:
+        text, has_bom = _read_bom_text(fpath)
+        loc = _state_locate(text)
+        b, e = loc
+        body = text[b + 1:e - 1]
+        new_body = _set_state_provinces(body, first)
+        snapshot(fpath)
+        _write_bom_text(fpath, text[:b + 1] + new_body + text[e - 1:], has_bom)
+    except Exception as ex:
+        return {"ok": False, "msg": "改原州失败：%s" % ex}
+
+    # 2) 其余组各建一个新州
+    created = []
+    failed = []
+    for p in parts[1:]:
+        r = state_create(p["provs"], root, None, base["category"],
+                         int(base["manpower"]) if base["manpower"].isdigit() else 100000)
+        if not r.get("ok"):
+            failed.append({"provs": p["provs"][:3], "msg": r.get("msg")})
+            continue
+        nid = r.get("id") or r.get("sid")
+        created.append({"id": nid, "count": p["count"]})
+        # 继承字段
+        if nid and base["owner"]:
+            try:
+                state_save(nid, {"owner": base["owner"], "cores": base["cores"]})
+            except Exception:
+                pass
+    reload_data()
+    msg = "州 %d 拆成 %d 份：原州留 %d 省" % (sid, len(parts), len(first))
+    if created:
+        msg += "，新建 " + "、".join("%s(%d省)" % (c["id"], c["count"]) for c in created)
+    if failed:
+        msg += "；%d 份失败：%s" % (len(failed), failed[0].get("msg"))
+    return {"ok": True, "sid": sid, "kept": first, "created": created,
+            "failed": failed, "parts": len(parts), "msg": msg}
+
+
 def _terrain_colors(root):
     """从 common/terrain/*.txt 读各地形类别的游戏内配色 {name: (r,g,b)}。
     mod 定义了同名类别就覆盖原版；读不到就返回空字典。"""
@@ -9754,6 +9901,11 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/log":
             _q = parse_qs(urlparse(self.path).query)
             self._send(read_error_log((_q.get("path", [""])[0] or None)))
+        elif path_only == "/api/state_refine_preview":
+            _q = parse_qs(urlparse(self.path).query)
+            self._send(state_refine_preview(_q.get("sid", ["0"])[0],
+                                            _q.get("k", ["2"])[0],
+                                            _q.get("root", [None])[0]))
         elif path_only == "/api/equipment_list":
             _q = parse_qs(urlparse(self.path).query)
             self._send(equipment_list(_map_pick(None), _q.get("q", [""])[0]))
@@ -10093,6 +10245,9 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 ok, msg = load_mod_root(ds[0])
                 self._send({"ok": ok, "msg": msg})
+        elif self.path == "/api/state_refine":
+            self._send(state_refine_apply(body.get("sid"), body.get("k"),
+                                          body.get("root")))
         elif self.path == "/api/equipment_edit":
             self._send(equipment_edit(body.get("id"), body.get("props"),
                                       body.get("root")))
