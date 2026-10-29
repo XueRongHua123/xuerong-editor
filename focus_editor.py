@@ -2283,7 +2283,7 @@ def scripted_payload():
 
 # v0.71 地图图层构建（Pillow，无需 numpy）
 MAP_CACHE_DIR = os.path.join(WORK, "cache", "map")
-MAP_ASSETS = ("base.png", "province.png", "edges.png", "state.png", "political.png", "region.png", "terrain.png", "continent.png", "prov_id.png", "rivers.png",
+MAP_ASSETS = ("base.png", "province.png", "edges.png", "state.png", "political.png", "political_strict.png", "region.png", "terrain.png", "continent.png", "prov_id.png", "rivers.png",
               "prov_index.json", "centers.json", "regions.json", "meta.json")
 
 
@@ -4426,12 +4426,15 @@ def map_build(force=False, root=None):
             except Exception:
                 pass
     tag_color = {}
+    tag_color_real = {}
     for tag, c in COUNTRIES.items():
         col = c.get("color") or []
         if len(col) >= 3:
-            tag_color[tag] = bytes((max(0, min(255, int(col[0] * 255))),
-                                    max(0, min(255, int(col[1] * 255))),
-                                    max(0, min(255, int(col[2] * 255)))))
+            _c = bytes((max(0, min(255, int(col[0] * 255))),
+                        max(0, min(255, int(col[1] * 255))),
+                        max(0, min(255, int(col[2] * 255)))))
+            tag_color[tag] = _c
+            tag_color_real[tag] = _c
         else:
             tag_color[tag] = bytes((132, 132, 132))
     neutral = bytes((46, 50, 46))
@@ -4628,6 +4631,21 @@ def map_build(force=False, root=None):
     _edge_img.putalpha(_edge_img.convert("L"))
     _edge_img.save(os.path.join(dirp, "edges.png"))
     Image.frombytes("RGB", (w, h), bytes(polbuf)).save(os.path.join(dirp, "political.png"))
+    # 严格版：国家表里查不到的 tag 不参与着色，落到无主色（还原游戏里的真实政治图）
+    try:
+        stbuf = bytearray(polbuf)
+        for i in range(n):
+            pid = ids[i]
+            ow = prov2owner.get(pid, "")
+            if not ow or ow in tag_color_real:
+                continue
+            o = i * 3
+            ptype = ptypes.get(pid, "")
+            stbuf[o:o + 3] = oceanc if ptype in ("sea", "ocean", "lake") else neutral
+        Image.frombytes("RGB", (w, h), bytes(stbuf)).save(
+            os.path.join(dirp, "political_strict.png"))
+    except Exception as _e:
+        print("  严格版政治图跳过:", _e)
     Image.frombytes("RGB", (w, h), bytes(regbuf)).save(os.path.join(dirp, "region.png"))
     _terr_img = _render_terrain(root, w, h, prov2terrain)
     if _terr_img is None:
@@ -7578,6 +7596,46 @@ def state_refine_apply(sid, k=2, root=None):
             "failed": failed, "parts": len(parts), "msg": msg}
 
 
+def orphan_tags(root=None):
+    """州里引用了 owner，但国家表（COUNTRIES）里不存在的 tag。
+
+    mod 换了国家表但没跟着改 history/states 时会出现这种不一致；
+    游戏里这些省会指向不存在的国家，政治图上没法给它们上色。"""
+    root = _map_pick(root)
+    by_tag = {}
+    for sid, st in (STATES.items() if isinstance(STATES, dict) else []):
+        ow = (st.get("owner") or "").strip().upper()
+        if not ow or ow in COUNTRIES:
+            continue
+        rec = by_tag.setdefault(ow, {"tag": ow, "states": 0, "provinces": 0,
+                                     "sample_states": [], "files": []})
+        rec["states"] += 1
+        rec["provinces"] += len(st.get("provinces") or [])
+        if len(rec["sample_states"]) < 6:
+            rec["sample_states"].append(st.get("id"))
+        f = st.get("file") or ""
+        if f and f not in rec["files"] and len(rec["files"]) < 4:
+            rec["files"].append(f)
+
+    items = sorted(by_tag.values(), key=lambda x: -x["provinces"])
+    used = set()
+    for st in (STATES.values() if isinstance(STATES, dict) else []):
+        ow = (st.get("owner") or "").strip().upper()
+        if ow:
+            used.add(ow)
+    unused = sorted(t for t in COUNTRIES if t not in used)
+    total_states = sum(x["states"] for x in items)
+    total_prov = sum(x["provinces"] for x in items)
+    msg = ("%d 个 tag 在国家表里不存在，涉及 %d 个州 / %d 个省" % (
+        len(items), total_states, total_prov)) if items else \
+        "没有孤儿 tag，州引用的 owner 都在国家表里"
+    return {"ok": True, "count": len(items),
+            "total_states": total_states, "total_provinces": total_prov,
+            "states_all": len(STATES), "countries_all": len(COUNTRIES),
+            "items": items, "unused_tags": unused[:40],
+            "unused_count": len(unused), "msg": msg}
+
+
 def _tag_fallback_color(tag):
     """没有定义颜色的 tag（mod 里州引用了不存在的国家）按 tag 哈希生成稳定色。
 
@@ -9984,6 +10042,8 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/log":
             _q = parse_qs(urlparse(self.path).query)
             self._send(read_error_log((_q.get("path", [""])[0] or None)))
+        elif path_only == "/api/orphan_tags":
+            self._send(orphan_tags(_map_pick(None)))
         elif path_only == "/api/state_refine_preview":
             _q = parse_qs(urlparse(self.path).query)
             self._send(state_refine_preview(_q.get("sid", ["0"])[0],

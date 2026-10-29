@@ -1347,11 +1347,18 @@
               <label><input type="checkbox" id="mapLBase" checked>底图<input type="range" class="lt-op" data-op="base" min="0" max="100" value="100" title="底图 不透明度"></label>
               <label><input type="checkbox" id="mapLRivers">河流<input type="range" class="lt-op" data-op="rivers" min="0" max="100" value="100" title="河流 不透明度"></label>
               <label>透明度<input type="range" id="mapOpacity" min="20" max="100" value="85"></label>
+              <label title="只显示国家表里真实存在的 tag；孤儿 tag 不着色"><input type="checkbox" id="mapLStrict">政治严格模式</label>
             </div>
             </div>
             <div class="lt-group" id="mapLayersBox" style="margin-top:8px">
               <div class="lt-title">来源链</div>
               <div id="mapLayersList" style="font-size:11px;line-height:1.6;color:var(--t2)">（加载后显示）</div>
+            </div>
+            <div class="lt-group" style="margin-top:8px">
+              <div class="lt-title">诊断</div>
+              <div class="mp-acts"><button class="btn" id="orphanBtn" style="font-size:11px">孤儿 tag 检查</button></div>
+              <div class="mp-k" id="orphanStat" style="min-height:16px;line-height:1.5"></div>
+              <div id="orphanList" style="max-height:180px;overflow:auto;margin-top:4px"></div>
             </div>
             <button class="btn" id="mapClear" style="margin-top:4px;font-size:11px" title="删除已生成的图层缓存，源文件不动">清理地图缓存</button>
           </div>
@@ -8079,6 +8086,49 @@ function makePannable(svg, body){
   }
 })();
 
+// v1.19.0 孤儿 tag 诊断 + 严格模式
+(function(){
+  async function checkOrphans(){
+    const stat = document.getElementById('orphanStat');
+    const box = document.getElementById('orphanList');
+    if(stat) stat.textContent = '检查中…';
+    const r = await (await fetch('/api/orphan_tags')).json();
+    if(!r.ok){ if(stat) stat.textContent = r.msg || '失败'; return; }
+    if(stat){
+      stat.innerHTML = '<b>' + r.count + '</b> 个孤儿 tag　涉及 <b>' + r.total_states
+        + '</b>/' + r.states_all + ' 州　<b>' + r.total_provinces + '</b> 省<br>'
+        + '<span style="color:var(--t3)">国家表 ' + r.countries_all + ' 个，其中 '
+        + r.unused_count + ' 个没有任何州</span>';
+    }
+    if(!box) return;
+    if(!r.count){
+      box.innerHTML = '<div class="mp-k" style="color:var(--t3)">州引用的 owner 都在国家表里</div>';
+      return;
+    }
+    box.innerHTML = (r.items || []).map(function(it){
+      return '<div style="padding:3px 6px;border-bottom:1px solid var(--line);font-size:11.5px;'
+        + 'font-family:Consolas,monospace">'
+        + '<b style="color:var(--danger)">' + it.tag + '</b>　'
+        + it.states + ' 州 / ' + it.provinces + ' 省<br>'
+        + '<span style="color:var(--t3)">州 ' + (it.sample_states || []).join(',') + '</span>'
+        + '</div>';
+    }).join('');
+  }
+
+  function bind(){
+    const b = document.getElementById('orphanBtn');
+    if(b && !b.dataset.bound){ b.dataset.bound = '1'; b.onclick = checkOrphans; }
+    const st = document.getElementById('mapLStrict');
+    if(st && !st.dataset.bound){
+      st.dataset.bound = '1';
+      st.onchange = function(){ if(typeof mapApplyLayers === 'function') mapApplyLayers(); };
+    }
+  }
+  window.mapBindOrphan = bind;
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -8369,6 +8419,16 @@ async function mapLoadAssets(){
 }
 
 function mapApplyLayers(){
+  // v1.19.0 严格模式：换成只含真实国家的政治图
+  try{
+    const strict = document.getElementById('mapLStrict');
+    const polit = document.getElementById('mapPolit');
+    if(polit && strict){
+      const want = strict.checked ? 'political_strict.png' : 'political.png';
+      const url = mapAssetUrl(want);
+      if(polit.getAttribute('src') !== url) polit.setAttribute('src', url);
+    }
+  }catch(e){}
   const rv = document.getElementById('mapLRivers');
   const rvImg = document.getElementById('mapRivers');
   if(rvImg){
