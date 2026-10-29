@@ -1322,6 +1322,7 @@
                 <button class="lt-preset" data-preset="polit">政治</button>
                 <button class="lt-preset" data-preset="region">战略区</button>
                 <button class="lt-preset" data-preset="raw">原始</button>
+                <button class="lt-preset" data-preset="rail">铁路</button>
               </div>
             </div>
             <div class="lt-group"><div class="lt-title">数据</div>
@@ -6593,6 +6594,15 @@ function makePannable(svg, body){
       return (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
     };
 
+    // 缩得太小时不画省界：13264 个省在 18% 下每省只有几像素，边界会挤成一整片白网。
+    // 这时候只需要铁路/地块颜色，边界反而碍事。
+    if(k < 0.42 && !window.MAP_SHOW_RAILS) return;
+    if(k < 0.42 && window.MAP_SHOW_RAILS){
+      // 只画铁路，边界跳过
+      if(window.mapDrawRailsOn) window.mapDrawRailsOn(ctx);
+      return;
+    }
+
     // 先标出边界像素，再「连相邻的两个边界像素」成折线。
     // 只画孤立点的话，缩放越大点间距越大，看起来就是虚线。
     const isEdge = new Uint8Array(cw * ch);
@@ -6626,7 +6636,14 @@ function makePannable(svg, body){
       }
     }
     ctx.stroke();
+
+    // 铁路画在边界之后（同一个 canvas，同一次绘制）
+    if(window.MAP_SHOW_RAILS && window.mapDrawRailsOn){
+      window.mapDrawRailsOn(ctx);
+    }
   }
+
+  window.mapRedrawEdges = function(){ draw(); };
 
   // 拖动时先清掉（避免错位），停手后再重算
   window.mapDrawVectorEdges = function(immediate){
@@ -6662,6 +6679,8 @@ function makePannable(svg, body){
     polit:   { unit: 'country', on: ['polit'],   off: ['prov','terrain','state','region','continent','base'] },
     region:  { unit: 'region',  on: ['region'],  off: ['prov','polit','terrain','state','continent','base'] },
     raw:     { unit: 'prov',    on: ['base'],    off: ['prov','polit','terrain','state','region','continent'] },
+    rail:    { unit: 'prov',    on: ['terrain'], off: ['prov','polit','state','region','continent','base'],
+               rails: true },
   };
   const ID = { prov:'mapLProv', polit:'mapLPolit', terrain:'mapLTerrain', state:'mapLState',
                region:'mapLRegion', continent:'mapLContinent', base:'mapLBase' };
@@ -6685,6 +6704,8 @@ function makePannable(svg, body){
     const e = document.getElementById('mapLEdges');
     if(e && name !== 'raw') e.checked = false;
     window.MAP_PICK_UNIT = p.unit || 'prov';
+    window.MAP_SHOW_RAILS = !!p.rails;
+    if(window.mapDrawRails) window.mapDrawRails();
     if(typeof mapApplyLayers === 'function') mapApplyLayers();
     document.querySelectorAll('.lt-preset').forEach(b=>{
       b.classList.toggle('on', b.dataset.preset === name);
@@ -6889,6 +6910,66 @@ function makePannable(svg, body){
       };
     });
   };
+})();
+
+// v1.10.0 铁路可视化
+(function(){
+  let RAIL_DATA = null;
+
+  async function loadRails(){
+    if(RAIL_DATA) return RAIL_DATA;
+    const r = await (await fetch('/api/railways')).json();
+    RAIL_DATA = r.ok ? r : { items: [] };
+    window.RAIL_DATA_PRE = RAIL_DATA;
+    return RAIL_DATA;
+  }
+
+  // 铁路必须和矢量边界画在同一次里：两者共用 mapEdgeCanvas，
+  // 边界那一步会 clearRect，单独画会被擦掉。
+  window.mapDrawRailsOn = function(ctx){
+    if(!window.MAP_SHOW_RAILS || !RAIL_DATA || !MAP.centers) return;
+    const items = RAIL_DATA.items || [];
+    if(!items.length) return;
+    const k = MAP.k;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    items.forEach(function(it){
+      const baseW = (it.level || 1) * 0.7;
+      // 低缩放下线宽按缩放比例压细，避免全图糊成一片
+      const scaleW = k < 1 ? Math.max(0.5, baseW * k * 1.6) : baseW;
+      ctx.lineWidth = Math.max(0.5, Math.min(4, scaleW));
+      ctx.strokeStyle = (it.broken && it.broken.length)
+        ? 'rgba(230,90,90,.95)'
+        : 'rgba(240,206,120,.92)';
+      ctx.beginPath();
+      let started = false;
+      (it.provs || []).forEach(function(pid){
+        const c = MAP.centers[String(pid)];
+        if(!c){ started = false; return; }
+        const x = c[0] * k + MAP.x, y = c[1] * k + MAP.y;
+        if(!started){ ctx.moveTo(x, y); started = true; }
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    });
+    ctx.restore();
+  };
+
+  // 预加载后触发一次重画
+  window.mapDrawRails = async function(){
+    window.RAIL_DATA_PRE = await loadRails();
+    if(window.mapRedrawEdges) window.mapRedrawEdges();
+  };
+
+  // 视图变化时跟着重画（铁路跟着地图走）
+  const orig = window.mapApply;
+  if(typeof orig === 'function'){
+    window.mapApply = function(){
+      orig.apply(this, arguments);
+      if(window.MAP_SHOW_RAILS && window.mapDrawRails) window.mapDrawRails();
+    };
+  }
 })();
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */

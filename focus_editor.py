@@ -3985,6 +3985,66 @@ def map_merge_apply(src, dst, root=None):
 _NB_CACHE = {}
 
 
+_ALL_NB_CACHE = {}
+
+
+def _all_prov_neighbors(root):
+    """一次扫描算全图省的邻接关系（共用边即邻接）。
+
+    map_prov_neighbors 是按单个省算的、每次整幅扫描 5 秒；
+    铁路检查要考虑几千段，必须一次性建表。结果按 bmp mtime 缓存。"""
+    root = _map_pick(root)
+    layers = mod_layers(root)
+    bmp, _ = _layers_find("map/provinces.bmp", layers)
+    csvp, _ = _layers_find("map/definition.csv", layers)
+    if not bmp or not csvp:
+        return {}
+    key = (os.path.abspath(bmp), os.path.getmtime(bmp),
+           os.path.abspath(csvp), os.path.getmtime(csvp))
+    if key in _ALL_NB_CACHE:
+        return _ALL_NB_CACHE[key]
+
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    rgb2pid = {}
+    with io.open(csvp, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            p = line.strip().split(";")
+            if len(p) >= 8 and p[0].isdigit():
+                rgb2pid[(int(p[1]), int(p[2]), int(p[3]))] = int(p[0])
+    with Image.open(bmp) as im:
+        w, h = im.size
+        raw = im.convert("RGB").tobytes()
+    # RGB 直接比较比先转省号快
+    nb = {}
+    for y in range(h):
+        row = y * w * 3
+        nrow = row + w * 3
+        for x in range(w):
+            o = row + x * 3
+            a = raw[o:o + 3]
+            if x + 1 < w:
+                b = raw[o + 3:o + 6]
+                if a != b:
+                    pa = rgb2pid.get((a[0], a[1], a[2]), 0)
+                    pb = rgb2pid.get((b[0], b[1], b[2]), 0)
+                    if pa and pb:
+                        nb.setdefault(pa, set()).add(pb)
+                        nb.setdefault(pb, set()).add(pa)
+            if y + 1 < h:
+                b = raw[nrow + x * 3:nrow + x * 3 + 3]
+                if a != b:
+                    pa = rgb2pid.get((a[0], a[1], a[2]), 0)
+                    pb = rgb2pid.get((b[0], b[1], b[2]), 0)
+                    if pa and pb:
+                        nb.setdefault(pa, set()).add(pb)
+                        nb.setdefault(pb, set()).add(pa)
+    out = {k: v for k, v in nb.items()}
+    _ALL_NB_CACHE.clear()
+    _ALL_NB_CACHE[key] = out
+    return out
+
+
 def map_prov_neighbors(pid, root=None):
     """返回某省的相邻省（按共享边像素数排序）。整幅扫描约 5 秒，按 bmp mtime 缓存结果。"""
     root = _map_pick(root)
@@ -6050,6 +6110,150 @@ def event_edit(eid, title=None, desc=None, options=None, root=None,
             return {"ok": True, "id": eid, "file": os.path.relpath(p, root),
                     "locFile": _locfn, "changed": changed, "msg": _msg}
     return {"ok": False, "msg": "找不到事件 %s" % eid}
+
+
+def _railway_file(root):
+    """找 railways.txt（先 mod 后原版），返回 (path, base)"""
+    for base in reversed(mod_layers(root) or []):
+        if not base:
+            continue
+        p = os.path.join(base, "map", "railways.txt")
+        if os.path.exists(p):
+            return p, base
+    if GAME:
+        p = os.path.join(GAME, "map", "railways.txt")
+        if os.path.exists(p):
+            return p, GAME
+    return None, None
+
+
+def _railway_parse(path):
+    """解析 railways.txt。
+
+    行式：   <level> <count> p1 p2 p3 ...
+    块式：   railway = { level = N provinces = { p1 p2 ... } }
+    两种都收，返回 [{"level": N, "provs": [...], "raw_i": 行号}]"""
+    out = []
+    if not path or not os.path.exists(path):
+        return out
+    try:
+        raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    except Exception:
+        return out
+    text = strip_comments(raw)
+    # 块式
+    for m in re.finditer(r'(?m)^\s*railway\s*=\s*\{', text):
+        b = text.find("{", m.end() - 1)
+        e = brace_match(text, b)
+        if e <= b:
+            continue
+        body = text[b + 1:e - 1]
+        lv = re.search(r'level\s*=\s*(\d+)', body)
+        pr = re.search(r'provinces\s*=\s*\{([^}]*)\}', body)
+        if pr:
+            provs = [int(x) for x in re.findall(r'\d+', pr.group(1))]
+            if provs:
+                out.append({"level": int(lv.group(1)) if lv else 1,
+                            "provs": provs, "form": "block"})
+    # 行式
+    for ln in text.splitlines():
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        parts = s.split()
+        if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        try:
+            level = int(parts[0])
+            n = int(parts[1])
+        except Exception:
+            continue
+        provs = []
+        for tok in parts[2:2 + n]:
+            try:
+                provs.append(int(tok))
+            except Exception:
+                break
+        if len(provs) == n and provs:
+            out.append({"level": level, "provs": provs, "form": "line"})
+    return out
+
+
+def railways_list(root=None):
+    """铁路列表 + 每条的状态（断连 / 等级越界）"""
+    root = _map_pick(root)
+    path, base = _railway_file(root)
+    if not path:
+        return {"ok": False, "msg": "找不到 map/railways.txt"}
+    rails = _railway_parse(path)
+    # 一次算全图邻接，再逐条查表（逐段调 map_prov_neighbors 会把几千段算成几小时）
+    allnb = _all_prov_neighbors(root)
+    items = []
+    broken = 0
+    over = 0
+    for i2, r in enumerate(rails):
+        provs = r["provs"]
+        bad = []
+        for a, b in zip(provs, provs[1:]):
+            if b not in (allnb.get(a) or ()):
+                bad.append([a, b])
+        if bad:
+            broken += 1
+        if r["level"] > 5:
+            over += 1
+        items.append({"i": i2, "level": r["level"], "provs": provs,
+                      "len": len(provs), "broken": bad,
+                      "over": r["level"] > 5, "form": r["form"]})
+    return {"ok": True, "count": len(items), "broken": broken, "over": over,
+            "file": os.path.relpath(path, base) if base else path,
+            "fromMod": bool(root and base and os.path.abspath(base) == os.path.abspath(root)),
+            "items": items,
+            "msg": "共 %d 条铁路，%d 条断连，%d 条等级超 5" % (len(items), broken, over)}
+
+
+def railway_set_level(index, level, root=None):
+    """改某条铁路的等级（行式直接改第一个数字，块式改 level = N）"""
+    root = _map_pick(root)
+    path, base = _railway_file(root)
+    if not path:
+        return {"ok": False, "msg": "找不到 map/railways.txt"}
+    if os.path.abspath(base) == os.path.abspath(GAME or ""):
+        return {"ok": False, "msg": "railways.txt 来自原版，只读"}
+    try:
+        level = max(1, min(10, int(level)))
+        index = int(index)
+    except Exception:
+        return {"ok": False, "msg": "参数不合法"}
+    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    lines = raw.splitlines(True)
+    # 收集行式铁路的行号
+    line_rows = []
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        parts = s.split()
+        if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
+            try:
+                n = int(parts[1])
+                if len(parts[2:2 + n]) == n:
+                    line_rows.append(i)
+            except Exception:
+                pass
+    rails = _railway_parse(path)
+    if index < 0 or index >= len(rails):
+        return {"ok": False, "msg": "没有第 %d 条铁路" % index}
+    target = rails[index]
+    if target.get("form") == "line" and index < len(line_rows):
+        i = line_rows[index]
+        parts = lines[i].split(None, 2)
+        rest = parts[2] if len(parts) > 2 else ""
+        lines[i] = "%d %s %s" % (level, parts[1] if len(parts) > 1 else str(len(target["provs"])), rest)
+        if not lines[i].endswith(chr(10)):
+            lines[i] += chr(10)
+        snapshot(path)
+        io.open(path, "wb").write(b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
+        return {"ok": True, "index": index, "level": level,
+                "msg": "第 %d 条铁路等级改为 %d" % (index, level)}
+    return {"ok": False, "msg": "这条铁路是块式写法，暂不支持改等级"}
 
 
 def _terrain_colors(root):
@@ -8393,6 +8597,9 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/log":
             _q = parse_qs(urlparse(self.path).query)
             self._send(read_error_log((_q.get("path", [""])[0] or None)))
+        elif path_only == "/api/railways":
+            _q = parse_qs(urlparse(self.path).query)
+            self._send(railways_list(_q.get("root", [None])[0]))
         elif path_only == "/api/gfx_missing":
             _q = parse_qs(urlparse(self.path).query)
             self._send(gfx_missing(_q.get("root", [None])[0],
@@ -8710,6 +8917,9 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 ok, msg = load_mod_root(ds[0])
                 self._send({"ok": ok, "msg": msg})
+        elif self.path == "/api/railway_level":
+            self._send(railway_set_level(body.get("index"), body.get("level"),
+                                         body.get("root")))
         elif self.path == "/api/loc_generate":
             self._send(loc_generate(body.get("root"), body.get("keys"),
                                     body.get("lang") or "simp_chinese",
