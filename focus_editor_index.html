@@ -6938,6 +6938,7 @@ function makePannable(svg, body){
 // v1.9.3 按预设决定点选对象
 (function(){
   const UNIT_LABEL = { prov:'省', state:'州', country:'国家', region:'战略区' };
+  let editBlock = '';
 
   function cur() { return window.MAP_PICK_UNIT || 'prov'; }
 
@@ -7006,6 +7007,23 @@ function makePannable(svg, body){
       const vps = st.victory_points || [];
       if(vps.length) rows.push(['胜利点', vps.map(v=>v.province + '(' + v.points + ')').join(', ')]);
       if(st.category) rows.push(['类别', st.category]);
+      // v1.17.0 州视图直接编辑
+      window.__curStateId = st.id;
+      editBlock = ''
+        + '<div class="mp-k" style="margin-top:10px">改归属国</div>'
+        + '<div class="mp-acts">'
+        + '<input id="stOwner" placeholder="TAG" value="' + (st.owner || st.owner_tag || '') + '"'
+        + ' style="height:26px;width:80px;text-transform:uppercase">'
+        + '<button class="btn" id="stOwnerSave">保存</button>'
+        + '</div>'
+        + '<div class="mp-k" id="stOwnerMsg" style="min-height:16px"></div>'
+        + '<div class="mp-k" style="margin-top:8px">批量增减省</div>'
+        + '<div class="mp-k" id="stProvInfo" style="color:var(--t3)">（用地图框选省后操作）</div>'
+        + '<div class="mp-acts">'
+        + '<button class="btn" id="stProvAdd">并入此州</button>'
+        + '<button class="btn" id="stProvDel">移出此州</button>'
+        + '</div>'
+        + '<div class="mp-k" id="stProvMsg" style="min-height:16px"></div>';
     } else if(unit === 'country'){
       const c = countryOf(pid);
       if(!c){ return { unit: 'country', empty: true, html: '<div class="mp-k">这块地没有归属国</div>' }; }
@@ -7023,7 +7041,9 @@ function makePannable(svg, body){
     const html = '<div class="mp-k" style="margin-bottom:6px">当前视图按「' + (UNIT_LABEL[unit] || unit) + '」点选</div>'
       + '<div style="font-size:13px;font-weight:600;margin-bottom:8px">' + title + '</div>'
       + rows.map(([k, v]) => '<div class="mp-row"><label>' + k + '</label><span class="mp-v">' + v + '</span></div>').join('')
+      + (editBlock || '')
       + '<div class="mp-k" style="margin-top:8px">点地图上的其它位置可切换</div>';
+    editBlock = '';
     return { unit: unit, key: key, html: html };
   };
 
@@ -7900,6 +7920,80 @@ function makePannable(svg, body){
   window.mapBindEquip = bind;
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.17.0 州视图编辑：改归属国 + 批量增减省
+(function(){
+  function smsg(id, t, bad){
+    const el = document.getElementById(id);
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  function selPids(){
+    const s = Array.isArray(MAP.sel) ? MAP.sel : (MAP.sel ? [MAP.sel] : []);
+    return s.slice();
+  }
+
+  async function saveOwner(){
+    const el = document.getElementById('stOwner');
+    const sid = window.__curStateId;
+    if(!sid){ smsg('stOwnerMsg', '先选一个州', true); return; }
+    const tag = (el && el.value || '').trim().toUpperCase();
+    if(!tag){ smsg('stOwnerMsg', '填 TAG', true); return; }
+    smsg('stOwnerMsg', '写入中…');
+    const r = await (await fetch('/api/state_save', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id: sid, fields: {owner: tag}})})).json();
+    smsg('stOwnerMsg', r.msg || (r.ok ? '已保存' : '失败'), !r.ok);
+    if(r.ok){ status(r.msg); }
+  }
+
+  async function moveProvs(detach){
+    const sid = window.__curStateId;
+    if(!sid){ smsg('stProvMsg', '先选一个州', true); return; }
+    const pids = selPids();
+    if(!pids.length){ smsg('stProvMsg', '先在地图上框选省（拖框可多选）', true); return; }
+    smsg('stProvMsg', '写入中（' + pids.length + ' 个省）…');
+    let okN = 0; const fail = [];
+    for(const pid of pids){
+      try{
+        const r = await (await fetch('/api/state_province', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({pid: pid, target_sid: detach ? null : sid})})).json();
+        if(r.ok) okN++; else fail.push(pid);
+      }catch(e){ fail.push(pid); }
+    }
+    smsg('stProvMsg',
+      (detach ? '移出 ' : '并入 ') + okN + ' 个省' +
+      (fail.length ? '，失败 ' + fail.length + ' 个：' + fail.slice(0, 5).join(',') : ''),
+      fail.length > 0);
+    if(okN) status((detach ? '移出 ' : '并入 ') + okN + ' 个省');
+  }
+
+  function bindStateUI(){
+    if((window.MAP_PICK_UNIT || 'prov') !== 'state') return;
+    const b1 = document.getElementById('stOwnerSave');
+    if(b1 && !b1.dataset.bound){ b1.dataset.bound = '1'; b1.onclick = saveOwner; }
+    const b2 = document.getElementById('stProvAdd');
+    if(b2 && !b2.dataset.bound){ b2.dataset.bound = '1'; b2.onclick = function(){ moveProvs(false); }; }
+    const b3 = document.getElementById('stProvDel');
+    if(b3 && !b3.dataset.bound){ b3.dataset.bound = '1'; b3.onclick = function(){ moveProvs(true); }; }
+    const info = document.getElementById('stProvInfo');
+    if(info){
+      const n = selPids().length;
+      info.textContent = n ? ('已选 ' + n + ' 个省') : '（用地图框选省后操作）';
+    }
+  }
+
+  // 包一层 mapShowOps，渲染完成后绑按钮
+  const origShow = window.mapShowOps;
+  if(typeof origShow === 'function'){
+    window.mapShowOps = function(){
+      const r = origShow.apply(this, arguments);
+      setTimeout(bindStateUI, 120);
+      return r;
+    };
+  }
 })();
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */
