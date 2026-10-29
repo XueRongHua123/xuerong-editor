@@ -91,6 +91,24 @@ LANGS = ("zh", "en", "ja")
 LANG_NAMES = {"zh": "中文", "en": "English", "ja": "日本語"}
 
 # ---------------- HOI4 脚本工具 ----------------
+def _strip_keep_len(text):
+    """去注释但**保持字符长度不变**：注释内容替换成空格。
+
+    需要「在去注释文本里定位、再回到原文改写」的场景必须用它，
+    否则 strip_comments 截断注释会让偏移全错。"""
+    out = []
+    for line in text.splitlines(True):
+        buf, instr, hit = [], False, False
+        for c in line:
+            if c == '"':
+                instr = not instr
+            if c == '#' and not instr:
+                hit = True
+            buf.append(' ' if (hit and c not in '\r\n') else c)
+        out.append("".join(buf))
+    return "".join(out)
+
+
 def strip_comments(text):
     out = []
     for line in text.splitlines():
@@ -7225,16 +7243,25 @@ def _equip_locate(root, eid):
                 raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
             except Exception:
                 continue
-            text = strip_comments(raw)
+            # 必须用保长版本：下面算出的偏移要能直接切 raw
+            text = _strip_keep_len(raw)
             for _s, _e, body in find_blocks(text, "equipments"):
-                for k, v, b in top_items(body):
-                    if k != eid or not b:
+                # top_items 的第三项是「有没有 {} 块」的布尔值，不是偏移，
+                # 所以这里自己按 key 在 body 里定位 '{'，再换算到 text 坐标系。
+                for k, _v, has_body in top_items(body):
+                    if k != eid or not has_body:
                         continue
-                    # b 是 '{ ... }' 的起点，找配对的
-                    end = brace_match(text, b)
-                    if end <= b:
+                    blk = find_blocks(body, None) if False else None
+                    m = re.search(r'(?m)^[ \t]*' + re.escape(eid) + r'[ \t]*=[ \t]*\{', body)
+                    if not m:
                         continue
-                    return base, p, b, end, text[b + 1:end - 1]
+                    rel_b = m.end() - 1                       # body 内 '{' 的位置
+                    body_start = text.find("{", _s) + 1       # body 在 text 中的起点
+                    b_abs = body_start + rel_b
+                    e_abs = brace_match(text, b_abs)
+                    if e_abs <= b_abs:
+                        continue
+                    return base, p, b_abs, e_abs, text[b_abs + 1:e_abs - 1]
     return None, None, None, None, None
 
 
