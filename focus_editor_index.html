@@ -591,6 +591,9 @@
     border-color:var(--accent);color:var(--accent);font-weight:600}
   /* ---------- v1.14.0 河流层 ---------- */
   #mapRivers{position:absolute;left:0;top:0;pointer-events:none;z-index:3;display:none}
+  /* ---------- v1.18.2 空态卡片（避免撑满侧栏） ---------- */
+  .mp-empty-card{padding:10px 12px;border:1px solid var(--line);border-radius:8px;
+    background:var(--panel2);max-width:100%;box-sizing:border-box;word-break:break-word}
   /* ---------- v1.9.0 矢量省界 ---------- */
   #mapEdgeCanvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:4}
   /* ---------- v1.2.1 选中省份高亮 ---------- */
@@ -6996,7 +6999,16 @@ function makePannable(svg, body){
 
     if(unit === 'state'){
       const st = stateOf(pid);
-      if(!st){ return { unit: 'state', empty: true, html: '<div class="mp-k">这块地不属于任何州</div>' }; }
+      if(!st){
+        const rc = (MAP.idx && MAP.idx[String(pid)]) || {};
+        const typ = String(rc.type || rc.terrain || '').toLowerCase();
+        const isSea = typ === 'sea' || typ === 'ocean' || typ === 'lake';
+        return { unit: 'state', empty: true,
+                 html: '<div class="mp-empty-card">'
+                     + '<div class="mp-k">' + (isSea ? '这是海洋（不属于任何国家/州）' : '这块地不属于任何州')
+                     + '</div><div class="mp-k" style="color:var(--t3);margin-top:4px">省 ' + pid
+                     + '　点陆地上的省份查看详情</div></div>' };
+      }
       key = 'S' + st.id;
       title = '州 ' + st.id + (st.name && st.name !== ('STATE_' + st.id) ? '　' + st.name : '');
       // /api/states 的 provinces 字段有时是数量、有时是数组，两种都要认
@@ -7036,7 +7048,16 @@ function makePannable(svg, body){
         + '<div class="mp-k" id="stRefineMsg" style="min-height:16px;line-height:1.6"></div>';
     } else if(unit === 'country'){
       const c = countryOf(pid);
-      if(!c){ return { unit: 'country', empty: true, html: '<div class="mp-k">这块地没有归属国</div>' }; }
+      if(!c){
+        const rc = (MAP.idx && MAP.idx[String(pid)]) || {};
+        const typ = String(rc.type || rc.terrain || '').toLowerCase();
+        const isSea = typ === 'sea' || typ === 'ocean' || typ === 'lake';
+        return { unit: 'country', empty: true,
+                 html: '<div class="mp-empty-card">'
+                     + '<div class="mp-k">' + (isSea ? '这是海洋，没有归属国' : '这块地没有归属国')
+                     + '</div><div class="mp-k" style="color:var(--t3);margin-top:4px">省 ' + pid
+                     + '　点陆地省份查看国家</div></div>' };
+      }
       key = 'C' + c.tag;
       title = c.tag + (c.raw && c.raw.name ? '　' + c.raw.name : '');
       if(c.raw && c.raw.capital) rows.push(['首都', c.raw.capital]);

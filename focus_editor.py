@@ -4435,6 +4435,8 @@ def map_build(force=False, root=None):
         else:
             tag_color[tag] = bytes((132, 132, 132))
     neutral = bytes((46, 50, 46))
+    oceanc = bytes((26, 42, 74))          # 海色：比无主陆地明显的蓝
+    ptypes = _prov_type_map(root)
 
     # 3.6) 战略区
     prov2region, region_list = _strategic_regions(root)
@@ -4524,9 +4526,12 @@ def map_build(force=False, root=None):
         provbuf[o:o + 3] = c
         statebuf[o:o + 3] = sc
         ow = prov2owner.get(pid, "")
-        pcb = tag_color.get(ow) if ow else neutral
-        if pcb is None:
-            pcb = neutral
+        if ow:
+            pcb = tag_color.get(ow) or neutral
+        else:
+            # 没有归属国的省分两种：海洋给海色，无主陆地给中性灰
+            ptype = ptypes.get(pid, "")
+            pcb = oceanc if ptype in ("sea", "ocean", "lake") else neutral
         polbuf[o:o + 3] = pcb
         # 地形：按 definition.csv 的 terrain 名字取稳定色
         tname = prov2terrain.get(pid, "")
@@ -7566,6 +7571,32 @@ def state_refine_apply(sid, k=2, root=None):
         msg += "；%d 份失败：%s" % (len(failed), failed[0].get("msg"))
     return {"ok": True, "sid": sid, "kept": first, "created": created,
             "failed": failed, "parts": len(parts), "msg": msg}
+
+
+def _prov_type_map(root):
+    """省号 → definition.csv 第 5 列（land / sea / lake 等）。
+
+    政治图层要区分「海洋」和「无主陆地」：前者给海色，后者给中性灰，
+    否则大片海洋会被画成深色，看起来像地图缺了一块。"""
+    cache = getattr(_prov_type_map, "_cache", None)
+    layers = mod_layers(root or None)
+    csvp, _ = _layers_find("map/definition.csv", layers)
+    if not csvp:
+        return {}
+    key = (os.path.abspath(csvp), int(os.path.getmtime(csvp)))
+    if cache and cache[0] == key:
+        return cache[1]
+    out = {}
+    try:
+        with io.open(csvp, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                p = line.strip().split(";")
+                if len(p) >= 5 and p[0].isdigit():
+                    out[int(p[0])] = (p[4] or "").strip().lower()
+    except Exception:
+        pass
+    _prov_type_map._cache = (key, out)
+    return out
 
 
 def _terrain_colors(root):
