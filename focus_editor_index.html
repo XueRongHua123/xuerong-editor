@@ -1362,6 +1362,26 @@
             <button class="btn" id="msTerrainApply">应用</button>
           </div>
           <div class="mp-k" id="msTerrainMsg" style="min-height:16px;line-height:1.5"></div>
+          <h4>批量</h4>
+          <div class="mp-k" id="msBatchInfo">已选 1 个省</div>
+          <div class="mp-acts">
+            <button class="btn" id="msBatchApply">把上面选的地形应用到已选</button>
+          </div>
+          <div class="mp-k" style="margin-top:8px">按类型全改</div>
+          <div class="mp-acts">
+            <select id="msFromType" style="height:26px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:5px"></select>
+            <span class="mp-k">→</span>
+            <select id="msToType" style="height:26px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:5px"></select>
+            <button class="btn" id="msTypeApply">转换</button>
+          </div>
+          <div class="mp-k" id="msBatchMsg" style="min-height:16px;line-height:1.5"></div>
+          <h4>地形笔刷</h4>
+          <div class="mp-acts">
+            <button class="btn" id="msBrushToggle">开启笔刷</button>
+            <input type="range" id="msBrushSize" min="1" max="30" value="5" style="flex:1">
+            <span class="mp-k" id="msBrushSizeV">5</span>
+          </div>
+          <div class="mp-k">开启后在地图上按住左键拖动刷地形，抬手保存</div>
           <h4>操作</h4>
           <div class="mp-acts">
             <input id="msTarget" placeholder="目标州号" style="height:28px">
@@ -7210,6 +7230,193 @@ function makePannable(svg, body){
   window.mapBindTerrain = bind;
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.12.1 场地形批量 / 按类型 / 画笔
+(function(){
+  let BRUSH_ON = false, BRUSH_PTS = [], BRUSH_DOWN = false;
+
+  function bmsg(t, bad){
+    const el = document.getElementById('msBatchMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  async function fillTwoSel(retry){
+    const sel = document.getElementById('msTerrainSel');
+    if(!sel) return;
+    // 地形类型是异步拉的，可能比这里晚；没填满就再等一轮
+    if(sel.options.length === 0 && (retry || 0) < 20){
+      setTimeout(function(){ fillTwoSel((retry || 0) + 1); }, 300);
+      return;
+    }
+    ['msFromType','msToType'].forEach(function(id){
+      const el = document.getElementById(id);
+      if(!el || el.options.length) return;
+      el.innerHTML = Array.from(sel.options).map(function(o){
+        return '<option value="' + o.value + '">' + o.textContent + '</option>';
+      }).join('');
+    });
+  }
+
+  function selectedPids(){
+    const sel = Array.isArray(MAP.sel) ? MAP.sel : (MAP.sel ? [MAP.sel] : []);
+    if(sel.length) return sel.slice();
+    return [];
+  }
+
+  async function batchApply(){
+    const pids = selectedPids();
+    const sel = document.getElementById('msTerrainSel');
+    if(!pids.length){ bmsg('先在地图上选中省（拖框可多选）', true); return; }
+    if(!sel || !sel.value){ bmsg('先选一种地形', true); return; }
+    bmsg('写入中（' + pids.length + ' 个省）…');
+    const r = await (await fetch('/api/terrain_batch', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pids: pids, terrain: sel.value})})).json();
+    bmsg(r.msg || '', !r.ok);
+    if(r.ok){
+      status(r.msg);
+      pids.forEach(function(p){ if(MAP.idx && MAP.idx[String(p)]) MAP.idx[String(p)].terrain = sel.value; });
+      await rebuildMap();
+    }
+  }
+
+  async function typeApply(){
+    const from = document.getElementById('msFromType');
+    const to = document.getElementById('msToType');
+    if(!from || !to || !from.value || !to.value){ bmsg('选源类型和目标类型', true); return; }
+    if(from.value === to.value){ bmsg('源和目标相同', true); return; }
+    bmsg('转换中…');
+    const r = await (await fetch('/api/terrain_by_type', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({from: from.value, to: to.value})})).json();
+    bmsg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await rebuildMap(); }
+  }
+
+  async function rebuildMap(){
+    try{
+      const br = await (await fetch('/api/map_build', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({force:true})})).json();
+      if(br.ok && window.mapReloadLayers) window.mapReloadLayers();
+    }catch(e){}
+  }
+
+  async function flushBrush(){
+    if(!BRUSH_PTS.length) return;
+    const sel = document.getElementById('msTerrainSel');
+    const size = Number(document.getElementById('msBrushSize').value || 5);
+    const pts = BRUSH_PTS.slice();
+    BRUSH_PTS = [];
+    const r = await (await fetch('/api/terrain_paint', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({points: pts, terrain: sel ? sel.value : '', brush: size})})).json();
+    bmsg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await rebuildMap(); }
+  }
+
+  function bind(){
+    const b1 = document.getElementById('msBatchApply');
+    if(b1 && !b1.dataset.bound){ b1.dataset.bound='1'; b1.onclick = batchApply; }
+    const b2 = document.getElementById('msTypeApply');
+    if(b2 && !b2.dataset.bound){ b2.dataset.bound='1'; b2.onclick = typeApply; }
+    const b3 = document.getElementById('msBrushToggle');
+    if(b3 && !b3.dataset.bound){
+      b3.dataset.bound='1';
+      b3.onclick = function(){
+        BRUSH_ON = !BRUSH_ON;
+        b3.textContent = BRUSH_ON ? '关闭笔刷' : '开启笔刷';
+        b3.style.color = BRUSH_ON ? 'var(--accent)' : '';
+        status(BRUSH_ON ? '笔刷已开启：按住左键拖动刷地形，松手保存' : '笔刷已关闭');
+      };
+    }
+    const sr = document.getElementById('msBrushSize');
+    if(sr && !sr.dataset.bound){
+      sr.dataset.bound='1';
+      sr.oninput = function(){
+        const v = document.getElementById('msBrushSizeV');
+        if(v) v.textContent = sr.value;
+      };
+    }
+    fillTwoSel();
+  }
+  window.mapBindBatch = bind;
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+
+  // 选中省数变化时更新提示
+  const origSel = window.mapRenderSelection;
+  if(typeof origSel === 'function'){
+    window.mapRenderSelection = function(){
+      const r = origSel.apply(this, arguments);
+      const n = selectedPids().length;
+      const el = document.getElementById('msBatchInfo');
+      if(el) el.textContent = n ? ('已选 ' + n + ' 个省') : '未选中';
+      return r;
+    };
+  }
+
+  // 笔刷拦截地图拖动
+  window.mapBrushActive = function(){ return BRUSH_ON; };
+  window.mapBrushDown = function(x, y){
+    if(!BRUSH_ON) return false;
+    BRUSH_DOWN = true;
+    BRUSH_PTS.push([Math.round(x), Math.round(y)]);
+    return true;
+  };
+  window.mapBrushMove = function(x, y){
+    if(!BRUSH_ON || !BRUSH_DOWN) return false;
+    BRUSH_PTS.push([Math.round(x), Math.round(y)]);
+    return true;
+  };
+  window.mapBrushUp = function(){
+    if(!BRUSH_ON || !BRUSH_DOWN) return false;
+    BRUSH_DOWN = false;
+    flushBrush();
+    return true;
+  };
+})();
+
+// v1.12.1 地形笔刷的地图事件（和选择省互斥，笔刷开着就吃掉左键）
+(function(){
+  const BRUSH_EVENTS = true;
+  const wrap = document.getElementById('mapStageWrap');
+  if(!wrap) return;
+  let down = false;
+
+  wrap.addEventListener('pointerdown', e=>{
+    if(!window.mapBrushActive || !window.mapBrushActive()) return;
+    if(e.button !== 0) return;
+    if(typeof mapEventOverUI === 'function' && mapEventOverUI(e)) return;
+    const p = mapScreenToImage(e.clientX, e.clientY);
+    if(window.mapBrushDown && window.mapBrushDown(p.x, p.y)){
+      down = true;
+      wrap.classList.add('dragging');
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  }, true);
+
+  wrap.addEventListener('pointermove', e=>{
+    if(!down) return;
+    const now = Date.now();
+    if(!wrap._lastBrush || now - wrap._lastBrush < 35) return;
+    wrap._lastBrush = now;
+    const p = mapScreenToImage(e.clientX, e.clientY);
+    if(window.mapBrushMove) window.mapBrushMove(p.x, p.y);
+    e.stopPropagation();
+  }, true);
+
+  const up = function(e){
+    if(!down) return;
+    down = false;
+    wrap.classList.remove('dragging');
+    if(window.mapBrushUp) window.mapBrushUp();
+    e.stopPropagation();
+  };
+  wrap.addEventListener('pointerup', up, true);
+  window.addEventListener('pointerup', up, true);
 })();
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */
