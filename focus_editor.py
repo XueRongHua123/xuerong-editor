@@ -7208,6 +7208,192 @@ def adjacency_add(frm, to, adj_type="sea", through="", root=None):
             "msg": "已新增连接 %d ↔ %d（%s）" % (frm, to, adj_type or "sea")}
 
 
+def _equip_locate(root, eid):
+    """找某个装备定义所在的文件与字符区间。
+
+    装备都写在 equipments = { ... } 里，一个文件可以有多个 equipments 块。
+    返回 (base, path, block_start, block_end, block_body)"""
+    for base in reversed(mod_layers(root) or []):
+        if not base:
+            continue
+        d = os.path.join(base, "common", "units", "equipment")
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+            p = os.path.join(d, fn)
+            try:
+                raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            except Exception:
+                continue
+            text = strip_comments(raw)
+            for _s, _e, body in find_blocks(text, "equipments"):
+                for k, v, b in top_items(body):
+                    if k != eid or not b:
+                        continue
+                    # b 是 '{ ... }' 的起点，找配对的
+                    end = brace_match(text, b)
+                    if end <= b:
+                        continue
+                    return base, p, b, end, text[b + 1:end - 1]
+    return None, None, None, None, None
+
+
+def equipment_detail(eid, root=None):
+    """某个装备的完整信息：属性、模块槽、来源文件、是否可编辑"""
+    root = _map_pick(root)
+    base, path, b, e, body = _equip_locate(root, eid)
+    if not path:
+        return {"ok": False, "msg": "找不到装备 %s" % eid}
+    readonly = os.path.abspath(base) == os.path.abspath(GAME or "")
+
+    # 标量属性（跳过块）
+    scalars = {}
+    for m in re.finditer(r'(?m)^[ \t]*([a-z_0-9]+)[ \t]*=[ \t]*([^\s{#]+)', body):
+        k, v = m.group(1), m.group(2)
+        scalars[k] = v
+
+    # 模块槽
+    slots = []
+    for sm in re.finditer(r'module_slots\s*=\s*\{', body):
+        sb = body.find("{", sm.end() - 1)
+        se = brace_match(body, sb)
+        if se <= sb:
+            continue
+        for sk, sv, sbb in top_items(body[sb + 1:se - 1]):
+            if not sbb:
+                continue
+            req = re.search(r'(?m)^\s*required\s*=\s*(\w+)', sv)
+            cats = []
+            cm = re.search(r'allowed_module_categories\s*=\s*\{', sv)
+            if cm:
+                cb = sv.find("{", cm.end() - 1)
+                ce = brace_match(sv, cb)
+                cats = re.findall(r'[A-Za-z0-9_]+', sv[cb + 1:ce - 1])
+            slots.append({"slot": sk,
+                          "required": (req.group(1).lower() == "yes") if req else False,
+                          "categories": cats})
+
+    # 该 id 出现在哪些地方（引用）
+    refs = []
+    for rel_dir in ("common", "history", "events"):
+        d = os.path.join(root, rel_dir)
+        if not os.path.isdir(d):
+            continue
+        for dp, _dn, fs in os.walk(d):
+            for f in fs:
+                if not f.endswith(".txt"):
+                    continue
+                p2 = os.path.join(dp, f)
+                try:
+                    t2 = io.open(p2, encoding="utf-8-sig", errors="replace").read()
+                except Exception:
+                    continue
+                if re.search(r'\b%s\b' % re.escape(eid), t2):
+                    refs.append(os.path.relpath(p2, root))
+                    if len(refs) >= 20:
+                        break
+
+    return {"ok": True, "id": eid,
+            "file": os.path.relpath(path, base) if base else path,
+            "readonly": readonly,
+            "archetype": scalars.get("archetype", ""),
+            "year": scalars.get("year", ""),
+            "buildable": scalars.get("is_buildable", ""),
+            "name": LOC.get(eid, eid),
+            "scalars": scalars, "slots": slots, "refs": refs,
+            "msg": "%s（%d 个属性，%d 个槽）" % (eid, len(scalars), len(slots))}
+
+
+def equipment_edit(eid, props, root=None):
+    """改装备的标量属性。
+
+    props: {key: value}。key 已存在就改值，不存在就插入。
+    块结构（module_slots / resources 等）不在这个接口的范围内，避免把嵌套写坏。"""
+    root = _map_pick(root)
+    if not isinstance(props, dict) or not props:
+        return {"ok": False, "msg": "没有要改的属性"}
+    base, path, b, e, body = _equip_locate(root, eid)
+    if not path:
+        return {"ok": False, "msg": "找不到装备 %s" % eid}
+    if os.path.abspath(base) == os.path.abspath(GAME or ""):
+        return {"ok": False, "msg": "这个装备来自原版，只读"}
+
+    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    new_body = body
+    changed = []
+    for k, v in props.items():
+        k = str(k).strip()
+        v = str(v).strip()
+        if not re.match(r'^[a-z_0-9]+$', k):
+            return {"ok": False, "msg": "属性名不合法：%s" % k}
+        if not v:
+            continue
+        pat = re.compile(r'(?m)^([ \t]*)%s([ \t]*=[ \t]*)([^\s{#\n]+)' % re.escape(k))
+        m = pat.search(new_body)
+        if m:
+            if m.group(3) == v:
+                continue
+            new_body = new_body[:m.start(3)] + v + new_body[m.end(3):]
+            changed.append("%s %s→%s" % (k, m.group(3), v))
+        else:
+            # 插到 body 末尾（前一个缩进对齐）
+            indent = "\t\t"
+            new_body = new_body.rstrip() + "\n" + indent + "%s = %s\n" % (k, v)
+            changed.append("%s=%s（新增）" % (k, v))
+    if not changed:
+        return {"ok": True, "changed": [], "msg": "没有实际改动"}
+
+    new_raw = raw[:b + 1] + new_body + raw[e - 1:]
+    snapshot(path)
+    io.open(path, "wb").write(b"\xef\xbb\xbf" + new_raw.encode("utf-8"))
+    reload_data()
+    return {"ok": True, "id": eid, "changed": changed,
+            "msg": "已更新 %s：%s" % (eid, "，".join(changed))}
+
+
+def equipment_delete(eid, root=None):
+    """删除一个装备定义（摘掉整个块）"""
+    root = _map_pick(root)
+    base, path, b, e, body = _equip_locate(root, eid)
+    if not path:
+        return {"ok": False, "msg": "找不到装备 %s" % eid}
+    if os.path.abspath(base) == os.path.abspath(GAME or ""):
+        return {"ok": False, "msg": "这个装备来自原版，只读"}
+    # 引用检查：还有别的地方用就不让删
+    det = equipment_detail(eid, root)
+    refs = [r for r in (det.get("refs") or []) if not r.endswith(os.path.basename(path))]
+    if refs:
+        return {"ok": False,
+                "msg": "还有 %d 处引用这个装备，先改掉再删：%s" % (len(refs), refs[:3])}
+    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    start = raw.rfind("\n", 0, b)
+    if start < 0:
+        start = b
+    new_raw = raw[:start] + raw[e:]
+    snapshot(path)
+    io.open(path, "wb").write(b"\xef\xbb\xbf" + new_raw.encode("utf-8"))
+    reload_data()
+    return {"ok": True, "id": eid,
+            "msg": "已删除装备 %s" % eid}
+
+
+def equipment_list(root=None, query=None):
+    """装备列表（可按 id 或名字过滤）"""
+    root = _map_pick(root)
+    items = []
+    q = (query or "").strip().lower()
+    for k, v in sorted(EQUIPMENTS.items()):
+        nm = v.get("name") or k
+        if q and q not in k.lower() and q not in str(nm).lower():
+            continue
+        items.append({"id": k, "name": nm, "file": v.get("file", ""),
+                      "year": v.get("year", ""), "buildable": v.get("buildable", ""),
+                      "archetype": (v.get("props") or {}).get("archetype", "")})
+    return {"ok": True, "count": len(items), "items": items[:400],
+            "total": len(items), "msg": "共 %d 个装备%s" % (
+                len(items), ("（含 %s）" % query) if q else "")}
+
+
 def _terrain_colors(root):
     """从 common/terrain/*.txt 读各地形类别的游戏内配色 {name: (r,g,b)}。
     mod 定义了同名类别就覆盖原版；读不到就返回空字典。"""
@@ -9549,6 +9735,12 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/log":
             _q = parse_qs(urlparse(self.path).query)
             self._send(read_error_log((_q.get("path", [""])[0] or None)))
+        elif path_only == "/api/equipment_list":
+            _q = parse_qs(urlparse(self.path).query)
+            self._send(equipment_list(_map_pick(None), _q.get("q", [""])[0]))
+        elif path_only == "/api/equipment_detail":
+            _q = parse_qs(urlparse(self.path).query)
+            self._send(equipment_detail(_q.get("id", [""])[0], _q.get("root", [None])[0]))
         elif path_only == "/api/adjacencies":
             self._send(adjacencies_list(_map_pick(None)))
         elif path_only == "/api/strategic_regions":
@@ -9882,6 +10074,11 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 ok, msg = load_mod_root(ds[0])
                 self._send({"ok": ok, "msg": msg})
+        elif self.path == "/api/equipment_edit":
+            self._send(equipment_edit(body.get("id"), body.get("props"),
+                                      body.get("root")))
+        elif self.path == "/api/equipment_delete":
+            self._send(equipment_delete(body.get("id"), body.get("root")))
         elif self.path == "/api/adj_edit":
             self._send(adjacency_edit(body.get("line"), body.get("type"),
                                       body.get("root")))

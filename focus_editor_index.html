@@ -1312,6 +1312,7 @@
             <button class="side-tab" data-tab="edit">编辑</button>
             <button class="side-tab" data-tab="refine">细化</button>
             <button class="side-tab" data-tab="rail">铁路</button>
+            <button class="side-tab" data-tab="equip">装备</button>
           </div>
           <div class="side-pane on" id="pane-layers">
             <div id="mapTools">
@@ -1440,6 +1441,35 @@
             <div class="mp-row" style="padding-top:0"><span class="mp-k" id="nsStat">—</span></div>
           </div>
           </div><!-- /pane-edit -->
+          <div class="side-pane" id="pane-equip">
+            <h4>装备变体</h4>
+            <div class="mp-acts">
+              <input id="eqSearch" placeholder="搜索 id / 名字" style="height:26px;flex:1">
+              <button class="btn" id="eqRefresh">查找</button>
+            </div>
+            <div class="mp-k" id="eqStat">点「查找」加载</div>
+            <div id="eqList" style="max-height:260px;overflow:auto;margin-top:6px"></div>
+            <div id="eqEdit" style="display:none;border-top:1px solid var(--line);margin-top:8px;padding-top:8px">
+              <div class="mp-k" id="eqCur" style="line-height:1.6"></div>
+              <div class="mp-k" id="eqFile" style="color:var(--t3)"></div>
+              <h4 style="margin-top:10px">属性</h4>
+              <div id="eqProps" style="max-height:280px;overflow:auto"></div>
+              <div class="mp-acts" style="margin-top:8px">
+                <input id="eqNewKey" placeholder="新属性名" style="height:26px;width:120px">
+                <input id="eqNewVal" placeholder="值" style="height:26px;width:80px">
+                <button class="btn" id="eqAddProp">加</button>
+              </div>
+              <div class="mp-acts" style="margin-top:6px">
+                <button class="btn" id="eqSave">保存改动</button>
+                <button class="btn" id="eqDel">删除这个装备</button>
+              </div>
+              <div class="mp-k" id="eqMsg" style="min-height:16px;line-height:1.5"></div>
+              <h4 style="margin-top:12px">模块槽</h4>
+              <div id="eqSlots" class="mp-k" style="line-height:1.6"></div>
+              <h4 style="margin-top:12px">引用位置</h4>
+              <div id="eqRefs" class="mp-k" style="line-height:1.6;color:var(--t3)"></div>
+            </div>
+          </div>
           <div class="side-pane" id="pane-rail">
             <h4>铁路</h4>
             <div class="mp-k" id="railStat">点「刷新」加载</div>
@@ -5824,6 +5854,12 @@ async function mapRepair(){
 (function(){
   function sideTab(name){
     // 切到铁路页时自动拉一次列表（不管是从按钮点进来还是恢复的）
+    if(name === 'equip'){
+      setTimeout(function(){
+        const b = document.getElementById('eqRefresh');
+        if(b && !b.dataset.loaded){ b.dataset.loaded = '1'; b.click(); }
+      }, 200);
+    }
     if(name === 'rail'){
       setTimeout(function(){
         const b = document.getElementById('railRefresh');
@@ -7682,6 +7718,143 @@ function makePannable(svg, body){
     });
   }
   window.mapBindAdj = bind;
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.15.0 装备变体编辑
+(function(){
+  let EQ = null, curId = '', pending = {};
+
+  function emsg(t, bad){
+    const el = document.getElementById('eqMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  async function loadList(){
+    const stat = document.getElementById('eqStat');
+    const q = (document.getElementById('eqSearch').value || '').trim();
+    if(stat) stat.textContent = '读取中…';
+    const r = await (await fetch('/api/equipment_list?q=' + encodeURIComponent(q))).json();
+    EQ = r;
+    if(!r.ok){ if(stat) stat.textContent = r.msg || '读取失败'; return; }
+    if(stat) stat.textContent = r.msg + (r.total > 400 ? '（只显示前 400 个）' : '');
+    const box = document.getElementById('eqList');
+    box.innerHTML = (r.items || []).map(function(it){
+      return '<div class="eq-row" data-id="' + it.id + '" style="padding:2px 6px;border-radius:4px;'
+        + 'cursor:pointer;font-size:11.5px;font-family:Consolas,monospace">'
+        + it.id + '　<span style="color:var(--t3)">' + (it.name || '') + '</span>'
+        + (it.year ? '　' + it.year : '') + '</div>';
+    }).join('');
+    box.querySelectorAll('.eq-row').forEach(function(el){
+      el.onclick = function(){ pickEq(el.dataset.id); };
+    });
+  }
+
+  async function pickEq(id){
+    curId = id;
+    pending = {};
+    document.querySelectorAll('#eqList .eq-row').forEach(function(el){
+      el.style.background = (el.dataset.id === id) ? 'var(--panel2)' : '';
+    });
+    emsg('读取中…');
+    const r = await (await fetch('/api/equipment_detail?id=' + encodeURIComponent(id))).json();
+    if(!r.ok){ emsg(r.msg || '失败', true); return; }
+    document.getElementById('eqEdit').style.display = 'block';
+    document.getElementById('eqCur').innerHTML =
+      '<b>' + r.id + '</b>　' + (r.name || '') +
+      (r.archetype ? '　<span style="color:var(--t3)">底盘 ' + r.archetype + '</span>' : '') +
+      (r.year ? '　' + r.year : '') +
+      (r.readonly ? '　<span style="color:var(--danger)">原版只读</span>' : '');
+    document.getElementById('eqFile').textContent = r.file || '';
+
+    // 属性表
+    const sc = r.scalars || {};
+    const keys = Object.keys(sc).sort();
+    document.getElementById('eqProps').innerHTML = keys.map(function(k){
+      return '<div style="display:flex;gap:6px;align-items:center;padding:1px 0">'
+        + '<span style="width:170px;font-size:11.5px;font-family:Consolas,monospace;color:var(--t2)">' + k + '</span>'
+        + '<input class="eq-val" data-k="' + k + '" value="' + String(sc[k]).replace(/"/g,'&quot;') + '"'
+        + ' style="flex:1;height:22px;font-size:11.5px;font-family:Consolas,monospace;'
+        + 'background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:0 5px"'
+        + (r.readonly ? ' disabled' : '') + '></div>';
+    }).join('');
+    document.getElementById('eqProps').querySelectorAll('.eq-val').forEach(function(inp){
+      inp.oninput = function(){ pending[inp.dataset.k] = inp.value; };
+    });
+
+    // 槽
+    const slots = r.slots || [];
+    document.getElementById('eqSlots').innerHTML = slots.length
+      ? slots.map(function(s){
+          return '· <b>' + s.slot + '</b>' + (s.required ? '　必装' : '　可选')
+            + (s.categories.length ? '　[' + s.categories.join(', ') + ']' : '');
+        }).join('<br>')
+      : '（这个装备没有模块槽）';
+
+    // 引用
+    const refs = r.refs || [];
+    document.getElementById('eqRefs').textContent = refs.length
+      ? refs.join('\n') : '（没有其它文件引用）';
+
+    emsg(r.msg || '');
+    document.getElementById('eqSave').disabled = !!r.readonly;
+    document.getElementById('eqDel').disabled = !!r.readonly;
+    document.getElementById('eqAddProp').disabled = !!r.readonly;
+  }
+
+  async function save(){
+    if(!curId) return;
+    const props = Object.assign({}, pending);
+    // 新属性
+    const nk = document.getElementById('eqNewKey').value.trim();
+    const nv = document.getElementById('eqNewVal').value.trim();
+    if(nk && nv) props[nk] = nv;
+    if(!Object.keys(props).length){ emsg('没有改动', true); return; }
+    emsg('写入中…');
+    const r = await (await fetch('/api/equipment_edit', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id: curId, props: props})})).json();
+    emsg(r.msg || '', !r.ok);
+    if(r.ok){
+      status(r.msg);
+      pending = {};
+      document.getElementById('eqNewKey').value = '';
+      document.getElementById('eqNewVal').value = '';
+      await pickEq(curId);
+    }
+  }
+
+  async function del(){
+    if(!curId) return;
+    if(!confirm('删除装备 ' + curId + '？（有其它引用会被拒绝）')) return;
+    const r = await (await fetch('/api/equipment_delete', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id: curId})})).json();
+    emsg(r.msg || '', !r.ok);
+    if(r.ok){
+      status(r.msg);
+      curId = '';
+      document.getElementById('eqEdit').style.display = 'none';
+      await loadList();
+    }
+  }
+
+  function bind(){
+    [['eqRefresh', loadList], ['eqSave', save], ['eqDel', del],
+     ['eqAddProp', function(){ save(); }]].forEach(function(p){
+      const el = document.getElementById(p[0]);
+      if(!el || el.dataset.bound) return;
+      el.dataset.bound = '1';
+      el.onclick = p[1];
+    });
+    const sb = document.getElementById('eqSearch');
+    if(sb && !sb.dataset.bound){
+      sb.dataset.bound = '1';
+      sb.onkeydown = function(e){ if(e.key === 'Enter') loadList(); };
+    }
+  }
+  window.mapBindEquip = bind;
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);
 })();
