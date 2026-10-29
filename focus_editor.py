@@ -2265,7 +2265,7 @@ def scripted_payload():
 
 # v0.71 地图图层构建（Pillow，无需 numpy）
 MAP_CACHE_DIR = os.path.join(WORK, "cache", "map")
-MAP_ASSETS = ("base.png", "province.png", "edges.png", "state.png", "political.png", "region.png", "terrain.png", "continent.png", "prov_id.png",
+MAP_ASSETS = ("base.png", "province.png", "edges.png", "state.png", "political.png", "region.png", "terrain.png", "continent.png", "prov_id.png", "rivers.png",
               "prov_index.json", "centers.json", "regions.json", "meta.json")
 
 
@@ -4611,6 +4611,10 @@ def map_build(force=False, root=None):
             print("  高度阴影失败，保留纯色:", _e)
     _terr_img.save(os.path.join(dirp, "terrain.png"))
     Image.frombytes("RGB", (w, h), bytes(contbuf)).save(os.path.join(dirp, "continent.png"))
+    try:
+        _build_rivers_png(root, w, h, dirp)
+    except Exception as _e:
+        print("  河流图层跳过:", _e)
     Image.frombytes("RGB", (w, h), bytes(idbuf)).save(os.path.join(dirp, "prov_id.png"))
     # 底图用全分辨率：缩进一半的话放大后是糊的（游戏地图本来就只有这个尺寸，没得再高）
     im.save(os.path.join(dirp, "base.png"))
@@ -7011,6 +7015,199 @@ def strategic_region_delete(sid, root=None):
             "msg": "已从文件里移除战略区 %d（文件里还有 %d 个）" % (sid, len(others))}
 
 
+def _build_rivers_png(root, w, h, dirp):
+    """把 rivers.bmp 转成 RGBA 叠层：背景索引透明，河流保留原色。
+
+    rivers.bmp 是调色板图，背景用 254/255，其余索引才是河。"""
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    rp, _ = _layers_find("map/rivers.bmp", mod_layers(root))
+    if not rp:
+        return 0
+    try:
+        with Image.open(rp) as im:
+            if im.size != (w, h):
+                return 0
+            pal = im.getpalette() or []
+            src = im.convert("P")
+            raw = src.tobytes()
+            # 找出背景索引（出现最多的两个，通常是 254/255）
+            from collections import Counter
+            cnt = Counter(raw)
+            bg = set([idx for idx, _c in cnt.most_common(2)])
+            out = bytearray(w * h * 4)
+            for i, v in enumerate(raw):
+                o = i * 4
+                if v in bg:
+                    continue
+                r = pal[v * 3] if len(pal) > v * 3 else 80
+                g = pal[v * 3 + 1] if len(pal) > v * 3 + 1 else 120
+                b = pal[v * 3 + 2] if len(pal) > v * 3 + 2 else 200
+                out[o] = r
+                out[o + 1] = g
+                out[o + 2] = b
+                out[o + 3] = 220
+            img = Image.frombytes("RGBA", (w, h), bytes(out))
+            img.save(os.path.join(dirp, "rivers.png"))
+            return len(cnt) - len(bg)
+    except Exception as e:
+        print("  河流图层失败:", e)
+        return 0
+
+
+def _adj_file(root):
+    for base in reversed(mod_layers(root) or []):
+        if not base:
+            continue
+        p = os.path.join(base, "map", "adjacencies.csv")
+        if os.path.exists(p):
+            return p, base
+    if GAME:
+        p = os.path.join(GAME, "map", "adjacencies.csv")
+        if os.path.exists(p):
+            return p, GAME
+    return None, None
+
+
+def adjacencies_list(root=None):
+    """海峡 / 陆地连接列表。坐标 -1 表示不画线，用省质心代替"""
+    root = _map_pick(root)
+    path, base = _adj_file(root)
+    if not path:
+        return {"ok": False, "msg": "找不到 map/adjacencies.csv"}
+    items = []
+    try:
+        raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    except Exception as e:
+        return {"ok": False, "msg": "读取失败：%s" % e}
+    lines = raw.splitlines()
+    header = lines[0] if lines else ""
+    for i, ln in enumerate(lines[1:], start=2):
+        if not ln.strip() or ln.strip().startswith("#"):
+            continue
+        c = ln.split(";")
+        if len(c) < 4:
+            continue
+        try:
+            frm, to = int(c[0]), int(c[1])
+        except Exception:
+            continue
+        through = c[3] if len(c) > 3 else ""
+        coords = []
+        if len(c) >= 8:
+            try:
+                sx, sy, ex, ey = int(c[4]), int(c[5]), int(c[6]), int(c[7])
+                if sx >= 0 and sy >= 0:
+                    coords = [sx, sy, ex, ey]
+            except Exception:
+                pass
+        items.append({"line": i, "from": frm, "to": to,
+                      "type": c[2] if len(c) > 2 else "",
+                      "through": through, "coords": coords,
+                      "rule": c[8] if len(c) > 8 else "",
+                      "comment": c[9] if len(c) > 9 else ""})
+    types = {}
+    for a in items:
+        types[a["type"]] = types.get(a["type"], 0) + 1
+    return {"ok": True, "count": len(items), "types": types,
+            "file": os.path.relpath(path, base) if base else path,
+            "fromMod": bool(root and base and os.path.abspath(base) == os.path.abspath(root)),
+            "items": items,
+            "msg": "共 %d 条连接（%s）" % (
+                len(items), "，".join("%s %d" % (k, v) for k, v in sorted(types.items())))}
+
+
+def adjacency_edit(line, adj_type=None, root=None):
+    """改某一条连接的类型（sea / land / lake 等）"""
+    root = _map_pick(root)
+    path, base = _adj_file(root)
+    if not path:
+        return {"ok": False, "msg": "找不到 map/adjacencies.csv"}
+    if os.path.abspath(base) == os.path.abspath(GAME or ""):
+        return {"ok": False, "msg": "adjacencies.csv 来自原版，只读"}
+    try:
+        line = int(line)
+    except Exception:
+        return {"ok": False, "msg": "行号不合法"}
+    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    lines = raw.splitlines(True)
+    idx = line - 1
+    if idx < 0 or idx >= len(lines):
+        return {"ok": False, "msg": "没有第 %d 行" % line}
+    c = lines[idx].rstrip("\r\n").split(";")
+    if len(c) < 4:
+        return {"ok": False, "msg": "这一行格式不对"}
+    old = c[2]
+    if adj_type:
+        c[2] = adj_type
+    tail = chr(10) if lines[idx].endswith(chr(10)) else ""
+    lines[idx] = ";".join(c) + tail
+    snapshot(path)
+    io.open(path, "wb").write(b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
+    return {"ok": True, "line": line, "from": old, "to": c[2],
+            "msg": "第 %d 行的类型 %s → %s" % (line, old, c[2])}
+
+
+def adjacency_delete(line, root=None):
+    """删除一条连接"""
+    root = _map_pick(root)
+    path, base = _adj_file(root)
+    if not path:
+        return {"ok": False, "msg": "找不到 map/adjacencies.csv"}
+    if os.path.abspath(base) == os.path.abspath(GAME or ""):
+        return {"ok": False, "msg": "adjacencies.csv 来自原版，只读"}
+    try:
+        line = int(line)
+    except Exception:
+        return {"ok": False, "msg": "行号不合法"}
+    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    lines = raw.splitlines(True)
+    idx = line - 1
+    if idx < 0 or idx >= len(lines):
+        return {"ok": False, "msg": "没有第 %d 行" % line}
+    gone = lines[idx].rstrip("\r\n")
+    del lines[idx]
+    snapshot(path)
+    io.open(path, "wb").write(b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
+    return {"ok": True, "line": line, "removed": gone[:60],
+            "msg": "已删除第 %d 行连接" % line}
+
+
+def adjacency_add(frm, to, adj_type="sea", through="", root=None):
+    """新增一条连接（追加到文件末尾）"""
+    root = _map_pick(root)
+    path, base = _adj_file(root)
+    if not path:
+        return {"ok": False, "msg": "找不到 map/adjacencies.csv"}
+    if os.path.abspath(base) == os.path.abspath(GAME or ""):
+        return {"ok": False, "msg": "adjacencies.csv 来自原版，只读"}
+    try:
+        frm, to = int(frm), int(to)
+    except Exception:
+        return {"ok": False, "msg": "省号不合法"}
+    if frm == to:
+        return {"ok": False, "msg": "两端不能是同一个省"}
+    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    lines = raw.splitlines(True)
+    for ln in lines[1:]:
+        c = ln.split(";")
+        if len(c) >= 2:
+            try:
+                a, b = int(c[0]), int(c[1])
+            except Exception:
+                continue
+            if (a == frm and b == to) or (a == to and b == frm):
+                return {"ok": False, "msg": "这两省之间已经有连接了"}
+    row = "%d;%d;%s;%s;-1;-1;-1;-1;;" % (frm, to, adj_type or "sea", through or "")
+    if not raw.endswith(chr(10)):
+        lines[-1] = lines[-1] + chr(10)
+    lines.append(row + chr(10))
+    snapshot(path)
+    io.open(path, "wb").write(b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
+    return {"ok": True, "from": frm, "to": to, "type": adj_type,
+            "msg": "已新增连接 %d ↔ %d（%s）" % (frm, to, adj_type or "sea")}
+
+
 def _terrain_colors(root):
     """从 common/terrain/*.txt 读各地形类别的游戏内配色 {name: (r,g,b)}。
     mod 定义了同名类别就覆盖原版；读不到就返回空字典。"""
@@ -9352,6 +9549,8 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/log":
             _q = parse_qs(urlparse(self.path).query)
             self._send(read_error_log((_q.get("path", [""])[0] or None)))
+        elif path_only == "/api/adjacencies":
+            self._send(adjacencies_list(_map_pick(None)))
         elif path_only == "/api/strategic_regions":
             self._send(strategic_regions_list(_map_pick(None)))
         elif path_only == "/api/terrain_by_type":
@@ -9683,6 +9882,15 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 ok, msg = load_mod_root(ds[0])
                 self._send({"ok": ok, "msg": msg})
+        elif self.path == "/api/adj_edit":
+            self._send(adjacency_edit(body.get("line"), body.get("type"),
+                                      body.get("root")))
+        elif self.path == "/api/adj_delete":
+            self._send(adjacency_delete(body.get("line"), body.get("root")))
+        elif self.path == "/api/adj_add":
+            self._send(adjacency_add(body.get("from"), body.get("to"),
+                                     body.get("type"), body.get("through"),
+                                     body.get("root")))
         elif self.path == "/api/sr_create":
             self._send(strategic_region_create(body.get("root"), body.get("id"),
                                                body.get("name"), body.get("provinces")))

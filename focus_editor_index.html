@@ -589,6 +589,8 @@
   .lt-preset:hover{color:var(--accent);border-color:var(--accent)}
   .lt-preset.on{background:color-mix(in srgb,var(--accent) 18%,var(--panel2));
     border-color:var(--accent);color:var(--accent);font-weight:600}
+  /* ---------- v1.14.0 河流层 ---------- */
+  #mapRivers{position:absolute;left:0;top:0;pointer-events:none;z-index:3;display:none}
   /* ---------- v1.9.0 矢量省界 ---------- */
   #mapEdgeCanvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:4}
   /* ---------- v1.2.1 选中省份高亮 ---------- */
@@ -1298,6 +1300,7 @@
       <img id="mapRegion" alt="">
             <img id="mapState" alt="">
             <img id="mapEdges" alt="">
+            <img id="mapRivers" alt="">
           </div>
           <div id="mapHud" style="display:none"><div id="mapHudText"></div></div>
           <canvas id="mapEdgeCanvas"></canvas>
@@ -1324,6 +1327,7 @@
                 <button class="lt-preset" data-preset="region">战略区</button>
                 <button class="lt-preset" data-preset="raw">原始</button>
                 <button class="lt-preset" data-preset="rail">铁路</button>
+                <button class="lt-preset" data-preset="river">河流</button>
               </div>
             </div>
             <div class="lt-group"><div class="lt-title">数据</div>
@@ -1337,6 +1341,7 @@
             <div class="lt-group"><div class="lt-title">基础</div>
               <label><input type="checkbox" id="mapLEdges">省界<input type="range" class="lt-op" data-op="edges" min="0" max="100" value="80" title="省界 不透明度"></label>
               <label><input type="checkbox" id="mapLBase" checked>底图<input type="range" class="lt-op" data-op="base" min="0" max="100" value="100" title="底图 不透明度"></label>
+              <label><input type="checkbox" id="mapLRivers">河流<input type="range" class="lt-op" data-op="rivers" min="0" max="100" value="100" title="河流 不透明度"></label>
               <label>透明度<input type="range" id="mapOpacity" min="20" max="100" value="85"></label>
             </div>
             </div>
@@ -1455,6 +1460,34 @@
               </div>
               <div class="mp-k" id="railMsg"></div>
             </div>
+            <h4 style="margin-top:16px">海峡 / 连接</h4>
+            <div class="mp-k" id="adjStat">点「刷新」加载</div>
+            <div class="mp-acts"><button class="btn" id="adjRefresh">刷新连接</button></div>
+            <div id="adjList" style="max-height:240px;overflow:auto;margin-top:8px"></div>
+            <div id="adjEdit" style="display:none;border-top:1px solid var(--line);margin-top:8px;padding-top:8px">
+              <div class="mp-k" id="adjCur"></div>
+              <div class="mp-acts" style="margin-top:6px">
+                <select id="adjTypeSel" style="height:26px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:5px">
+                  <option value="sea">sea</option>
+                  <option value="land">land</option>
+                  <option value="impassable">impassable</option>
+                  <option value="lake">lake</option>
+                </select>
+                <button class="btn" id="adjApplyType">改类型</button>
+                <button class="btn" id="adjDel">删除</button>
+              </div>
+            </div>
+            <div class="mp-k" style="margin-top:10px">新增连接</div>
+            <div class="mp-acts">
+              <input id="adjFrom" placeholder="省A" style="height:26px;width:70px">
+              <input id="adjTo" placeholder="省B" style="height:26px;width:70px">
+              <select id="adjNewType" style="height:26px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:5px">
+                <option value="sea">sea</option>
+                <option value="land">land</option>
+              </select>
+              <button class="btn" id="adjAdd">新增</button>
+            </div>
+            <div class="mp-k" id="adjMsg" style="min-height:16px;line-height:1.5"></div>
             <h4 style="margin-top:16px">战略区</h4>
             <div class="mp-k" id="srStat">点「刷新」加载</div>
             <div class="mp-acts"><button class="btn" id="srRefresh">刷新战略区</button></div>
@@ -6769,9 +6802,11 @@ function makePannable(svg, body){
     raw:     { unit: 'prov',    on: ['base'],    off: ['prov','polit','terrain','state','region','continent'] },
     rail:    { unit: 'prov',    on: ['terrain'], off: ['prov','polit','state','region','continent','base'],
                rails: true },
+    river:   { unit: 'prov',    on: ['terrain','rivers'], off: ['prov','polit','state','region','continent','base'] },
   };
   const ID = { prov:'mapLProv', polit:'mapLPolit', terrain:'mapLTerrain', state:'mapLState',
-               region:'mapLRegion', continent:'mapLContinent', base:'mapLBase' };
+               region:'mapLRegion', continent:'mapLContinent', base:'mapLBase',
+               rivers:'mapLRivers' };
   const OP = { prov:'prov', polit:'polit', terrain:'terrain', state:'state',
                region:'region', continent:'continent', base:'base' };
 
@@ -7545,6 +7580,112 @@ function makePannable(svg, body){
   else document.addEventListener('DOMContentLoaded', bind);
 })();
 
+// v1.14.0 海峡 / 连接
+(function(){
+  let ADJS = null, curLine = -1;
+
+  function amsg(t, bad){
+    const el = document.getElementById('adjMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  async function loadAdj(){
+    const stat = document.getElementById('adjStat');
+    if(stat) stat.textContent = '读取中…';
+    const r = await (await fetch('/api/adjacencies')).json();
+    ADJS = r;
+    if(!r.ok){ if(stat) stat.textContent = r.msg || '读取失败'; return; }
+    if(stat) stat.textContent = r.msg + (r.fromMod ? '' : '（原版只读）');
+    const box = document.getElementById('adjList');
+    box.innerHTML = (r.items || []).map(function(it){
+      const tn = it.type || '(空)';
+      const col = tn === 'sea' ? 'var(--accent)' : (tn === 'impassable' ? 'var(--danger)' : 'var(--t3)');
+      return '<div class="adj-row" data-l="' + it.line + '" style="padding:2px 6px;border-radius:4px;cursor:pointer;'
+        + 'font-size:11.5px;font-family:Consolas,monospace">'
+        + '行' + it.line + '　' + it.from + '↔' + it.to + '　'
+        + '<span style="color:' + col + '">' + tn + '</span>'
+        + (it.rule ? '　<span style="color:var(--t3)">' + it.rule + '</span>' : '')
+        + (it.comment ? '　<span style="color:var(--t3)">' + it.comment + '</span>' : '')
+        + '</div>';
+    }).join('');
+    box.querySelectorAll('.adj-row').forEach(function(el){
+      el.onclick = function(){ pickAdj(Number(el.dataset.l)); };
+    });
+  }
+
+  function pickAdj(line){
+    if(!ADJS || !ADJS.items) return;
+    const it = ADJS.items.find(function(x){ return x.line === line; });
+    if(!it) return;
+    curLine = line;
+    document.querySelectorAll('#adjList .adj-row').forEach(function(el){
+      el.style.background = (Number(el.dataset.l) === line) ? 'var(--panel2)' : '';
+    });
+    document.getElementById('adjEdit').style.display = 'block';
+    document.getElementById('adjCur').textContent =
+      '行 ' + line + '　' + it.from + ' ↔ ' + it.to + '　当前 ' + (it.type || '(空)');
+    const sel = document.getElementById('adjTypeSel');
+    if(sel && it.type){ sel.value = it.type; }
+  }
+
+  async function applyType(){
+    if(curLine < 0) return;
+    const sel = document.getElementById('adjTypeSel');
+    amsg('写入中…');
+    const r = await (await fetch('/api/adj_edit', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({line: curLine, type: sel.value})})).json();
+    amsg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await loadAdj(); }
+  }
+
+  async function delAdj(){
+    if(curLine < 0) return;
+    if(!confirm('删除第 ' + curLine + ' 行连接？')) return;
+    const r = await (await fetch('/api/adj_delete', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({line: curLine})})).json();
+    amsg(r.msg || '', !r.ok);
+    if(r.ok){
+      status(r.msg);
+      curLine = -1;
+      document.getElementById('adjEdit').style.display = 'none';
+      await loadAdj();
+    }
+  }
+
+  async function addAdj(){
+    const f = document.getElementById('adjFrom').value.trim();
+    const t = document.getElementById('adjTo').value.trim();
+    const ty = document.getElementById('adjNewType').value;
+    if(!f || !t){ amsg('填两端省号', true); return; }
+    amsg('新增中…');
+    const r = await (await fetch('/api/adj_add', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({from: Number(f), to: Number(t), type: ty})})).json();
+    amsg(r.msg || '', !r.ok);
+    if(r.ok){
+      status(r.msg);
+      document.getElementById('adjFrom').value = '';
+      document.getElementById('adjTo').value = '';
+      await loadAdj();
+    }
+  }
+
+  function bind(){
+    [['adjRefresh', loadAdj], ['adjApplyType', applyType],
+     ['adjDel', delAdj], ['adjAdd', addAdj]].forEach(function(pair){
+      const el = document.getElementById(pair[0]);
+      if(!el || el.dataset.bound) return;
+      el.dataset.bound = '1';
+      el.onclick = pair[1];
+    });
+  }
+  window.mapBindAdj = bind;
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -7835,6 +7976,20 @@ async function mapLoadAssets(){
 }
 
 function mapApplyLayers(){
+  const rv = document.getElementById('mapLRivers');
+  const rvImg = document.getElementById('mapRivers');
+  if(rvImg){
+    const on = rv && rv.checked;
+    rvImg.style.display = on ? 'block' : 'none';
+    if(on){
+      rvImg.style.width = MAP.w + 'px';
+      rvImg.style.height = MAP.h + 'px';
+      const url = mapAssetUrl('rivers.png');
+      if(rvImg.getAttribute('src') !== url) rvImg.setAttribute('src', url);
+      const op = document.querySelector('.lt-op[data-op="rivers"]');
+      rvImg.style.opacity = op ? (Number(op.value) / 100) : 1;
+    }
+  }
   const onPolit = document.getElementById('mapLPolit').checked;
   const onRegion = document.getElementById('mapLRegion').checked;
   const onTerrain = document.getElementById('mapLTerrain').checked;
