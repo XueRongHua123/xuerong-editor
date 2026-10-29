@@ -1455,6 +1455,26 @@
               </div>
               <div class="mp-k" id="railMsg"></div>
             </div>
+            <h4 style="margin-top:16px">战略区</h4>
+            <div class="mp-k" id="srStat">点「刷新」加载</div>
+            <div class="mp-acts"><button class="btn" id="srRefresh">刷新战略区</button></div>
+            <div id="srList" style="max-height:240px;overflow:auto;margin-top:8px"></div>
+            <div id="srEdit" style="display:none;border-top:1px solid var(--line);margin-top:8px;padding-top:8px">
+              <div class="mp-k" id="srCur"></div>
+              <div class="mp-acts" style="margin-top:6px">
+                <button class="btn" id="srApplyProvs">把地图已选省设为它的范围</button>
+                <button class="btn" id="srDel">删除这个战略区</button>
+              </div>
+            </div>
+            <div class="mp-k" style="margin-top:10px">新建战略区</div>
+            <div class="mp-acts">
+              <input id="srNewId" placeholder="id（留空自动）" style="height:26px;width:110px">
+              <input id="srNewName" placeholder="名字" style="height:26px;flex:1">
+            </div>
+            <div class="mp-acts" style="margin-top:4px">
+              <button class="btn" id="srCreate">用地图已选省新建</button>
+            </div>
+            <div class="mp-k" id="srMsg" style="min-height:16px;line-height:1.5"></div>
             <h4 style="margin-top:16px">补给区</h4>
             <div class="mp-k" id="supStat">—</div>
             <div class="mp-acts"><button class="btn" id="supRefresh">刷新补给区</button></div>
@@ -7417,6 +7437,112 @@ function makePannable(svg, body){
   };
   wrap.addEventListener('pointerup', up, true);
   window.addEventListener('pointerup', up, true);
+})();
+
+// v1.13.0 战略区
+(function(){
+  let SRS = null, curSR = -1;
+
+  function smsg(t, bad){
+    const el = document.getElementById('srMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  function selPids(){
+    const sel = Array.isArray(MAP.sel) ? MAP.sel : (MAP.sel ? [MAP.sel] : []);
+    return sel.slice();
+  }
+
+  async function loadSR(){
+    const stat = document.getElementById('srStat');
+    if(stat) stat.textContent = '读取中…';
+    const r = await (await fetch('/api/strategic_regions')).json();
+    SRS = r;
+    if(!r.ok){ if(stat) stat.textContent = r.msg || '读取失败'; return; }
+    if(stat) stat.innerHTML = '共 <b>' + r.count + '</b> 个战略区';
+    const box = document.getElementById('srList');
+    box.innerHTML = (r.items || []).map(function(it){
+      return '<div class="sr-row" data-i="' + it.id + '" style="padding:3px 6px;border-radius:4px;cursor:pointer;'
+        + 'font-size:11.5px;font-family:Consolas,monospace;'
+        + (it.fromMod ? '' : 'opacity:.55') + '">'
+        + '#' + it.id + '　' + it.count + '省　'
+        + '<span style="color:var(--t3)">' + it.name + '</span>'
+        + (it.fromMod ? '' : ' <span style="color:var(--t3)">(原版)</span>') + '</div>';
+    }).join('');
+    box.querySelectorAll('.sr-row').forEach(function(el){
+      el.onclick = function(){ pickSR(Number(el.dataset.i)); };
+    });
+  }
+
+  function pickSR(id){
+    if(!SRS || !SRS.items) return;
+    const it = SRS.items.find(function(x){ return x.id === id; });
+    if(!it) return;
+    curSR = id;
+    document.querySelectorAll('#srList .sr-row').forEach(function(el){
+      el.style.background = (Number(el.dataset.i) === id) ? 'var(--panel2)' : '';
+    });
+    document.getElementById('srEdit').style.display = 'block';
+    document.getElementById('srCur').textContent =
+      '#' + id + '　' + it.name + '　' + it.count + ' 省' + (it.fromMod ? '' : '（原版只读）');
+    document.getElementById('srDel').disabled = !it.fromMod;
+    document.getElementById('srApplyProvs').disabled = !it.fromMod;
+  }
+
+  async function createSR(){
+    const pids = selPids();
+    if(!pids.length){ smsg('先在地图上选中省（拖框可多选）', true); return; }
+    const idEl = document.getElementById('srNewId');
+    const nameEl = document.getElementById('srNewName');
+    smsg('创建中…');
+    const r = await (await fetch('/api/sr_create', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id: idEl.value.trim() || null,
+                            name: nameEl.value.trim() || null,
+                            provinces: pids})})).json();
+    smsg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); idEl.value = ''; nameEl.value = ''; await loadSR(); }
+  }
+
+  async function applyProvs(){
+    if(curSR < 0) return;
+    const pids = selPids();
+    if(!pids.length){ smsg('先在地图上选中省', true); return; }
+    smsg('写入中…');
+    const r = await (await fetch('/api/sr_set_provinces', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id: curSR, provinces: pids})})).json();
+    smsg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await loadSR(); }
+  }
+
+  async function delSR(){
+    if(curSR < 0) return;
+    if(!confirm('删除战略区 ' + curSR + '？（会摘掉整个块，文件里没有其它块就删文件）')) return;
+    const r = await (await fetch('/api/sr_delete', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id: curSR})})).json();
+    smsg(r.msg || '', !r.ok);
+    if(r.ok){
+      status(r.msg);
+      curSR = -1;
+      document.getElementById('srEdit').style.display = 'none';
+      await loadSR();
+    }
+  }
+
+  function bind(){
+    [['srRefresh', loadSR], ['srCreate', createSR],
+     ['srApplyProvs', applyProvs], ['srDel', delSR]].forEach(function(pair){
+      const el = document.getElementById(pair[0]);
+      if(!el || el.dataset.bound) return;
+      el.dataset.bound = '1';
+      el.onclick = pair[1];
+    });
+  }
+  window.mapBindSR = bind;
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
 })();
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */

@@ -6783,6 +6783,234 @@ def terrain_paint(points, terrain, brush=3, root=None):
             "msg": "刷了 %d 个像素为 %s · 需重建图层" % (n, terrain)}
 
 
+def _sr_dirs(root):
+    """战略区目录（先 mod 后原版），返回 [(base, dir)]"""
+    out = []
+    for base in reversed(mod_layers(root) or []):
+        if not base:
+            continue
+        d = os.path.join(base, "map", "strategicregions")
+        if os.path.isdir(d):
+            out.append((base, d))
+    if GAME:
+        d = os.path.join(GAME, "map", "strategicregions")
+        if os.path.isdir(d):
+            out.append((GAME, d))
+    return out
+
+
+def _sr_parse_file(path):
+    """一个文件里可能有多个 strategic_region 块"""
+    out = []
+    try:
+        text = strip_comments(io.open(path, encoding="utf-8-sig", errors="replace").read())
+    except Exception:
+        return out
+    for m in re.finditer(r'strategic_region\s*=\s*\{', text):
+        b = text.find("{", m.end() - 1)
+        e = brace_match(text, b)
+        if e <= b:
+            continue
+        body = text[b + 1:e - 1]
+        sid = re.search(r'(?m)^\s*id\s*=\s*(\d+)', body)
+        if not sid:
+            continue
+        nm = re.search(r'(?m)^\s*name\s*=\s*"([^"]*)"', body)
+        pr = re.search(r'provinces\s*=\s*\{([^}]*)\}', body)
+        provs = [int(x) for x in re.findall(r'\d+', pr.group(1))] if pr else []
+        out.append({"id": int(sid.group(1)),
+                    "name": nm.group(1) if nm else "",
+                    "provinces": provs,
+                    "span": [b, e]})
+    return out
+
+
+def strategic_regions_list(root=None):
+    """列出全部战略区；同 id 以最后一层（mod）为准"""
+    root = _map_pick(root)
+    seen = {}
+    for base, d in _sr_dirs(root):
+        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+            p = os.path.join(d, fn)
+            for r in _sr_parse_file(p):
+                if r["id"] in seen and os.path.abspath(base) == os.path.abspath(GAME or ""):
+                    continue   # 原版的被 mod 覆盖
+                seen[r["id"]] = {
+                    "id": r["id"], "name": r["name"],
+                    "count": len(r["provinces"]),
+                    "provinces": r["provinces"][:400],
+                    "file": os.path.relpath(p, base),
+                    "base": os.path.abspath(base),
+                    "fromMod": os.path.abspath(base) != os.path.abspath(GAME or ""),
+                }
+    items = sorted(seen.values(), key=lambda x: x["id"])
+    return {"ok": True, "count": len(items), "items": items,
+            "msg": "共 %d 个战略区" % len(items)}
+
+
+def _sr_weather_template(root):
+    """从任意一个现有战略区里抠出 weather 块，新建时作为模板"""
+    for base, d in _sr_dirs(root):
+        for fn in sorted(os.listdir(d)):
+            if not fn.endswith(".txt"):
+                continue
+            p = os.path.join(d, fn)
+            try:
+                text = strip_comments(io.open(p, encoding="utf-8-sig", errors="replace").read())
+            except Exception:
+                continue
+            m = re.search(r'weather\s*=\s*\{', text)
+            if not m:
+                continue
+            b = text.find("{", m.end() - 1)
+            e = brace_match(text, b)
+            if e > b:
+                return text[b:e]
+    return ""
+
+
+def _sr_write_dir(root):
+    """新建战略区写到 mod 目录（输出模式下写到 output）"""
+    root = _map_pick(root)
+    base = root if root else (mod_layers(None) or [""])[0]
+    d = _out_path(base, os.path.join("map", "strategicregions")) if OUTPUT_MODE else \
+        os.path.join(base, "map", "strategicregions")
+    os.makedirs(d, exist_ok=True)
+    return base, d
+
+
+def strategic_region_create(root=None, sid=None, name=None, provinces=None):
+    """新建战略区。id 不给就取现有最大值 +1；weather 从现有区复制"""
+    root = _map_pick(root)
+    existing = strategic_regions_list(root)
+    used = set(x["id"] for x in existing["items"])
+    try:
+        sid = int(sid) if sid not in (None, "") else (max(used) + 1 if used else 1)
+    except Exception:
+        return {"ok": False, "msg": "id 不合法"}
+    if sid in used:
+        return {"ok": False, "msg": "战略区 %d 已存在" % sid}
+    provs = []
+    if provinces:
+        try:
+            provs = sorted(set(int(x) for x in provinces if int(x) > 0))
+        except Exception:
+            return {"ok": False, "msg": "省份列表不合法"}
+    if not provs:
+        return {"ok": False, "msg": "至少要指定一个省"}
+
+    # 一个省只能属于一个战略区，先检查
+    owner = {}
+    for it in existing["items"]:
+        for p in it.get("provinces") or []:
+            owner[p] = it["id"]
+    clash = [(p, owner[p]) for p in provs if p in owner]
+    if clash:
+        return {"ok": False,
+                "msg": "这些省已属于别的战略区：%s" % clash[:3]}
+
+    b, d = _sr_write_dir(root)
+    fn = "%d-New Strategic Region.txt" % sid
+    path = os.path.join(d, fn)
+    weather = _sr_weather_template(root)
+    body = "strategic_region={\n\tid=%d\n\tname=\"%s\"\n\tprovinces={\n" % (
+        sid, (name or ("STRATEGICREGION_%d" % sid)))
+    for i in range(0, len(provs), 12):
+        body += "\t\t" + " ".join(str(x) for x in provs[i:i + 12]) + "\n"
+    body += "\t}\n"
+    if weather:
+        body += "\tweather=" + weather + "\n"
+    body += "}\n"
+    io.open(path, "wb").write(b"\xef\xbb\xbf" + body.encode("utf-8"))
+    reload_data()
+    return {"ok": True, "id": sid, "file": os.path.relpath(path, b),
+            "provinces": len(provs), "weatherCopied": bool(weather),
+            "msg": "已新建战略区 %d（%d 个省）%s" % (
+                sid, len(provs), "，天气块已复制" if weather else "，没有找到天气模板")}
+
+
+def _sr_find(root, sid):
+    """按 id 找文件与块位置"""
+    for base, d in _sr_dirs(root):
+        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+            p = os.path.join(d, fn)
+            for r in _sr_parse_file(p):
+                if r["id"] == int(sid):
+                    return base, p, r
+    return None, None, None
+
+
+def strategic_region_set_provinces(sid, provinces, root=None):
+    """改某战略区覆盖的省份（整块替换 provinces = { }）"""
+    root = _map_pick(root)
+    try:
+        sid = int(sid)
+        provs = sorted(set(int(x) for x in (provinces or []) if int(x) > 0))
+    except Exception:
+        return {"ok": False, "msg": "参数不合法"}
+    if not provs:
+        return {"ok": False, "msg": "至少要有一个省"}
+    base, path, rec = _sr_find(root, sid)
+    if not path:
+        return {"ok": False, "msg": "没有战略区 %d" % sid}
+    if os.path.abspath(base) == os.path.abspath(GAME or ""):
+        return {"ok": False, "msg": "这个战略区来自原版，只读"}
+    text = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    b, e = rec["span"]
+    body = text[b + 1:e - 1]
+    inner = "\n" + "".join("\t\t" + " ".join(str(x) for x in provs[i:i + 12]) + "\n"
+                            for i in range(0, len(provs), 12)) + "\t"
+    m = re.search(r'provinces\s*=\s*\{', body)
+    if m:
+        pb = body.find("{", m.end() - 1)
+        pe = brace_match(body, pb)
+        if pe > pb:
+            body2 = body[:pb] + "{" + inner + "}" + body[pe:]
+        else:
+            body2 = body
+    else:
+        body2 = body + "\n\tprovinces={" + inner + "}"
+    new_text = text[:b + 1] + body2 + text[e - 1:]
+    snapshot(path)
+    io.open(path, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "id": sid, "provinces": len(provs),
+            "msg": "战略区 %d 现在覆盖 %d 个省" % (sid, len(provs))}
+
+
+def strategic_region_delete(sid, root=None):
+    """删除战略区：整个块从文件里摘掉；文件里没有其它块就删文件"""
+    root = _map_pick(root)
+    try:
+        sid = int(sid)
+    except Exception:
+        return {"ok": False, "msg": "id 不合法"}
+    base, path, rec = _sr_find(root, sid)
+    if not path:
+        return {"ok": False, "msg": "没有战略区 %d" % sid}
+    if os.path.abspath(base) == os.path.abspath(GAME or ""):
+        return {"ok": False, "msg": "这个战略区来自原版，只读"}
+    text = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    others = [r for r in _sr_parse_file(path) if r["id"] != sid]
+    if not others:
+        snapshot(path)
+        try:
+            os.remove(path)
+        except Exception as e:
+            return {"ok": False, "msg": "删文件失败：%s" % e}
+        return {"ok": True, "id": sid, "removedFile": True,
+                "msg": "已删除战略区 %d 及其文件" % sid}
+    b, e = rec["span"]
+    # 连同前面的 strategic_region = { 一起摘掉
+    start = text.rfind("strategic_region", 0, b)
+    if start < 0:
+        start = b
+    new_text = text[:start] + text[e:]
+    snapshot(path)
+    io.open(path, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "id": sid, "removedFile": False,
+            "msg": "已从文件里移除战略区 %d（文件里还有 %d 个）" % (sid, len(others))}
+
+
 def _terrain_colors(root):
     """从 common/terrain/*.txt 读各地形类别的游戏内配色 {name: (r,g,b)}。
     mod 定义了同名类别就覆盖原版；读不到就返回空字典。"""
@@ -9124,6 +9352,8 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/log":
             _q = parse_qs(urlparse(self.path).query)
             self._send(read_error_log((_q.get("path", [""])[0] or None)))
+        elif path_only == "/api/strategic_regions":
+            self._send(strategic_regions_list(_map_pick(None)))
         elif path_only == "/api/terrain_by_type":
             _q = parse_qs(urlparse(self.path).query)
             self._send(prov_terrain_by_type(_q.get("from", [""])[0],
@@ -9453,6 +9683,15 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 ok, msg = load_mod_root(ds[0])
                 self._send({"ok": ok, "msg": msg})
+        elif self.path == "/api/sr_create":
+            self._send(strategic_region_create(body.get("root"), body.get("id"),
+                                               body.get("name"), body.get("provinces")))
+        elif self.path == "/api/sr_set_provinces":
+            self._send(strategic_region_set_provinces(body.get("id"),
+                                                      body.get("provinces"),
+                                                      body.get("root")))
+        elif self.path == "/api/sr_delete":
+            self._send(strategic_region_delete(body.get("id"), body.get("root")))
         elif self.path == "/api/terrain_batch":
             self._send(prov_terrain_batch(body.get("pids"), body.get("terrain"),
                                           body.get("root")))
