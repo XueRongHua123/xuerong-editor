@@ -4527,7 +4527,12 @@ def map_build(force=False, root=None):
         statebuf[o:o + 3] = sc
         ow = prov2owner.get(pid, "")
         if ow:
-            pcb = tag_color.get(ow) or neutral
+            pcb = tag_color.get(ow)
+            if pcb is None:
+                # 国家表里没有这个 tag（mod 改了国家但州还引用旧 tag），
+                # 按 tag 生成稳定色，而不是画成无主灰
+                pcb = _tag_fallback_color(ow)
+                tag_color[ow] = pcb
         else:
             # 没有归属国的省分两种：海洋给海色，无主陆地给中性灰
             ptype = ptypes.get(pid, "")
@@ -7571,6 +7576,26 @@ def state_refine_apply(sid, k=2, root=None):
         msg += "；%d 份失败：%s" % (len(failed), failed[0].get("msg"))
     return {"ok": True, "sid": sid, "kept": first, "created": created,
             "failed": failed, "parts": len(parts), "msg": msg}
+
+
+def _tag_fallback_color(tag):
+    """没有定义颜色的 tag（mod 里州引用了不存在的国家）按 tag 哈希生成稳定色。
+
+    比直接落到中性灰好：至少能看出边界和政治区划，
+    不会让整片大陆看起来像数据缺失。"""
+    import hashlib
+    # 预定义调色板：20 种区分度足够的颜色，按哈希取模。
+    # 用 HSV 现算会在某些色相区间退化成相近的 RGB（红区都变成 R=191），
+    # 调色板能保证任意两个 tag 落在视觉上不同的色块。
+    palette = (
+        (230, 90, 90), (90, 160, 230), (110, 200, 120), (240, 190, 90),
+        (180, 120, 220), (90, 200, 200), (230, 140, 200), (150, 190, 90),
+        (200, 110, 80), (120, 140, 220), (200, 200, 100), (140, 100, 180),
+        (100, 180, 160), (220, 160, 120), (160, 200, 200), (200, 130, 130),
+        (130, 170, 220), (180, 200, 120), (220, 170, 200), (140, 160, 120),
+    )
+    h = int(hashlib.md5(str(tag or '').encode('utf-8')).hexdigest()[:8], 16)
+    return bytes(palette[h % len(palette)])
 
 
 def _prov_type_map(root):
