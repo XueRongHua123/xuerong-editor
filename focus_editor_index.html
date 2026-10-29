@@ -1308,6 +1308,7 @@
             <button class="side-tab on" data-tab="layers">图层</button>
             <button class="side-tab" data-tab="edit">编辑</button>
             <button class="side-tab" data-tab="refine">细化</button>
+            <button class="side-tab" data-tab="rail">铁路</button>
           </div>
           <div class="side-pane on" id="pane-layers">
             <div id="mapTools">
@@ -1315,7 +1316,7 @@
             <div class="lt-body">
             <div class="lt-group" id="ltPresets">
               <div class="lt-title">预设</div>
-              <div class="lt-preset-row">
+              <div class="lt-preset-row" id="ltPresetRow">
                 <button class="lt-preset" data-preset="terrain">地形</button>
                 <button class="lt-preset" data-preset="state">州</button>
                 <button class="lt-preset" data-preset="prov">省色块</button>
@@ -1407,6 +1408,33 @@
             <div class="mp-row" style="padding-top:0"><span class="mp-k" id="nsStat">—</span></div>
           </div>
           </div><!-- /pane-edit -->
+          <div class="side-pane" id="pane-rail">
+            <h4>铁路</h4>
+            <div class="mp-k" id="railStat">点「刷新」加载</div>
+            <div class="mp-acts"><button class="btn" id="railRefresh">刷新</button></div>
+            <div id="railList" style="max-height:420px;overflow:auto;margin-top:8px"></div>
+            <div class="mp-k" style="margin-top:10px;line-height:1.6">
+              点列表里的铁路 → 在下方改等级或删省份。<br>
+              改完地图会自动重画。
+            </div>
+            <div id="railEdit" style="display:none;border-top:1px solid var(--line);margin-top:10px;padding-top:8px">
+              <label class="mp-k">等级</label>
+              <input type="number" id="railLv" min="1" max="10" style="width:70px">
+              <label class="mp-k" style="display:block;margin-top:6px">省份序列（空格分隔）</label>
+              <textarea id="railProvs" rows="3" style="width:100%;box-sizing:border-box;font-family:Consolas,monospace;font-size:12px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px"></textarea>
+              <div class="mp-acts" style="margin-top:8px">
+                <button class="btn" id="railSave">保存</button>
+                <button class="btn" id="railDel">删除这条</button>
+              </div>
+              <div class="mp-k" id="railMsg"></div>
+            </div>
+            <h4 style="margin-top:16px">补给区</h4>
+            <div class="mp-k" id="supStat">—</div>
+            <div class="mp-acts"><button class="btn" id="supRefresh">刷新补给区</button></div>
+            <div id="supList" style="max-height:260px;overflow:auto;margin-top:8px"></div>
+          </div>
+          </div><!-- /pane-edit -->
+
           <div class="side-pane" id="pane-refine">
             <h4>细化当前省</h4>
             <div class="mp-k" style="line-height:1.6;margin-bottom:8px">
@@ -5715,6 +5743,13 @@ async function mapRepair(){
 // v1.1.0 右侧 Tab 切换
 (function(){
   function sideTab(name){
+    // 切到铁路页时自动拉一次列表（不管是从按钮点进来还是恢复的）
+    if(name === 'rail'){
+      setTimeout(function(){
+        const b = document.getElementById('railRefresh');
+        if(b && !b.dataset.loaded){ b.dataset.loaded = '1'; b.click(); }
+      }, 200);
+    }
     document.querySelectorAll('.side-tab').forEach(b=>{
       b.classList.toggle('on', b.dataset.tab === name);
     });
@@ -5735,6 +5770,12 @@ async function mapRepair(){
     let last = 'layers';
     try{ last = localStorage.getItem('xuerong_side_tab') || 'layers'; }catch(e){}
     if(last !== 'layers') sideTab(last);
+    if(last === 'rail' && window.mapBindRail){
+      setTimeout(function(){
+        const b = document.getElementById('railRefresh');
+        if(b && !b.dataset.loaded){ b.dataset.loaded = '1'; b.click(); }
+      }, 200);
+    }
   }
   window.mapBindSideTabs = bindSideTabs;
 })();
@@ -6970,6 +7011,115 @@ function makePannable(svg, body){
       if(window.MAP_SHOW_RAILS && window.mapDrawRails) window.mapDrawRails();
     };
   }
+})();
+
+// v1.11.0 铁路编辑 + 补给区
+(function(){
+  let RAILS = null, curIdx = -1;
+
+  function msg(t, bad){
+    const el = document.getElementById('railMsg');
+    if(el){ el.textContent = t; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  async function loadRails(){
+    const stat = document.getElementById('railStat');
+    if(stat) stat.textContent = '读取中（首次要建全图邻接，约 4 秒）…';
+    const r = await (await fetch('/api/railways')).json();
+    RAILS = r;
+    if(!r.ok){ if(stat) stat.textContent = r.msg || '读取失败'; return; }
+    if(stat) stat.innerHTML = '共 <b>' + r.count + '</b> 条，断连 <b style="color:var(--danger)">'
+      + r.broken + '</b> 条，等级超 5 <b>' + r.over + '</b> 条';
+    const box = document.getElementById('railList');
+    box.innerHTML = (r.items || []).map(function(it){
+      const bad = (it.broken || []).length;
+      return '<div class="rail-row" data-i="' + it.i + '" style="padding:3px 6px;border-radius:4px;cursor:pointer;'
+        + 'font-size:11.5px;font-family:Consolas,monospace;' + (bad ? 'color:var(--danger)' : '') + '">'
+        + '#' + it.i + '  Lv' + it.level + '  ' + it.len + '省  '
+        + (it.provs || []).slice(0, 4).join('-') + (it.len > 4 ? '…' : '')
+        + (bad ? '  ⚠断连' + bad : '') + '</div>';
+    }).join('');
+    box.querySelectorAll('.rail-row').forEach(function(el){
+      el.onclick = function(){ selectRail(Number(el.dataset.i)); };
+    });
+  }
+
+  function selectRail(i){
+    if(!RAILS || !RAILS.items) return;
+    const it = RAILS.items.find(function(x){ return x.i === i; });
+    if(!it) return;
+    curIdx = i;
+    document.querySelectorAll('#railList .rail-row').forEach(function(el){
+      el.style.background = (Number(el.dataset.i) === i) ? 'var(--panel2)' : '';
+    });
+    document.getElementById('railEdit').style.display = 'block';
+    document.getElementById('railLv').value = it.level;
+    document.getElementById('railProvs').value = (it.provs || []).join(' ');
+    msg('#' + i + '　' + it.len + ' 个省' + ((it.broken || []).length ? ('，断连 ' + it.broken.length + ' 段') : ''));
+  }
+
+  async function saveRail(){
+    if(curIdx < 0) return;
+    const lv = Number(document.getElementById('railLv').value || 1);
+    const provs = document.getElementById('railProvs').value.trim().split(/\s+/).map(Number).filter(function(x){ return x > 0; });
+    msg('保存中…');
+    const r = await (await fetch('/api/railway_edit', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({index: curIdx, level: lv, provs: provs})})).json();
+    msg(r.msg || (r.ok ? '已保存' : '保存失败'), !r.ok);
+    if(r.ok){
+      status(r.msg);
+      if(window.RAIL_DATA_PRE) window.RAIL_DATA_PRE = null;
+      if(window.mapDrawRails) window.mapDrawRails();
+      await loadRails();
+    }
+  }
+
+  async function delRail(){
+    if(curIdx < 0) return;
+    if(!confirm('删除第 ' + curIdx + ' 条铁路？会改写 railways.txt（有备份）。')) return;
+    const r = await (await fetch('/api/railway_delete', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({index: curIdx})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){
+      status(r.msg);
+      curIdx = -1;
+      document.getElementById('railEdit').style.display = 'none';
+      if(window.RAIL_DATA_PRE) window.RAIL_DATA_PRE = null;
+      if(window.mapDrawRails) window.mapDrawRails();
+      await loadRails();
+    }
+  }
+
+  async function loadSupply(){
+    const stat = document.getElementById('supStat');
+    if(stat) stat.textContent = '读取中…';
+    const r = await (await fetch('/api/supply_areas')).json();
+    if(!r.ok){ if(stat) stat.textContent = r.msg || '读取失败'; return; }
+    if(stat) stat.textContent = r.msg;
+    const box = document.getElementById('supList');
+    box.innerHTML = (r.items || []).map(function(a){
+      return '<div style="padding:3px 6px;font-size:11.5px;font-family:Consolas,monospace">'
+        + '区 ' + a.id + '　价值 ' + a.value + '　' + a.count + ' 州　'
+        + '<span style="color:var(--t3)">' + (a.states || []).slice(0, 6).join(',') + '</span></div>';
+    }).join('');
+  }
+
+  function bind(){
+    ['railRefresh','railSave','railDel','supRefresh'].forEach(function(id){
+      const el = document.getElementById(id);
+      if(!el || el.dataset.bound) return;
+      el.dataset.bound = '1';
+      if(id === 'railRefresh') el.onclick = loadRails;
+      if(id === 'railSave') el.onclick = saveRail;
+      if(id === 'railDel') el.onclick = delRail;
+      if(id === 'supRefresh') el.onclick = loadSupply;
+    });
+  }
+  window.mapBindRail = bind;
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
 })();
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */

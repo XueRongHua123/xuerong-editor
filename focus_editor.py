@@ -6256,6 +6256,173 @@ def railway_set_level(index, level, root=None):
     return {"ok": False, "msg": "这条铁路是块式写法，暂不支持改等级"}
 
 
+def railway_edit(index, level=None, provs=None, root=None):
+    """改某条铁路：等级 / 省份序列（行式直接改该行，块式重建块）"""
+    root = _map_pick(root)
+    path, base = _railway_file(root)
+    if not path:
+        return {"ok": False, "msg": "找不到 map/railways.txt"}
+    if os.path.abspath(base) == os.path.abspath(GAME or ""):
+        return {"ok": False, "msg": "railways.txt 来自原版，只读"}
+    try:
+        index = int(index)
+    except Exception:
+        return {"ok": False, "msg": "铁路序号不合法"}
+
+    rails = _railway_parse(path)
+    if index < 0 or index >= len(rails):
+        return {"ok": False, "msg": "没有第 %d 条铁路" % index}
+    cur = rails[index]
+
+    new_level = int(level) if level not in (None, "") else cur["level"]
+    new_level = max(1, min(10, new_level))
+    new_provs = cur["provs"]
+    if provs:
+        try:
+            cand = [int(x) for x in provs]
+        except Exception:
+            return {"ok": False, "msg": "省份列表不合法"}
+        if len(cand) < 2:
+            return {"ok": False, "msg": "铁路至少要有 2 个省"}
+        # 邻接校验：相邻两省必须接壤，否则游戏里会断
+        allnb = _all_prov_neighbors(root)
+        bad = [[a, b] for a, b in zip(cand, cand[1:]) if b not in (allnb.get(a) or ())]
+        if bad:
+            return {"ok": False,
+                    "msg": "这些相邻省不接壤，会断连：%s" % bad[:3]}
+        new_provs = cand
+
+    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    lines = raw.splitlines(True)
+
+    if cur.get("form") == "line":
+        # 行式在原文里的行号
+        rows = []
+        for i, ln in enumerate(lines):
+            parts = ln.strip().split()
+            if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
+                try:
+                    n = int(parts[1])
+                    if len(parts[2:2 + n]) == n:
+                        rows.append(i)
+                except Exception:
+                    pass
+        if index >= len(rows):
+            return {"ok": False, "msg": "定位不到这一行"}
+        i = rows[index]
+        tail = chr(10) if lines[i].endswith(chr(10)) else ""
+        lines[i] = "%d %d %s%s" % (new_level, len(new_provs),
+                                   " ".join(str(p) for p in new_provs), tail)
+        snapshot(path)
+        io.open(path, "wb").write(b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
+        return {"ok": True, "index": index, "level": new_level, "provs": new_provs,
+                "msg": "第 %d 条铁路已更新：等级 %d，%d 个省" % (
+                    index, new_level, len(new_provs))}
+
+    # 块式：整条重建
+    text = strip_comments(raw)
+    blocks = []
+    for m in re.finditer(r'(?m)^\s*railway\s*=\s*\{', text):
+        b = text.find("{", m.end() - 1)
+        e = brace_match(text, b)
+        if e > b:
+            blocks.append((b, e))
+    if index >= len(blocks):
+        return {"ok": False, "msg": "定位不到这个块"}
+    b, e = blocks[index]
+    body = ("\n\tlevel = %d\n\tprovinces = {\n\t\t%s\n\t}\n" % (
+        new_level, "\n\t\t".join(str(p) for p in new_provs)))
+    new_raw = raw[:b + 1] + body + raw[e - 1:]
+    snapshot(path)
+    io.open(path, "wb").write(b"\xef\xbb\xbf" + new_raw.encode("utf-8"))
+    return {"ok": True, "index": index, "level": new_level, "provs": new_provs,
+            "msg": "第 %d 条铁路（块式）已重建" % index}
+
+
+def railway_delete(index, root=None):
+    """删除一条铁路（行式删行，块式删块）"""
+    root = _map_pick(root)
+    path, base = _railway_file(root)
+    if not path:
+        return {"ok": False, "msg": "找不到 map/railways.txt"}
+    if os.path.abspath(base) == os.path.abspath(GAME or ""):
+        return {"ok": False, "msg": "railways.txt 来自原版，只读"}
+    try:
+        index = int(index)
+    except Exception:
+        return {"ok": False, "msg": "序号不合法"}
+    rails = _railway_parse(path)
+    if index < 0 or index >= len(rails):
+        return {"ok": False, "msg": "没有第 %d 条铁路" % index}
+    cur = rails[index]
+    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    lines = raw.splitlines(True)
+    if cur.get("form") == "line":
+        rows = []
+        for i, ln in enumerate(lines):
+            parts = ln.strip().split()
+            if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
+                try:
+                    n = int(parts[1])
+                    if len(parts[2:2 + n]) == n:
+                        rows.append(i)
+                except Exception:
+                    pass
+        if index >= len(rows):
+            return {"ok": False, "msg": "定位不到这一行"}
+        del lines[rows[index]]
+        snapshot(path)
+        io.open(path, "wb").write(b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
+        return {"ok": True, "msg": "已删除第 %d 条铁路（%d 个省）" % (index, len(cur["provs"]))}
+    return {"ok": False, "msg": "块式铁路暂不支持删除"}
+
+
+def supply_areas(root=None):
+    """列出补给区：id、价值、覆盖的州"""
+    root = _map_pick(root)
+    out = []
+    seen_ids = set()
+    for base in reversed(mod_layers(root) or []):
+        if not base:
+            continue
+        d = os.path.join(base, "map", "supplyareas")
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(os.listdir(d)):
+            if not fn.endswith(".txt"):
+                continue
+            p = os.path.join(d, fn)
+            try:
+                text = strip_comments(io.open(p, encoding="utf-8-sig", errors="replace").read())
+            except Exception:
+                continue
+            for m in re.finditer(r'supply_area\s*=\s*\{', text):
+                b = text.find("{", m.end() - 1)
+                e = brace_match(text, b)
+                if e <= b:
+                    continue
+                body = text[b + 1:e - 1]
+                sid = re.search(r'(?m)^\s*id\s*=\s*(\d+)', body)
+                if not sid:
+                    continue
+                sid = int(sid.group(1))
+                val = re.search(r'(?m)^\s*value\s*=\s*(\d+)', body)
+                st = re.search(r'states\s*=\s*\{([^}]*)\}', body)
+                states = [int(x) for x in re.findall(r'\d+', st.group(1))] if st else []
+                out.append({"id": sid, "value": int(val.group(1)) if val else 0,
+                            "states": states, "count": len(states),
+                            "file": os.path.relpath(p, base),
+                            "root": os.path.abspath(base)})
+                seen_ids.add(sid)
+    # 同名 id 以最后一层（mod）为准
+    merged = {}
+    for a in out:
+        merged[a["id"]] = a
+    items = sorted(merged.values(), key=lambda x: x["id"])
+    return {"ok": True, "count": len(items), "items": items,
+            "msg": "共 %d 个补给区" % len(items)}
+
+
 def _terrain_colors(root):
     """从 common/terrain/*.txt 读各地形类别的游戏内配色 {name: (r,g,b)}。
     mod 定义了同名类别就覆盖原版；读不到就返回空字典。"""
@@ -8597,6 +8764,8 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/log":
             _q = parse_qs(urlparse(self.path).query)
             self._send(read_error_log((_q.get("path", [""])[0] or None)))
+        elif path_only == "/api/supply_areas":
+            self._send(supply_areas(_map_pick(None)))
         elif path_only == "/api/railways":
             _q = parse_qs(urlparse(self.path).query)
             self._send(railways_list(_q.get("root", [None])[0]))
@@ -8917,6 +9086,11 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 ok, msg = load_mod_root(ds[0])
                 self._send({"ok": ok, "msg": msg})
+        elif self.path == "/api/railway_edit":
+            self._send(railway_edit(body.get("index"), body.get("level"),
+                                    body.get("provs"), body.get("root")))
+        elif self.path == "/api/railway_delete":
+            self._send(railway_delete(body.get("index"), body.get("root")))
         elif self.path == "/api/railway_level":
             self._send(railway_set_level(body.get("index"), body.get("level"),
                                          body.get("root")))
