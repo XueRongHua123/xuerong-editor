@@ -1426,6 +1426,28 @@ def state_save(sid, fields):
         return {"ok": False, "msg": "这个州没有来源文件"}
     if is_under_game(root):
         return {"ok": False, "msg": "原版目录只读：请先复制到自己的模组再修改"}
+    # 州的记录可能来自父 mod。直接改父 mod 的文件会污染别人的 mod，
+    # 正确做法是在链顶（当前加载的最上层）建同名文件覆盖它。
+    try:
+        _top = None
+        for _r in (ROOTS or []):
+            _lay = mod_layers(_r) or [_r]
+            _cand = _lay[-1] if _lay else _r
+            if _cand and not is_under_game(_cand):
+                _top = _cand
+        if _top and os.path.abspath(_top) != os.path.abspath(root):
+            root = _top
+            _dst = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(_dst) or root, exist_ok=True)
+            if not os.path.exists(_dst) and os.path.exists(os.path.join(s.get("root") or "", rel)):
+                # 父 mod 有原文件：先复制一份过来，再在副本上改
+                try:
+                    import shutil as _sh
+                    _sh.copyfile(os.path.join(s.get("root") or "", rel), _dst)
+                except Exception:
+                    pass
+    except Exception:
+        pass
     p = os.path.join(root, rel)
     if not os.path.exists(p):
         return {"ok": False, "msg": "州文件不存在：" + rel}
