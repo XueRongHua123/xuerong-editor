@@ -1357,6 +1357,24 @@
             </div>
             <div class="lt-group" style="margin-top:8px">
               <div class="lt-title">诊断</div>
+              <div class="mp-k" style="margin-top:8px">师团模板</div>
+              <div class="mp-acts"><button class="btn" id="tplLoad" style="font-size:11px">载入模板</button></div>
+              <div id="tplList" style="max-height:150px;overflow:auto;margin-top:4px"></div>
+              <div id="tplEditor" style="display:none;margin-top:6px;border-top:1px solid var(--line);padding-top:6px">
+                <div class="mp-acts">
+                  <input id="tplName" placeholder="模板名" style="height:24px;flex:1;min-width:0">
+                </div>
+                <div class="mp-k" style="margin-top:4px">编制格（点格选兵种）</div>
+                <div id="tplGrid" style="display:grid;grid-template-columns:repeat(5,34px);grid-auto-rows:30px;gap:2px;margin-top:2px"></div>
+                <div class="mp-k" style="margin-top:4px">支援格</div>
+                <div id="tplSup" style="display:grid;grid-template-columns:repeat(5,34px);grid-auto-rows:24px;gap:2px;margin-top:2px"></div>
+                <div class="mp-acts" style="margin-top:6px">
+                  <button class="btn" id="tplSave">保存</button>
+                  <button class="btn" id="tplDel">删除</button>
+                  <button class="btn" id="tplNew">新建</button>
+                </div>
+                <div class="mp-k" id="tplMsg" style="min-height:16px;line-height:1.5"></div>
+              </div>
               <div class="mp-k" style="margin-top:8px">目录写入目标</div>
               <div class="mp-acts"><button class="btn" id="wtBtn" style="font-size:11px">检查写入层</button><button class="btn" id="wtVerify" style="font-size:11px">校验接管</button></div>
               <div id="wtList" style="max-height:220px;overflow:auto;margin-top:4px"></div>
@@ -8641,6 +8659,172 @@ function makePannable(svg, body){
     window.mapShowOps = wrapped;
   }
 
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.3 师团模板编辑（编制格可视化）
+(function(){
+  let TPLS = [], TPL = null, BATS = [], GRID = {}, SUP = {};
+  const ROWS = 5, COLS = 5;
+
+  function msg(t, bad){
+    const el = document.getElementById('tplMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  async function loadBats(){
+    if(BATS.length) return;
+    try{
+      const r = await (await fetch('/api/battalions', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+      if(r.ok){
+        BATS = [];
+        (r.groups || []).forEach(function(g){
+          (g.items || []).forEach(function(x){ x.group = g.group; BATS.push(x); });
+        });
+      }
+    }catch(e){}
+  }
+
+  function pickBat(x, y, isSup){
+    const opts = BATS.map(function(b){
+      return '<option value="' + b.id + '">[' + b.group + '] ' + b.id + '</option>';
+    }).join('');
+    const cur = (isSup ? SUP : GRID)[x + ',' + y] || '';
+    const sel = prompt('格子 (' + x + ',' + y + ') 填兵种 id（留空删除）：\n\n可选：' + BATS.slice(0, 12).map(b=>b.id).join(', '), cur);
+    if(sel === null) return;
+    const v = sel.trim();
+    const map = isSup ? SUP : GRID;
+    if(!v) delete map[x + ',' + y];
+    else map[x + ',' + y] = v;
+    renderGrid();
+  }
+
+  function renderGrid(){
+    const g = document.getElementById('tplGrid');
+    if(g){
+      let h = '';
+      for(let y=0; y<ROWS; y++){
+        for(let x=0; x<COLS; x++){
+          const v = GRID[x+','+y];
+          const short = v ? v.replace(/^MVLV_/, '').slice(0, 6) : '';
+          h += '<div class="tpl-cell" data-x="' + x + '" data-y="' + y + '" data-sup="0"'
+            + ' style="display:flex;align-items:center;justify-content:center;cursor:pointer;'
+            + 'font-size:9px;font-family:Consolas,monospace;border:1px solid var(--line);border-radius:3px;'
+            + 'background:' + (v ? 'var(--accent,#2d5)' : 'var(--input)') + ';color:' + (v ? '#fff' : 'var(--t3)') + '">'
+            + (short || '+') + '</div>';
+        }
+      }
+      g.innerHTML = h;
+      g.querySelectorAll('.tpl-cell').forEach(function(c){
+        c.onclick = function(){ pickBat(Number(c.dataset.x), Number(c.dataset.y), false); };
+      });
+    }
+    const sp = document.getElementById('tplSup');
+    if(sp){
+      let h = '';
+      for(let x=0; x<COLS; x++){
+        const v = SUP[x+',0'];
+        h += '<div class="tpl-cell" data-x="' + x + '" data-y="0" data-sup="1"'
+          + ' style="display:flex;align-items:center;justify-content:center;cursor:pointer;'
+          + 'font-size:9px;font-family:Consolas,monospace;border:1px solid var(--line);border-radius:3px;'
+          + 'background:' + (v ? 'var(--warn,#a83)' : 'var(--input)') + ';color:' + (v ? '#fff' : 'var(--t3)') + '">'
+          + (v ? v.replace(/^MVLV_/, '').slice(0, 5) : '+') + '</div>';
+      }
+      sp.innerHTML = h;
+      sp.querySelectorAll('.tpl-cell').forEach(function(c){
+        c.onclick = function(){ pickBat(Number(c.dataset.x), 0, true); };
+      });
+    }
+  }
+
+  function openTpl(t){
+    TPL = t;
+    GRID = {}; SUP = {};
+    (t.regiments || []).forEach(function(r){ GRID[r.x + ',' + r.y] = r.unit; });
+    (t.support || []).forEach(function(r){ SUP[r.x + ',' + r.y] = r.unit; });
+    const box = document.getElementById('tplEditor');
+    if(box) box.style.display = '';
+    const nm = document.getElementById('tplName');
+    if(nm) nm.value = t.name;
+    renderGrid();
+    msg('编制 ' + (t.regiments||[]).length + ' 格，支援 ' + (t.support||[]).length + ' 格');
+  }
+
+  async function loadTpls(){
+    msg('读取模板…');
+    const r = await (await fetch('/api/units', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+    if(!r.ok){ msg(r.msg || '失败', true); return; }
+    TPLS = r.templates || [];
+    const box = document.getElementById('tplList');
+    if(box){
+      box.innerHTML = TPLS.map(function(t, i){
+        return '<div class="tpl-row" data-i="' + i + '" style="display:flex;gap:4px;'
+          + 'font-size:11px;font-family:Consolas,monospace;padding:1px 3px;cursor:pointer;'
+          + 'border-bottom:1px solid var(--line)">'
+          + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + t.name + '</span>'
+          + '<span style="color:var(--t3);font-size:10px">' + t.regiment_count + '/' + t.support_count + '</span>'
+          + '</div>';
+      }).join('');
+      box.querySelectorAll('.tpl-row').forEach(function(row){
+        row.onclick = function(){ openTpl(TPLS[Number(row.dataset.i)]); };
+      });
+    }
+    msg('共 ' + TPLS.length + ' 个模板，点一行编辑');
+    await loadBats();
+  }
+
+  async function saveTpl(){
+    if(!TPL){ msg('先选一个模板', true); return; }
+    const regs = Object.keys(GRID).map(function(k){
+      const a = k.split(',');
+      return {unit: GRID[k], x: Number(a[0]), y: Number(a[1])};
+    });
+    const sup = Object.keys(SUP).map(function(k){
+      const a = k.split(',');
+      return {unit: SUP[k], x: Number(a[0]), y: Number(a[1])};
+    });
+    const nm = (document.getElementById('tplName')||{}).value || TPL.name;
+    msg('保存中…');
+    const r = await (await fetch('/api/template_save', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name: TPL.name, fields:{new_name: nm, regiments: regs, support: sup}})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await loadTpls(); }
+  }
+
+  async function delTpl(){
+    if(!TPL){ msg('先选一个模板', true); return; }
+    if(!confirm('删除模板「' + TPL.name + '」？')) return;
+    const r = await (await fetch('/api/template_delete', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({name: TPL.name})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){
+      status(r.msg);
+      document.getElementById('tplEditor').style.display = 'none';
+      await loadTpls();
+    }
+  }
+
+  async function newTpl(){
+    const nm = prompt('新模板名（英文/数字/下划线）：','');
+    if(!nm) return;
+    const unit = prompt('第一格兵种 id：','infantry') || 'infantry';
+    const r = await (await fetch('/api/template_add', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name: nm, unit: unit, x: 0, y: 0})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await loadTpls(); }
+  }
+
+  function bind(){
+    [['tplLoad', loadTpls], ['tplSave', saveTpl], ['tplDel', delTpl], ['tplNew', newTpl]].forEach(function(p){
+      const el = document.getElementById(p[0]);
+      if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
+    });
+  }
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);
 })();

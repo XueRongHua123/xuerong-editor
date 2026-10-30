@@ -4181,6 +4181,68 @@ def load_units(root=None, force=False):
     return out
 
 
+_BAT_CACHE = {"root": "", "mtime": 0, "items": []}
+
+
+def load_battalions(root=None, force=False):
+    """解析 common/units 里的 sub_units（营级兵种），供编制格的下拉用。
+
+    每个兵种带 group（infantry / mobile / armor …），界面按组分类。
+    """
+    root = _map_pick(root)
+    base, files = "", []
+    try:
+        files, _r = _layer_files("common/units", mod_layers(root))
+        mt = max([os.path.getmtime(p) for p in files] or [0])
+        key = os.path.abspath(root or "")
+        if (not force and _BAT_CACHE["root"] == key
+                and _BAT_CACHE["mtime"] == mt and mt):
+            return _BAT_CACHE
+    except Exception:
+        files = []
+    out = []
+    seen = {}
+    for p in (files or []):
+        fn = os.path.basename(p)
+        if fn.endswith("equipment") or "equipment" in fn:
+            continue
+        try:
+            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        except Exception:
+            continue
+        text = _strip_keep_len(raw)
+        for a, b, body in find_blocks(text, "sub_units"):
+            for k, v, has in top_items(body):
+                if not has:
+                    continue
+                grp = _first(v, r'(?m)^\s*group\s*=\s*([a-z_]+)')
+                tp = _first(v, r'(?m)^\s*type\s*=\s*\{([^}]*)\}')
+                spr = _first(v, r'(?m)^\s*sprite\s*=\s*"([^"]*)"')
+                icon = _first(v, r'(?m)^\s*map_icon_category\s*=\s*([a-z_]+)')
+                seen[k] = {"id": k, "group": grp or "other",
+                           "type": " ".join((tp or "").split()),
+                           "sprite": spr, "icon": icon, "file": fn}
+    out = sorted(seen.values(), key=lambda x: (x["group"], x["id"]))
+    groups = {}
+    for x in out:
+        groups.setdefault(x["group"], []).append(x)
+    res = {"root": os.path.abspath(root or ""), "mtime": 0,
+           "items": out, "groups": groups, "total": len(out)}
+    try:
+        res["mtime"] = max([os.path.getmtime(p) for p in files] or [0])
+    except Exception:
+        pass
+    _BAT_CACHE.update(res)
+    return _BAT_CACHE
+
+
+def battalions_payload(root=None):
+    b = load_battalions(root)
+    return {"ok": True, "total": b["total"],
+            "groups": [{"group": k, "items": v} for k, v in sorted(b["groups"].items())],
+            "msg": "共 %d 个兵种，%d 组" % (b["total"], len(b["groups"]))}
+
+
 def _tpl_locate(root, name):
     """找到某个 division_template 定义在哪个文件、哪个偏移。
 
@@ -11590,6 +11652,8 @@ class Handler(SimpleHTTPRequestHandler):
                                       body.get("root")))
         elif self.path == "/api/equipment_delete":
             self._send(equipment_delete(body.get("id"), body.get("root")))
+        elif self.path == "/api/battalions":
+            self._send(battalions_payload(body.get("root") or None))
         elif self.path == "/api/template_save":
             self._send(template_save(body.get("name"), body.get("fields") or {},
                                      body.get("root") or None))
