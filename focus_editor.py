@@ -1164,6 +1164,38 @@ def _insert_pos(body, lo, hi):
     return pos
 
 
+def _set_owner_all(body, owner, hb, he):
+    """改所有 owner：history 直接子级 + 所有日期块内的。
+
+    HOI4 的语义是「日期块覆盖直接子级」：state 里写
+        history = { 1999.1.1 = { owner = EUR }  owner = SOV }
+    开局若在 1999 之后，生效的是 EUR 而不是 SOV。
+    只改直接子级的话，游戏里看到的还是日期块里的旧值。
+    """
+    # 先改所有日期块内的（depth == 2）
+    dep = _hist_depths(body)
+    pat = re.compile(r'(?m)^([ \t]*)owner\s*=\s*[^\s#\r\n]+')
+    out, last, hit = [], 0, False
+    for m in pat.finditer(body, hb if hb > 0 else 0, he if hb > 0 else len(body)):
+        if m.start() < len(dep) and dep[m.start()] == 2:
+            out.append(body[last:m.start()])
+            out.append((m.group(1) or "") + "owner = " + owner)
+            last = m.end()
+            hit = True
+    if hit:
+        out.append(body[last:])
+        body = "".join(out)
+    # 再改直接子级（没有就插入）
+    if hb > 0:
+        before = body
+        body = _set_in_scope(body, "owner", owner, 1, hb, he)
+        if body == before:
+            body = _set_in_scope(body, "owner", owner, 1, hb, he, insert=True)
+    else:
+        body = _set_in_scope(body, "owner", owner, 0, 0, len(body), insert=True)
+    return body
+
+
 def _set_in_scope(body, key, value, want_depth, lo, hi, insert=False):
     pat = re.compile(r'(?m)^([ \t]*)%s\s*=\s*[^\s#\r\n]+' % re.escape(key))
     dep = _hist_depths(body)
@@ -1495,14 +1527,8 @@ def state_save(sid, fields):
 
     if owner and owner != old_owner:
         before = body
-        if hist:
-            body = _set_in_scope(body, "owner", owner, 1, hb, he)
-            if body == before:
-                body = _set_in_scope(body, "owner", owner, 2, hb, he)
-            if body == before:
-                body = _set_in_scope(body, "owner", owner, 1, hb, he, insert=True)
-        else:
-            body = _set_in_scope(body, "owner", owner, 0, 0, len(body), insert=True)
+        # 日期块会覆盖直接子级，必须两处一起改，否则游戏里看到的还是旧值
+        body = _set_owner_all(body, owner, hb if hist else 0, he if hist else 0)
         if body != before:
             diff.append({"key": "owner", "label": "所属国家", "old": old_owner, "new": owner})
 
