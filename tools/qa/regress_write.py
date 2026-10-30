@@ -116,8 +116,9 @@ def run_one(mod):
         items = [x for x in (types.get('items') or []) if x.get('writable')]
         if not items:
             return False, '没有可写地形类型'
+        # 倒序找：mod_layers 是 [原版, 父mod, 子mod]，要先看子 mod 自己的
         tb = None
-        for base in fe.mod_layers(dst) or []:
+        for base in reversed(fe.mod_layers(dst) or []):
             p2 = os.path.join(base or '', 'map', 'terrain.bmp')
             if os.path.exists(p2):
                 tb = p2
@@ -165,7 +166,20 @@ def run_one(mod):
         allp = pick_provs(dst, 100000)      # 取全部省，避免样本太小
         free = [p for p in allp if p not in used][:1]
         if not free:
-            return False, '没有空闲省'
+            # 所有省都已被战略区覆盖：改成测「修改已有区的范围」
+            mine = [x for x in (sr.get('items') or [])
+                    if os.path.abspath(x.get('base') or '') == os.path.abspath(dst)]
+            if not mine:
+                return False, '没有可改的战略区（全部来自只读层）'
+            it = mine[0]
+            own = list(it.get('provinces') or [])
+            if len(own) < 2:
+                return False, '这个战略区只有 %d 个省，无法测改范围' % len(own)
+            newp = own[:-1]
+            r = fe.strategic_region_set_provinces(it['id'], newp, dst)
+            if not r.get('ok'):
+                return False, r.get('msg') or '改范围失败'
+            return True, '改范围 %d：%d→%d 省' % (it['id'], len(own), len(newp))
         r = fe.strategic_region_create(dst, None, 'REG_TEST', free)
         if not r.get('ok'):
             return False, r.get('msg') or '失败'
@@ -206,9 +220,11 @@ def run_one(mod):
     # --- 5) 州细化 ---
     def t_stref():
         cand = sorted(((len(s.get('provinces') or []), sid)
-                       for sid, s in fe.STATES.items()), reverse=True)
+                       for sid, s in fe.STATES.items()
+                       if s.get('root') and os.path.abspath(s.get('root')) == os.path.abspath(dst)),
+                      reverse=True)
         if not cand or cand[0][0] < 4:
-            return False, '没有够大的州'
+            return False, '当前 mod 层没有够了大的州（省数 < 4）'
         n0, sid = cand[0]
         before = len(fe.STATES)
         r = fe.state_refine_apply(sid, 2, dst)

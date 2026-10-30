@@ -759,10 +759,38 @@ def _first(text, pat, default=""):
 
 
 def _prefer(existing, root):
-    """同一个 tag/state 谁说了算：mod 优先于游戏目录（原版参考是只读层）"""
+    """同一个 tag/state 谁说了算。
+
+    HOI4 语义：后加载的覆盖先加载的。所以：
+      1. 没有记录 → 收
+      2. 现有记录来自原版 → 覆盖（原版是只读参考层）
+      3. 现有记录来自同一层 → 覆盖（重复加载要幂等）
+      4. 都在叠加链里 → 位置更靠后的优先
+      5. 现有记录的层不在链里（游离目录）→ 覆盖
+
+    原来只判断「现有是否来自原版」，导致父 mod 的记录挡住了子 mod，
+    加载 submod 时它的州文件永远被跳过、state_save 会报「州文件不存在」。"""
     if not existing:
         return True
-    return is_under_game(existing.get("root", ""))
+    old_root = existing.get("root", "") or ""
+    # 原版记录可以被任何 mod 覆盖
+    if is_under_game(old_root):
+        return True
+    # 原版不能覆盖 mod 记录（mod_layers(GAME) 只有一层，index 会抛错并误判为可覆盖）
+    if is_under_game(root):
+        return False
+    if os.path.abspath(old_root) == os.path.abspath(root or ""):
+        return True
+    # 两个都是 mod：按 ROOTS 展开的完整叠加链判断谁更靠后
+    bases = []
+    for _r in (ROOTS or []):
+        for _b in (mod_layers(_r) or [_r]):
+            if _b and os.path.abspath(_b) not in [os.path.abspath(x) for x in bases]:
+                bases.append(_b)
+    try:
+        return bases.index(os.path.abspath(root or "")) >= bases.index(os.path.abspath(old_root))
+    except ValueError:
+        return True
 
 
 def _read_text(path):
@@ -997,6 +1025,17 @@ def load_states(root):
     for path in files:
         fn = os.path.basename(path)
         rel = os.path.join("history", "states", fn)
+        # 文件来自叠加链的哪一层：必须按实际路径反推，不能一律用函数参数 root，
+        # 否则原版的 1-France.txt 会被记成「子 mod 的文件」，state_save 就会报文件不存在。
+        file_root = None
+        _ap = os.path.abspath(path)
+        for _b in (layers or []):
+            if _b and _ap.startswith(os.path.abspath(_b) + os.sep):
+                file_root = _b
+                break
+        if not file_root:
+            continue
+        src_name = os.path.basename(file_root.rstrip("\\/")) or file_root
         text = _read_text(path)
         for s, e, body in find_blocks(text, "state"):
             sid = _first(body, r'(?m)^\s*id\s*=\s*(-?\d+)')
@@ -1004,7 +1043,7 @@ def load_states(root):
                 continue
             sid = int(sid)
             cur = STATES.get(sid)
-            if not _prefer(cur, root):
+            if not _prefer(cur, file_root):
                 continue
 
             dep = _hist_depths(body)
@@ -1057,7 +1096,7 @@ def load_states(root):
             hist_date = _first(body, r'(?m)^[ \t]*(\d{3,4}\.\d{1,2}\.\d{1,2})\s*=\s*\{')
 
             STATES[sid] = {
-                "id": sid, "file": rel, "root": root, "source": name,
+                "id": sid, "file": rel, "root": file_root, "source": src_name,
                 "name": _first(body, r'(?m)^\s*name\s*=\s*"?([A-Za-z0-9_]+)"?'),
                 "manpower": _first(body, r'(?m)^\s*manpower\s*=\s*(\d+)'),
                 "category": _first(body, r'(?m)^\s*state_category\s*=\s*(\w+)'),
@@ -3781,12 +3820,22 @@ def bmp_write_rect(path, x0, y0, w, h, pixels):
 PROV_RGB = {}   # 省 id -> (r,g,b)，来自 definition.csv
 
 
+_PROV_RGB_CACHE = {}
+
+
 def _ensure_prov_rgb(root=None):
-    """按需从 definition.csv 加载省颜色（只在涂色时才需要，避免启动变慢）"""
-    if PROV_RGB:
+    """按需从 definition.csv 加载省颜色，**按 mod 缓存**。
+
+    原来用全局单例：第一个 mod 加载完就再也不更新，换 mod 后它的省号全部「不存在」。
+    实测后果：跑回归时先测 CN 再测京都，京都的 17214/17217 被判为不存在，州细化失败。"""
+    _root = _map_pick(root or None)
+    key = os.path.abspath(_root or "")
+    if key in _PROV_RGB_CACHE:
+        PROV_RGB.clear()
+        PROV_RGB.update(_PROV_RGB_CACHE[key])
         return PROV_RGB
+    PROV_RGB.clear()
     try:
-        _root = _map_pick(root or None)
         _layers = mod_layers(_root)
         csvp, _prov = _layers_find("map/definition.csv", _layers)
         if not csvp or not os.path.exists(csvp):
@@ -3802,6 +3851,7 @@ def _ensure_prov_rgb(root=None):
                     continue
     except Exception as e:
         print("加载 definition.csv 颜色失败:", e)
+    _PROV_RGB_CACHE[key] = dict(PROV_RGB)
     return PROV_RGB
 MAP_EDIT = {"pending": [], "undo": [], "redo": [], "file": "", "touched": set()}
 MAP_UNDO_DIR = os.path.join(WORK, "mapundo")
