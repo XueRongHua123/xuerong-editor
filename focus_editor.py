@@ -4380,6 +4380,64 @@ def country_tech_toggle(root, tag, tech, on=True):
     return {"ok": True, "msg": "%s %s" % ("已加" if on else "已删", tech)}
 
 
+def tech_tree_graph(folder="", tag=None, root=None):
+    """返回某个 folder 下的科技树节点与连线，供预览渲染。
+
+    坐标来自 TECHS 的 fx / fy（解析 technologies 定义时读的 x / y）。
+    tag 给了就带上该国的解锁状态（unlocked）。
+    """
+    root = _map_pick(root)
+    folder = (folder or "").strip()
+    unlocked = set()
+    if tag:
+        try:
+            unlocked = set(load_country_techs(root, tag).get("unlocked") or [])
+        except Exception:
+            unlocked = set()
+    if not folder:
+        from collections import Counter
+        c = Counter((t.get("path") or "") for t in TECHS.values())
+        folders = [{"folder": k or "其他", "count": v}
+                   for k, v in sorted(c.items(), key=lambda kv: -kv[1])]
+        return {"ok": True, "folders": folders,
+                "msg": "%d 个科技目录" % len(folders)}
+
+    nodes, byid = [], {}
+    for tid, t in TECHS.items():
+        if (t.get("path") or "") != folder:
+            continue
+        fx, fy = t.get("fx"), t.get("fy")
+        if fx in (None, "") or fy in (None, ""):
+            continue
+        try:
+            x = float(fx)
+            y = float(fy)
+        except Exception:
+            continue
+        n = {"id": tid, "name": t.get("name") or tid,
+             "x": x, "y": y, "year": t.get("year") or "",
+             "cost": t.get("cost") or "",
+             "on": tid in unlocked}
+        nodes.append(n)
+        byid[tid] = n
+    edges = []
+    for tid, t in TECHS.items():
+        if tid not in byid:
+            continue
+        for child in (t.get("leads") or []):
+            if child in byid:
+                edges.append([tid, child])
+    # 没坐标的也报一下数量，界面可以提示
+    noxy = sum(1 for tid, t in TECHS.items()
+               if (t.get("path") or "") == folder
+               and (t.get("fx") in (None, "") or t.get("fy") in (None, "")))
+    return {"ok": True, "folder": folder, "nodes": nodes, "edges": edges,
+            "total": len(nodes), "noxy": noxy,
+            "msg": "%s：%d 个节点、%d 条连线%s" % (
+                folder, len(nodes), len(edges),
+                ("，%d 个无坐标已跳过" % noxy) if noxy else "")}
+
+
 def country_techs_payload(root=None, tag=""):
     """界面用：已解锁 + 全部科技分组。"""
     info = load_country_techs(root, tag)
@@ -11813,6 +11871,10 @@ class Handler(SimpleHTTPRequestHandler):
                                       body.get("root")))
         elif self.path == "/api/equipment_delete":
             self._send(equipment_delete(body.get("id"), body.get("root")))
+        elif self.path == "/api/tech_graph":
+            self._send(tech_tree_graph(body.get("folder") or "",
+                                       body.get("tag") or None,
+                                       body.get("root") or None))
         elif self.path == "/api/country_techs":
             self._send(country_techs_payload(body.get("root") or None,
                                              body.get("tag") or ""))

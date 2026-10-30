@@ -1398,6 +1398,17 @@
             </div>
             <div class="mp-k" id="ctechMsg" style="min-height:16px;line-height:1.5"></div>
             <div id="ctechList" style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
+            <div class="mp-k" style="margin-top:8px">科技树预览</div>
+            <div class="mp-acts">
+              <select id="ttFolder" style="height:24px;flex:1;min-width:0;font-size:11px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px">
+                <option value="">（选目录）</option>
+              </select>
+              <button class="btn" id="ttDraw">画</button>
+            </div>
+            <div class="mp-k" id="ttMsg" style="min-height:16px;line-height:1.5"></div>
+            <div id="ttBody" style="height:260px;overflow:auto;border:1px solid var(--line);border-radius:4px;background:var(--bg2,#0e1116)">
+              <svg id="techTreeSvg" style="display:block;width:100%;height:100%"></svg>
+            </div>
             <div class="mp-sep"></div>
           </div>
           <div id="selBox">
@@ -8932,6 +8943,101 @@ function makePannable(svg, body){
       t.dataset.bound = '1';
       t.addEventListener('keydown', function(e){ if(e.key === 'Enter') load(); });
     }
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.5 科技树预览（SVG）
+(function(){
+  const CELL = 34, PAD = 16;
+  let TDATA = null;
+
+  function msg(t, bad){
+    const el = document.getElementById('ttMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  async function loadFolders(){
+    const sel = document.getElementById('ttFolder');
+    if(!sel) return;
+    const r = await (await fetch('/api/tech_graph', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({folder:''})})).json();
+    if(!r.ok){ msg(r.msg || '失败', true); return; }
+    sel.innerHTML = '<option value="">（选目录）</option>' + (r.folders || []).map(function(f){
+      return '<option value="' + f.folder + '">' + f.folder + '（' + f.count + '）</option>';
+    }).join('');
+    msg(r.msg || '');
+  }
+
+  async function draw(){
+    const sel = document.getElementById('ttFolder');
+    const svg = document.getElementById('techTreeSvg');
+    if(!sel || !svg) return;
+    const folder = sel.value;
+    if(!folder){ msg('先选目录', true); return; }
+    const tag = ((document.getElementById('ctechTag')||{}).value || '').trim().toUpperCase();
+    msg('读取中…');
+    const g = await (await fetch('/api/tech_graph', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({folder: folder, tag: tag || null})})).json();
+    if(!g.ok){ msg(g.msg || '失败', true); svg.innerHTML = ''; return; }
+    TDATA = g;
+    msg(g.msg || '');
+    const nodes = g.nodes || [];
+    if(!nodes.length){ svg.innerHTML = ''; return; }
+    const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y);
+    const minX = Math.min(...xs), minY = Math.min(...ys);
+    const maxX = Math.max(...xs), maxY = Math.max(...ys);
+    const W = (maxX - minX + 1) * CELL + PAD * 2;
+    const H = (maxY - minY + 1) * CELL + PAD * 2;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    svg.setAttribute('data-w', W);
+    svg.setAttribute('data-h', H);
+    svg.style.width = W + 'px';
+    svg.style.height = H + 'px';
+
+    const px = function(v){ return PAD + (v - minX) * CELL + CELL / 2; };
+    const py = function(v){ return PAD + (v - minY) * CELL + CELL / 2; };
+    const pos = {};
+    nodes.forEach(function(n){ pos[n.id] = [px(n.x), py(n.y)]; });
+
+    let out = '';
+    (g.edges || []).forEach(function(e){
+      const a = pos[e[0]], b = pos[e[1]];
+      if(!a || !b) return;
+      out += '<line x1="' + a[0] + '" y1="' + (a[1] + 11) + '" x2="' + b[0] + '" y2="' + (b[1] - 11)
+        + '" stroke="#4a5668" stroke-width="1.2"/>';
+    });
+    nodes.forEach(function(n){
+      const p = pos[n.id];
+      const w = CELL - 6, h = 22;
+      const fill = n.on ? '#2e6b3a' : '#232a35';
+      const stroke = n.on ? '#5fd07a' : '#3a4453';
+      const tc = n.on ? '#d9ffe2' : '#98a3b3';
+      out += '<g class="tt-node" data-id="' + n.id + '">'
+        + '<rect x="' + (p[0] - w/2) + '" y="' + (p[1] - h/2) + '" width="' + w + '" height="' + h
+        + '" rx="3" fill="' + fill + '" stroke="' + stroke + '"/>'
+        + '<text x="' + p[0] + '" y="' + (p[1] + 3) + '" text-anchor="middle" font-size="8"'
+        + ' font-family="Consolas,monospace" fill="' + tc + '">'
+        + (n.year || n.id.slice(0, 6)) + '</text>'
+        + '<title>' + n.id + '\n' + (n.name || '') + (n.year ? '\n' + n.year + ' 年' : '') + '</title>'
+        + '</g>';
+    });
+    svg.innerHTML = out;
+    svg.querySelectorAll('.tt-node').forEach(function(gn){
+      gn.style.cursor = 'pointer';
+      gn.onclick = function(){ toggle(svg.querySelector('[data-id="' + gn.dataset.id + '"]'));
+      };
+    });
+  }
+
+  function bind(){
+    const b = document.getElementById('ttDraw');
+    if(b && !b.dataset.bound){ b.dataset.bound = '1'; b.onclick = draw; }
+    const s2 = document.getElementById('ttFolder');
+    if(s2 && !s2.dataset.bound){ s2.dataset.bound = '1'; s2.onchange = draw; }
+    if(s2 && !s2.dataset.filled){ s2.dataset.filled = '1'; loadFolders(); }
   }
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);
