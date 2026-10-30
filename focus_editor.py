@@ -3804,6 +3804,104 @@ def write_note(mod_root, sub):
     return "%s 未被 replace_path 接管，改动写进当前 mod" % sub
 
 
+def adopt_dir(mod_root, sub, force=False):
+    """在自己的 mod 里接管某个目录。
+
+    这是 CNsub 对 CN 做法的自动化：
+      1. 从当前生效的那一层全量拷贝该目录的文件
+      2. 在自己的 descriptor.mod 里加 replace_path
+    之后改这个目录，游戏就会读自己的那份。
+
+    只允许对链顶 mod 操作，不会动父 mod 或原版。
+    """
+    sub = (sub or "").replace("\\", "/").strip("/")
+    if not sub:
+        return {"ok": False, "msg": "目录名不能为空"}
+
+    # 目标必须是链顶（自己可写的那层），不能是原版
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return {"ok": False, "msg": "找不到可写的 mod 目录"}
+    if mod_root and os.path.abspath(mod_root) != os.path.abspath(top):
+        return {"ok": False, "msg": "只能对当前加载的最上层 mod 操作"}
+
+    layers = mod_layers(top) or [top]
+    # 源：当前生效的那一层（有 replace_path 就取接管层，否则取链里最后有的）
+    src = _replace_owner(top, sub)
+    if not src:
+        for b in reversed(layers):
+            if b and os.path.isdir(os.path.join(b, sub.replace("/", os.sep))):
+                src = b
+                break
+    if not src:
+        return {"ok": False, "msg": "叠加链里找不到 %s" % sub}
+
+    src_d = os.path.join(src, sub.replace("/", os.sep))
+    dst_d = os.path.join(top, sub.replace("/", os.sep))
+    if not os.path.isdir(src_d):
+        return {"ok": False, "msg": "源目录不存在：%s" % src_d}
+
+    already = os.path.isdir(dst_d) and os.listdir(dst_d)
+    if already and not force:
+        return {"ok": False, "need_confirm": True,
+                "msg": "自己的 mod 里已经有 %s（%d 个文件），接管会覆盖同名文件" % (
+                    sub, len(os.listdir(dst_d)))}
+
+    # 全量拷贝
+    os.makedirs(dst_d, exist_ok=True)
+    copied = 0
+    for fn in os.listdir(src_d):
+        sp = os.path.join(src_d, fn)
+        if not os.path.isfile(sp):
+            continue
+        dp = os.path.join(dst_d, fn)
+        try:
+            if force or not os.path.exists(dp):
+                import shutil as _sh
+                _sh.copyfile(sp, dp)
+                copied += 1
+        except Exception:
+            continue
+
+    # 在 descriptor.mod 里加 replace_path
+    desc_path = os.path.join(top, "descriptor.mod")
+    added = False
+    try:
+        txt = ""
+        if os.path.exists(desc_path):
+            txt = io.open(desc_path, encoding="utf-8-sig", errors="replace").read()
+        norm = sub.lower()
+        have = [x.replace("\\", "/").strip("/").lower()
+                for x in re.findall(r'replace_path\s*=\s*"([^"]*)"', txt)]
+        if norm not in have:
+            if txt and not txt.endswith("\n"):
+                txt += "\n"
+            txt += 'replace_path="%s"\n' % sub
+            io.open(desc_path, "wb").write(b"\xef\xbb\xbf" + txt.encode("utf-8"))
+            added = True
+    except Exception as e:
+        return {"ok": False, "msg": "目录已拷贝，但 descriptor.mod 写入失败：%s" % e}
+
+    # 清缓存，让下次读取按新结构走
+    try:
+        _LAYERS_CACHE.clear()
+    except Exception:
+        pass
+    reload_data()
+
+    src_name = os.path.basename(src.rstrip("\\/")) or src
+    return {"ok": True, "sub": sub, "from": src_name,
+            "copied": copied, "replace_added": added,
+            "msg": "已从 %s 接管 %s：拷贝 %d 个文件%s" % (
+                src_name, sub, copied,
+                "，并写入 replace_path" if added else "（replace_path 已存在）")}
+
+
 def write_targets(root=None):
     """列出各类资源在叠加链里的真实写入目标，给界面做提示。
 
@@ -10797,6 +10895,9 @@ class Handler(SimpleHTTPRequestHandler):
                                       body.get("root")))
         elif self.path == "/api/equipment_delete":
             self._send(equipment_delete(body.get("id"), body.get("root")))
+        elif self.path == "/api/adopt_dir":
+            self._send(adopt_dir(body.get("root"), body.get("sub"),
+                                 bool(body.get("force"))))
         elif self.path == "/api/write_targets":
             self._send(write_targets(self.q.get("root", [None])[0]))
         elif self.path == "/api/supply_save":

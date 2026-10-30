@@ -1356,6 +1356,10 @@
             </div>
             <div class="lt-group" style="margin-top:8px">
               <div class="lt-title">诊断</div>
+              <div class="mp-k" style="margin-top:8px">目录写入目标</div>
+              <div class="mp-acts"><button class="btn" id="wtBtn" style="font-size:11px">检查写入层</button></div>
+              <div id="wtList" style="max-height:220px;overflow:auto;margin-top:4px"></div>
+              <div class="mp-k" id="wtMsg" style="min-height:16px;line-height:1.5"></div>
               <div class="mp-acts"><button class="btn" id="orphanBtn" style="font-size:11px">孤儿 tag 检查</button></div>
               <div class="mp-k" id="orphanStat" style="min-height:16px;line-height:1.5"></div>
               <div id="orphanList" style="max-height:180px;overflow:auto;margin-top:4px"></div>
@@ -8318,6 +8322,63 @@ function makePannable(svg, body){
     if(rf && !rf.dataset.bound2){ rf.dataset.bound2 = '1'; rf.addEventListener('click', loadSup); }
   }
   window.mapBindSupply = bind;
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.20.6 目录写入目标 + 接管
+(function(){
+  function msg(t, bad){
+    const el = document.getElementById('wtMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  async function loadWT(){
+    const box = document.getElementById('wtList');
+    msg('读取中…');
+    const r = await (await fetch('/api/write_targets')).json();
+    if(!r.ok){ msg(r.msg || '失败', true); return; }
+    msg(r.msg);
+    if(!box) return;
+    box.innerHTML = (r.items || []).map(function(x){
+      const tag = x.blocked
+        ? '<span style="color:#e8a33d">独占</span>'
+        : '<span style="color:#7bc47f">可写</span>';
+      const btn = x.blocked
+        ? '<button class="btn wt-adopt" data-sub="' + x.sub + '" style="height:20px;font-size:10px;padding:0 6px">接管</button>'
+        : '';
+      return '<div style="display:flex;align-items:center;gap:6px;padding:2px 4px;'
+        + 'font-size:11px;font-family:Consolas,monospace;border-bottom:1px solid var(--line)">'
+        + '<span style="flex:1" title="' + x.note + '">' + x.sub + '</span>'
+        + '<span style="width:92px;text-align:right;font-size:10px;color:var(--t3)">' + (x.mod || '-') + '</span>'
+        + '<span style="width:34px;text-align:center;font-size:10px">' + tag + '</span>'
+        + btn
+        + '</div>';
+    }).join('');
+    box.querySelectorAll('.wt-adopt').forEach(function(b){
+      b.onclick = async function(){
+        const sub = b.dataset.sub;
+        if(!confirm('把 ' + sub + ' 从父 mod 全量拷贝到自己的 mod 并接管？\n\n拷贝后这个目录只读你自己的副本。')) return;
+        msg('接管 ' + sub + ' 中…');
+        let r2 = await (await fetch('/api/adopt_dir', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({sub: sub})})).json();
+        if(!r2.ok && r2.need_confirm){
+          if(!confirm(r2.msg + '\n\n继续？')){ msg('已取消', true); return; }
+          r2 = await (await fetch('/api/adopt_dir', {method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({sub: sub, force: true})})).json();
+        }
+        msg(r2.msg || '', !r2.ok);
+        if(r2.ok){ status(r2.msg); await loadWT(); }
+      };
+    });
+  }
+
+  function bind(){
+    const b = document.getElementById('wtBtn');
+    if(b && !b.dataset.bound){ b.dataset.bound = '1'; b.onclick = loadWT; }
+  }
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);
 })();
