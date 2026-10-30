@@ -1304,6 +1304,7 @@
             <img id="mapState" alt="">
             <img id="mapEdges" alt="">
             <img id="mapRivers" alt="">
+            <img id="mapUnits" alt="">
           </div>
           <div id="mapHud" style="display:none"><div id="mapHudText"></div></div>
           <canvas id="mapEdgeCanvas"></canvas>
@@ -1347,7 +1348,7 @@
               <label><input type="checkbox" id="mapLBase" checked>底图<input type="range" class="lt-op" data-op="base" min="0" max="100" value="100" title="底图 不透明度"></label>
               <label><input type="checkbox" id="mapLRivers">河流<input type="range" class="lt-op" data-op="rivers" min="0" max="100" value="100" title="河流 不透明度"></label>
               <label>透明度<input type="range" id="mapOpacity" min="20" max="100" value="85"></label>
-              <label title="只显示国家表里真实存在的 tag；孤儿 tag 不着色"><input type="checkbox" id="mapLStrict">政治严格模式</label>
+              <label title="只显示国家表里真实存在的 tag；孤儿 tag 不着色"><input type="checkbox" id="mapLUnits">开局部队　<input type="checkbox" id="mapLStrict">政治严格模式</label>
             </div>
             </div>
             <div class="lt-group" id="mapLayersBox" style="margin-top:8px">
@@ -7050,6 +7051,8 @@ function makePannable(svg, body){
         + '<button class="btn" id="stOwnerSave">保存</button>'
         + '</div>'
         + '<div class="mp-k" id="stOwnerMsg" style="min-height:16px"></div>'
+        + '<div class="mp-k" style="margin-top:8px">开局部队</div>'
+        + '<div id="provUnitsBox" style="max-height:140px;overflow:auto"></div>'
         + '<div class="mp-k" style="margin-top:10px">类别与人力</div>'
         + '<div class="mp-acts">'
         + '<select id="mvCat" style="height:26px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:5px">'
@@ -8444,6 +8447,60 @@ function makePannable(svg, body){
   window.__wtRenderCheck = renderCheck;
 })();
 
+// v1.21.1 开局部队图层面板
+(function(){
+  function bindUnitsLayer(){
+    const cb = document.getElementById('mapLUnits');
+    if(!cb || cb.dataset.bound) return;
+    cb.dataset.bound = '1';
+    cb.addEventListener('change', function(){
+      const img = document.getElementById('mapUnits');
+      if(img) img.style.display = cb.checked ? '' : 'none';
+    });
+  }
+  if(document.readyState !== 'loading') bindUnitsLayer();
+  else document.addEventListener('DOMContentLoaded', bindUnitsLayer);
+
+  // 省面板里显示该省的部队
+  async function loadProvUnits(){
+    const box = document.getElementById('provUnitsBox');
+    if(!box) return;
+    const pid = window.__curProvId;
+    if(!pid){ box.innerHTML = ''; return; }
+    box.innerHTML = '<div style="font-size:11px;color:var(--t3)">读取中…</div>';
+    let r = null;
+    try{
+      r = await (await fetch('/api/units', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+    }catch(e){ r = null; }
+    if(!r || !r.ok){ box.innerHTML = '<div style="font-size:11px;color:var(--danger)">读取失败</div>'; return; }
+    const lst = (r.by_prov || {})[String(pid)] || [];
+    if(!lst.length){
+      box.innerHTML = '<div style="font-size:11px;color:var(--t3)">这一省没有开局部队</div>';
+      return;
+    }
+    box.innerHTML = lst.map(function(d, i){
+      return '<div style="display:flex;gap:6px;align-items:center;font-size:11px;'
+        + 'font-family:Consolas,monospace;padding:1px 0">'
+        + '<span style="flex:1">' + (d.name || '(未命名)') + '</span>'
+        + '<span style="color:var(--t3);font-size:10px">' + (d.template || '') + '</span>'
+        + '</div>';
+    }).join('');
+  }
+  window.__loadProvUnits = loadProvUnits;
+  // 省切换时刷新（挂在 mapShowOps 上）
+  const orig = window.mapShowOps;
+  if(typeof orig === 'function'){
+    window.mapShowOps = function(){
+      const r = orig.apply(this, arguments);
+      setTimeout(function(){
+        if((window.MAP_PICK_UNIT || 'prov') === 'prov') loadProvUnits();
+      }, 260);
+      return r;
+    };
+  }
+})();
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
@@ -8691,7 +8748,7 @@ async function mapLoadMeta(root){
 
 // 图层文件重建后强制重载（src 相同浏览器会用缓存，必须先清空）
 window.mapReloadLayers = function(){
-  ['mapBase','mapPolit','mapRegion','mapTerrain','mapContinent','mapProv'].forEach(function(id){
+  ['mapBase','mapPolit','mapRegion','mapTerrain','mapContinent','mapProv','mapUnits'].forEach(function(id){
     const el = document.getElementById(id);
     if(el) el.setAttribute('src', '');
   });
@@ -8710,6 +8767,7 @@ async function mapLoadAssets(){
   };
   set('mapBase', 'base.png', 1);
   set('mapPolit', 'political.png', 0.9);
+  set('mapUnits', 'units.png', 1);
   set('mapRegion', 'region.png', 0.72);
   set('mapTerrain', 'terrain.png', 0.8);
   set('mapContinent', 'continent.png', 0.8);

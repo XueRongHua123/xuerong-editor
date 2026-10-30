@@ -2406,7 +2406,7 @@ def scripted_payload():
 
 # v0.71 地图图层构建（Pillow，无需 numpy）
 MAP_CACHE_DIR = os.path.join(WORK, "cache", "map")
-MAP_ASSETS = ("base.png", "province.png", "edges.png", "state.png", "political.png", "political_strict.png", "region.png", "terrain.png", "continent.png", "prov_id.png", "rivers.png",
+MAP_ASSETS = ("base.png", "province.png", "edges.png", "state.png", "political.png", "political_strict.png", "region.png", "terrain.png", "continent.png", "prov_id.png", "rivers.png", "units.png",
               "prov_index.json", "centers.json", "regions.json", "meta.json")
 
 
@@ -2757,7 +2757,7 @@ _REFINE_IDS_CACHE = {}
 
 def _refine_load_ids(root):
     """载入 省号数组（按 provinces.bmp + definition.csv 的 mtime 缓存）"""
-    from PIL import Image
+    from PIL import Image, ImageDraw
     Image.MAX_IMAGE_PIXELS = None
     layers = mod_layers(root)
     bmp, _ = _layers_find("map/provinces.bmp", layers)
@@ -5183,7 +5183,7 @@ def map_build(force=False, root=None):
         except Exception:
             pass
 
-    from PIL import Image
+    from PIL import Image, ImageDraw
     Image.MAX_IMAGE_PIXELS = None
     t_all = time.time()
 
@@ -5460,6 +5460,42 @@ def map_build(force=False, root=None):
             stbuf[o:o + 3] = oceanc if ptype in ("sea", "ocean", "lake") else neutral
         Image.frombytes("RGB", (w, h), bytes(stbuf)).save(
             os.path.join(dirp, "political_strict.png"))
+    except Exception as _e:
+        print("  严格版政治图跳过:", _e)
+    # 开局部队图层：每省按部队数画一个标记（透明底，叠在任意图层上）
+    try:
+        _u = load_units(root)
+        _by = _u.get("by_prov") or {}
+        _img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        _dr = ImageDraw.Draw(_img)
+        _cent = {}
+        try:
+            _cj = io.open(os.path.join(dirp, "centers.json"), encoding="utf-8").read()
+            _cent = json.loads(_cj) or {}
+        except Exception:
+            _cent = {}
+        for _pid_s, _lst in _by.items():
+            _c = _cent.get(str(_pid_s))
+            if not _c:
+                continue
+            try:
+                _cx, _cy = int(_c[0]), int(_c[1])
+            except Exception:
+                continue
+            _n = len(_lst)
+            # 半径随数量增长，封顶
+            _r = 6 if _n < 5 else (9 if _n < 20 else (12 if _n < 50 else 15))
+            _dr.ellipse([_cx - _r, _cy - _r, _cx + _r, _cy + _r],
+                        fill=(220, 60, 60, 200), outline=(255, 255, 255, 230), width=2)
+            _txt = str(_n) if _n < 100 else "99+"
+            try:
+                _dr.text((_cx, _cy), _txt, fill=(255, 255, 255, 255), anchor="mm")
+            except Exception:
+                pass
+        _img.save(os.path.join(dirp, "units.png"))
+        print("  部队图层: %d 个有部队的省" % len(_by))
+    except Exception as _e:
+        print("  部队图层生成失败: %s" % _e)
     except Exception as _e:
         print("  严格版政治图跳过:", _e)
     Image.frombytes("RGB", (w, h), bytes(regbuf)).save(os.path.join(dirp, "region.png"))
