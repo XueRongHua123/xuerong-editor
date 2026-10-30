@@ -1357,24 +1357,6 @@
             </div>
             <div class="lt-group" style="margin-top:8px">
               <div class="lt-title">诊断</div>
-              <div class="mp-k" style="margin-top:8px">师团模板</div>
-              <div class="mp-acts"><button class="btn" id="tplLoad" style="font-size:11px">载入模板</button></div>
-              <div id="tplList" style="max-height:150px;overflow:auto;margin-top:4px"></div>
-              <div id="tplEditor" style="display:none;margin-top:6px;border-top:1px solid var(--line);padding-top:6px">
-                <div class="mp-acts">
-                  <input id="tplName" placeholder="模板名" style="height:24px;flex:1;min-width:0">
-                </div>
-                <div class="mp-k" style="margin-top:4px">编制格（点格选兵种）</div>
-                <div id="tplGrid" style="display:grid;grid-template-columns:repeat(5,34px);grid-auto-rows:30px;gap:2px;margin-top:2px"></div>
-                <div class="mp-k" style="margin-top:4px">支援格</div>
-                <div id="tplSup" style="display:grid;grid-template-columns:repeat(5,34px);grid-auto-rows:24px;gap:2px;margin-top:2px"></div>
-                <div class="mp-acts" style="margin-top:6px">
-                  <button class="btn" id="tplSave">保存</button>
-                  <button class="btn" id="tplDel">删除</button>
-                  <button class="btn" id="tplNew">新建</button>
-                </div>
-                <div class="mp-k" id="tplMsg" style="min-height:16px;line-height:1.5"></div>
-              </div>
               <div class="mp-k" style="margin-top:8px">目录写入目标</div>
               <div class="mp-acts"><button class="btn" id="wtBtn" style="font-size:11px">检查写入层</button><button class="btn" id="wtVerify" style="font-size:11px">校验接管</button></div>
               <div id="wtList" style="max-height:220px;overflow:auto;margin-top:4px"></div>
@@ -1387,6 +1369,37 @@
           </div>
           </div>
           <div class="side-pane" id="pane-edit">
+          <div id="tplPanel">
+            <h4>师团模板</h4>
+            <div class="mp-acts"><button class="btn" id="tplLoad">载入模板</button></div>
+            <div id="tplList" style="max-height:130px;overflow:auto;margin-top:4px;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
+            <div id="tplEditor" style="display:none;margin-top:6px;border-top:1px solid var(--line);padding-top:6px">
+              <div class="mp-acts">
+                <input id="tplName" placeholder="模板名" style="height:24px;flex:1;min-width:0">
+              </div>
+              <div class="mp-k" style="margin-top:6px">编制格（点格选兵种，5×5）</div>
+              <div id="tplGrid" style="display:grid;grid-template-columns:repeat(5,36px);grid-auto-rows:32px;gap:2px;margin-top:2px"></div>
+              <div class="mp-k" style="margin-top:6px">支援连（最多 5 个，师级）</div>
+              <div id="tplSup" style="display:flex;flex-direction:column;gap:2px;margin-top:2px"></div>
+              <div class="mp-acts" style="margin-top:6px">
+                <button class="btn" id="tplSave">保存</button>
+                <button class="btn" id="tplDel">删除</button>
+                <button class="btn" id="tplNew">新建</button>
+              </div>
+              <div class="mp-k" id="tplMsg" style="min-height:16px;line-height:1.5"></div>
+            </div>
+            <div class="mp-sep"></div>
+          </div>
+          <div id="ctechPanel">
+            <h4>国家初始科技</h4>
+            <div class="mp-acts">
+              <input id="ctechTag" placeholder="TAG" style="height:24px;width:56px" title="国家 tag，如 GER">
+              <button class="btn" id="ctechLoad">载入</button>
+            </div>
+            <div class="mp-k" id="ctechMsg" style="min-height:16px;line-height:1.5"></div>
+            <div id="ctechList" style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
+            <div class="mp-sep"></div>
+          </div>
           <div id="selBox">
           <h4>选中省份</h4>
           <div class="mp-row"><b class="mp-v" id="msId">—</b><span class="mp-k" id="msType"></span></div>
@@ -8723,18 +8736,39 @@ function makePannable(svg, body){
     }
     const sp = document.getElementById('tplSup');
     if(sp){
+      // 师级支援连：5 个固定槽位，每个用下拉选兵种（按组分类）
+      let opts = '<option value="">— 空 —</option>';
+      const byGroup = {};
+      BATS.forEach(function(b){ (byGroup[b.group] = byGroup[b.group] || []).push(b); });
+      Object.keys(byGroup).sort().forEach(function(g){
+        opts += '<optgroup label="' + g + '">';
+        byGroup[g].forEach(function(b){
+          opts += '<option value="' + b.id + '">' + b.id + '</option>';
+        });
+        opts += '</optgroup>';
+      });
       let h = '';
-      for(let x=0; x<COLS; x++){
-        const v = SUP[x+',0'];
-        h += '<div class="tpl-cell" data-x="' + x + '" data-y="0" data-sup="1"'
-          + ' style="display:flex;align-items:center;justify-content:center;cursor:pointer;'
-          + 'font-size:9px;font-family:Consolas,monospace;border:1px solid var(--line);border-radius:3px;'
-          + 'background:' + (v ? 'var(--warn,#a83)' : 'var(--input)') + ';color:' + (v ? '#fff' : 'var(--t3)') + '">'
-          + (v ? v.replace(/^MVLV_/, '').slice(0, 5) : '+') + '</div>';
+      for(let i=0; i<5; i++){
+        const v = SUP[i+',0'] || '';
+        h += '<div style="display:flex;align-items:center;gap:4px">'
+          + '<span style="width:16px;font-size:10px;color:var(--t3);text-align:right">' + (i+1) + '</span>'
+          + '<select class="tpl-sup-sel" data-x="' + i + '"'
+          + ' style="flex:1;min-width:0;height:22px;font-size:10.5px;background:var(--input);'
+          + 'border:1px solid ' + (v ? 'var(--warn,#a83)' : 'var(--line)') + ';'
+          + 'color:' + (v ? 'var(--text)' : 'var(--t3)') + ';border-radius:3px">'
+          + opts + '</select></div>';
       }
       sp.innerHTML = h;
-      sp.querySelectorAll('.tpl-cell').forEach(function(c){
-        c.onclick = function(){ pickBat(Number(c.dataset.x), 0, true); };
+      sp.querySelectorAll('.tpl-sup-sel').forEach(function(sel){
+        const x = Number(sel.dataset.x);
+        sel.value = SUP[x+',0'] || '';
+        sel.onchange = function(){
+          const v = sel.value;
+          if(!v) delete SUP[x+',0'];
+          else SUP[x+',0'] = v;
+          msg('支援 ' + (x+1) + ' → ' + (v || '空'));
+          renderGrid();
+        };
       });
     }
   }
@@ -8824,6 +8858,80 @@ function makePannable(svg, body){
       const el = document.getElementById(p[0]);
       if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
     });
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.4 国家初始科技（列表式）
+(function(){
+  let CTAG = '', CTECH = null;
+
+  function msg(t, bad){
+    const el = document.getElementById('ctechMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  function renderGroups(groups){
+    const box = document.getElementById('ctechList');
+    if(!box) return;
+    if(!groups.length){ box.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px">没有科技</div>'; return; }
+    box.innerHTML = groups.map(function(g, gi){
+      const onN = g.techs.filter(function(x){ return x.on; }).length;
+      return '<details' + (gi < 2 ? ' open' : '') + ' style="margin-bottom:2px">'
+        + '<summary style="font-size:11px;cursor:pointer;padding:2px 4px;'
+        + 'background:var(--input);border-radius:3px">'
+        + g.folder + ' <span style="color:var(--t3);font-size:10px">' + onN + '/' + g.techs.length + '</span>'
+        + '</summary>'
+        + '<div style="padding:2px 0 4px 8px">'
+        + g.techs.map(function(t){
+            return '<label style="display:flex;gap:5px;align-items:center;font-size:10.5px;'
+              + 'font-family:Consolas,monospace;padding:1px 0;cursor:pointer"'
+              + ' title="' + (t.name || t.id) + (t.year ? '　' + t.year + ' 年' : '') + '">'
+              + '<input type="checkbox" class="ctech-cb" data-id="' + t.id + '"' + (t.on ? ' checked' : '') + '>'
+              + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'
+              + (t.on ? 'color:var(--text)' : 'color:var(--t3)') + '">' + t.id + '</span>'
+              + (t.year ? '<span style="color:var(--t3);font-size:9px">' + t.year + '</span>' : '')
+              + '</label>';
+          }).join('')
+        + '</div></details>';
+    }).join('');
+    box.querySelectorAll('.ctech-cb').forEach(function(cb){
+      cb.onchange = function(){ toggle(cb.dataset.id, cb.checked); };
+    });
+  }
+
+  async function load(){
+    const tag = ((document.getElementById('ctechTag')||{}).value || '').trim().toUpperCase();
+    if(!tag){ msg('填国家 tag', true); return; }
+    CTAG = tag;
+    msg('读取中…');
+    const r = await (await fetch('/api/country_techs', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({tag: tag})})).json();
+    if(!r.ok){ msg(r.msg || '失败', true); return; }
+    CTECH = r;
+    msg(r.msg || '');
+    renderGroups(r.groups || []);
+  }
+
+  async function toggle(id, on){
+    if(!CTAG) return;
+    msg('写入中…');
+    const r = await (await fetch('/api/country_tech_toggle', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({tag: CTAG, tech: id, on: on})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok) status(r.msg);
+  }
+
+  function bind(){
+    const b = document.getElementById('ctechLoad');
+    if(b && !b.dataset.bound){ b.dataset.bound = '1'; b.onclick = load; }
+    const t = document.getElementById('ctechTag');
+    if(t && !t.dataset.bound){
+      t.dataset.bound = '1';
+      t.addEventListener('keydown', function(e){ if(e.key === 'Enter') load(); });
+    }
   }
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);

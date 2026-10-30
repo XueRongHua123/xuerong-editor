@@ -4243,6 +4243,167 @@ def battalions_payload(root=None):
             "msg": "共 %d 个兵种，%d 组" % (b["total"], len(b["groups"]))}
 
 
+def _country_hist_file(root, tag):
+    """按 tag 找 history/countries 里的文件，返回 (路径, rel) 或 (None, "")。"""
+    root = _map_pick(root)
+    files, _rep = _layer_files("history/countries", mod_layers(root))
+    tag = (tag or "").upper()
+    for p in (files or []):
+        fn = os.path.basename(p)
+        # 文件名形如 "AFR - Africa.txt"
+        m = re.match(r'([A-Z0-9]{2,4})\s*-', fn.upper())
+        if m and m.group(1) == tag:
+            return p, os.path.join("history", "countries", fn)
+    return None, ""
+
+
+def _country_hist_write_base(root):
+    """history/countries 的写入层，拒写父 mod。"""
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return None, "找不到可写的 mod 目录"
+    tgt, why = write_base(root, "history/countries")
+    if not tgt:
+        return None, "找不到可写目录"
+    if os.path.abspath(tgt) != os.path.abspath(top):
+        nm = os.path.basename(tgt.rstrip("\\/")) or tgt
+        return None, ("history/countries 被 %s 的 replace_path 独占，"
+                      "直接写进去会改坏它。请先在「诊断 → 目录写入目标」里接管该目录" % nm)
+    return tgt, ""
+
+
+def load_country_techs(root=None, tag=""):
+    """解析某国的 set_technology，返回已解锁科技列表。"""
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    if not tag:
+        return {"ok": False, "msg": "没给 tag", "unlocked": []}
+    p, rel = _country_hist_file(root, tag)
+    if not p:
+        return {"ok": False, "msg": "找不到 %s 的国家历史文件" % tag, "unlocked": []}
+    try:
+        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    except Exception as e:
+        return {"ok": False, "msg": "读取失败：%s" % e, "unlocked": []}
+    text = _strip_keep_len(raw)
+    unlocked, blocks = [], 0
+    for a, b, body in find_blocks(text, "set_technology"):
+        blocks += 1
+        for ln in body.splitlines():
+            ln = ln.strip()
+            if not ln or ln.startswith("#"):
+                continue
+            m = re.match(r'([A-Za-z][A-Za-z0-9_\-\.]*)\s*=\s*1\b', ln)
+            if m:
+                unlocked.append(m.group(1))
+    # 去重保序
+    seen = set()
+    out = []
+    for x in unlocked:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return {"ok": True, "tag": tag, "file": os.path.basename(p),
+            "blocks": blocks, "unlocked": out, "count": len(out),
+            "msg": "%s：%d 项科技（%d 个 set_technology 块）" % (tag, len(out), blocks)}
+
+
+def country_tech_toggle(root, tag, tech, on=True):
+    """给某国加上或去掉一项初始科技。"""
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    tech = (tech or "").strip()
+    if not tag or not tech:
+        return {"ok": False, "msg": "tag 和科技 id 都要给"}
+    src, rel = _country_hist_file(root, tag)
+    if not src:
+        return {"ok": False, "msg": "找不到 %s 的国家历史文件" % tag}
+    tgt, err = _country_hist_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    dst = os.path.join(tgt, rel)
+    os.makedirs(os.path.dirname(dst) or tgt, exist_ok=True)
+    if not os.path.exists(dst):
+        try:
+            import shutil as _sh
+            _sh.copyfile(src, dst)
+        except Exception as e:
+            return {"ok": False, "msg": "复制来源失败：%s" % e}
+
+    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw)
+    blocks = list(find_blocks(text, "set_technology"))
+    cur = load_country_techs(root, tag)["unlocked"]
+    has = tech in cur
+
+    if on and has:
+        return {"ok": True, "msg": "已经有 %s 了" % tech}
+    if (not on) and (not has):
+        return {"ok": True, "msg": "本来就没有 %s" % tech}
+
+    if not blocks:
+        if not on:
+            return {"ok": True, "msg": "本来就没有 %s" % tech}
+        ins = "\n\tset_technology = {\n\t\t%s = 1\n\t}\n" % tech
+        body_i = text.find("history = {")
+        if body_i >= 0:
+            br = text.find("{", body_i)
+            pos = br + 1
+            new_text = raw[:pos] + ins + raw[pos:]
+        else:
+            new_text = raw.rstrip() + "\nhistory = {" + ins + "}\n"
+        snapshot(dst)
+        io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+        return {"ok": True, "msg": "已加 %s（新建 set_technology 块）" % tech}
+
+    a, b, body = blocks[0]
+    if on:
+        # 在块末尾插入
+        ins = "\n\t\t%s = 1" % tech
+        new_text = raw[:b - 1] + ins + raw[b - 1:]
+    else:
+        # 删掉那一行
+        pat = re.compile(r'(?m)^[ \t]*' + re.escape(tech) + r'[ \t]*=[ \t]*1[ \t]*\r?\n?')
+        seg = raw[a:b]
+        seg2 = pat.sub('', seg)
+        if seg2 == seg:
+            return {"ok": False, "msg": "没定位到 %s 那一行" % tech}
+        new_text = raw[:a] + seg2 + raw[b:]
+
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "%s %s" % ("已加" if on else "已删", tech)}
+
+
+def country_techs_payload(root=None, tag=""):
+    """界面用：已解锁 + 全部科技分组。"""
+    info = load_country_techs(root, tag)
+    if not info.get("ok"):
+        return info
+    unlocked = set(info["unlocked"])
+    groups = {}
+    for tid, t in TECHS.items():
+        path = t.get("path") or "其他"
+        groups.setdefault(path, []).append({
+            "id": tid, "name": t.get("name") or tid,
+            "year": t.get("year") or "", "cost": t.get("cost") or "",
+            "prereq": t.get("prereq") or [],
+            "on": tid in unlocked,
+        })
+    for k in groups:
+        groups[k].sort(key=lambda x: (x["year"], x["id"]))
+    items = [{"folder": k, "techs": v} for k, v in sorted(groups.items())]
+    return {"ok": True, "tag": tag, "file": info["file"],
+            "unlocked": info["unlocked"], "count": info["count"],
+            "groups": items, "total": len(TECHS),
+            "msg": info["msg"]}
+
+
 def _tpl_locate(root, name):
     """找到某个 division_template 定义在哪个文件、哪个偏移。
 
@@ -11652,6 +11813,16 @@ class Handler(SimpleHTTPRequestHandler):
                                       body.get("root")))
         elif self.path == "/api/equipment_delete":
             self._send(equipment_delete(body.get("id"), body.get("root")))
+        elif self.path == "/api/country_techs":
+            self._send(country_techs_payload(body.get("root") or None,
+                                             body.get("tag") or ""))
+        elif self.path == "/api/country_tech_toggle":
+            self._send(country_tech_toggle(body.get("root") or None,
+                                           body.get("tag"), body.get("tech"),
+                                           body.get("on", True)))
+        elif self.path == "/api/country_techs_raw":
+            self._send(load_country_techs(body.get("root") or None,
+                                          body.get("tag") or ""))
         elif self.path == "/api/battalions":
             self._send(battalions_payload(body.get("root") or None))
         elif self.path == "/api/template_save":
