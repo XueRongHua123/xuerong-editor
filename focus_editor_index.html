@@ -1357,7 +1357,7 @@
             <div class="lt-group" style="margin-top:8px">
               <div class="lt-title">诊断</div>
               <div class="mp-k" style="margin-top:8px">目录写入目标</div>
-              <div class="mp-acts"><button class="btn" id="wtBtn" style="font-size:11px">检查写入层</button></div>
+              <div class="mp-acts"><button class="btn" id="wtBtn" style="font-size:11px">检查写入层</button><button class="btn" id="wtVerify" style="font-size:11px">校验接管</button></div>
               <div id="wtList" style="max-height:220px;overflow:auto;margin-top:4px"></div>
               <div class="mp-k" id="wtMsg" style="min-height:16px;line-height:1.5"></div>
               <div class="mp-acts"><button class="btn" id="orphanBtn" style="font-size:11px">孤儿 tag 检查</button></div>
@@ -8336,7 +8336,7 @@ function makePannable(svg, body){
   async function loadWT(){
     const box = document.getElementById('wtList');
     msg('读取中…');
-    const r = await (await fetch('/api/write_targets')).json();
+    const r = await (await fetch('/api/write_targets', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})})).json();
     if(!r.ok){ msg(r.msg || '失败', true); return; }
     msg(r.msg);
     if(!box) return;
@@ -8369,8 +8369,16 @@ function makePannable(svg, body){
             headers:{'Content-Type':'application/json'},
             body: JSON.stringify({sub: sub, force: true})})).json();
         }
+        if(r2.ok && r2.check && window.__wtRenderCheck){
+          const box = document.getElementById('wtList');
+          if(box){
+            box.innerHTML = '<div style="padding:4px">'
+              + '<div style="font-size:11px;font-family:Consolas,monospace">' + r2.sub + '</div>'
+              + window.__wtRenderCheck(r2.check) + '</div>';
+          }
+        }
         msg(r2.msg || '', !r2.ok);
-        if(r2.ok){ status(r2.msg); await loadWT(); }
+        if(r2.ok) status(r2.msg);
       };
     });
   }
@@ -8381,6 +8389,59 @@ function makePannable(svg, body){
   }
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.20.7 接管完整性校验
+(function(){
+  function msg(t, bad){
+    const el = document.getElementById('wtMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  function renderCheck(c){
+    if(!c) return '';
+    const ok = c.ok !== false;
+    const color = ok ? '#7bc47f' : '#e8a33d';
+    let html = '<div style="font-size:11px;color:' + color + ';padding:2px 4px">'
+      + (ok ? '✔ ' : '⚠ ') + (c.msg || '') + '</div>';
+    if((c.missing || []).length){
+      html += '<div style="font-size:10px;font-family:Consolas,monospace;color:var(--danger);'
+        + 'padding:2px 4px;max-height:80px;overflow:auto">缺：'
+        + c.missing.map(function(f){ return f; }).join('<br>') + '</div>';
+    }
+    if((c.differ || []).length){
+      html += '<div style="font-size:10px;font-family:Consolas,monospace;color:var(--t3);'
+        + 'padding:2px 4px">改了 ' + c.differ_count + ' 个：'
+        + c.differ.slice(0, 5).join(', ') + (c.differ_count > 5 ? ' …' : '') + '</div>';
+    }
+    return html;
+  }
+
+  async function runVerify(){
+    const box = document.getElementById('wtList');
+    msg('校验中…');
+    const r = await (await fetch('/api/verify_adopt', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({})})).json();
+    if(!r.items){ msg(r.msg || '失败', true); return; }
+    msg(r.msg, !r.ok);
+    if(!box) return;
+    box.innerHTML = r.items.map(function(x){
+      return '<div style="padding:3px 4px;border-bottom:1px solid var(--line)">'
+        + '<div style="font-size:11px;font-family:Consolas,monospace">' + x.sub + '</div>'
+        + renderCheck(x)
+        + '</div>';
+    }).join('') || '<div style="font-size:11px;color:var(--t3);padding:4px">还没有接管任何目录</div>';
+  }
+
+  function bind(){
+    const b = document.getElementById('wtVerify');
+    if(b && !b.dataset.bound){ b.dataset.bound = '1'; b.onclick = runVerify; }
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+
+  // 接管结果里带 check 时，把详情补到消息后面
+  window.__wtRenderCheck = renderCheck;
 })();
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */

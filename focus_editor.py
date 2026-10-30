@@ -3895,11 +3895,138 @@ def adopt_dir(mod_root, sub, force=False):
     reload_data()
 
     src_name = os.path.basename(src.rstrip("\\/")) or src
+    # 接管立刻校验：replace_path 会让上级目录失效，漏一个文件就少一份数据
+    chk = verify_adopt(top, sub)
     return {"ok": True, "sub": sub, "from": src_name,
             "copied": copied, "replace_added": added,
-            "msg": "已从 %s 接管 %s：拷贝 %d 个文件%s" % (
+            "check": chk,
+            "msg": "已从 %s 接管 %s：拷贝 %d 个文件%s；%s" % (
                 src_name, sub, copied,
-                "，并写入 replace_path" if added else "（replace_path 已存在）")}
+                "，并写入 replace_path" if added else "（replace_path 已存在）",
+                chk.get("msg") or "")}
+
+
+def _file_md5(path, limit=4 << 20):
+    """文件的 md5，超过 limit 的只算头部 + 大小，够分辨改动即可。"""
+    try:
+        h = hashlib.md5()
+        sz = os.path.getsize(path)
+        with open(path, "rb") as f:
+            h.update(f.read(limit))
+        h.update(str(sz).encode())
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+
+def verify_adopt(mod_root, sub):
+    """校验某个目录是否被完整接管。
+
+    回答三件事：
+      1. 源目录有几个文件、自己的副本有几个
+      2. 有没有漏拷（源里有、自己没）
+      3. 同名文件内容是否一致（不一致说明改过，这是正常的；未改却不同才是问题）
+    """
+    sub = (sub or "").replace("\\", "/").strip("/")
+    if not sub:
+        return {"ok": False, "msg": "目录名不能为空"}
+
+    root = _map_pick(mod_root)
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return {"ok": False, "msg": "找不到可写的 mod 目录"}
+
+    dst_d = os.path.join(top, sub.replace("/", os.sep))
+    if not os.path.isdir(dst_d):
+        return {"ok": False, "msg": "自己的 mod 里没有 %s，还没接管" % sub}
+
+    # 源：接管时读的那一层。已被自己接管时，_replace_owner 会返回自己，
+    # 这时要往上找真正的来源。
+    src = None
+    layers = mod_layers(top) or [top]
+    for b in reversed(layers):
+        if not b or os.path.abspath(b) == os.path.abspath(top):
+            continue
+        d = os.path.join(b, sub.replace("/", os.sep))
+        if os.path.isdir(d):
+            src = b
+            break
+    if not src:
+        return {"ok": False,
+                "msg": "叠加链里找不到上级来源（说明该目录只有你自己这一份）"}
+
+    src_d = os.path.join(src, sub.replace("/", os.sep))
+    src_files = {f for f in os.listdir(src_d) if os.path.isfile(os.path.join(src_d, f))}
+    dst_files = {f for f in os.listdir(dst_d) if os.path.isfile(os.path.join(dst_d, f))}
+
+    missing = sorted(src_files - dst_files)
+    extra = sorted(dst_files - src_files)
+    differ = []
+    for fn in sorted(src_files & dst_files):
+        if _file_md5(os.path.join(src_d, fn)) != _file_md5(os.path.join(dst_d, fn)):
+            differ.append(fn)
+
+    # 漏拷是致命问题：replace_path 接管后，上级的同名目录不再被读，
+    # 缺一个文件游戏里就少一份数据。
+    fatal = len(missing) > 0
+    parts = ["源 %d 个文件，自己 %d 个" % (len(src_files), len(dst_files))]
+    if missing:
+        parts.append("缺 %d 个" % len(missing))
+    if extra:
+        parts.append("多 %d 个（自己新增的）" % len(extra))
+    if differ:
+        parts.append("内容不同 %d 个（改过的）" % len(differ))
+
+    return {
+        "ok": not fatal,
+        "sub": sub,
+        "src": os.path.basename(src.rstrip("\\/")) or src,
+        "src_count": len(src_files),
+        "dst_count": len(dst_files),
+        "missing": missing[:50],
+        "missing_count": len(missing),
+        "extra": extra[:50],
+        "extra_count": len(extra),
+        "differ": differ[:50],
+        "differ_count": len(differ),
+        "msg": "；".join(parts),
+    }
+
+
+def verify_all_adopted(mod_root=None):
+    """把所有被自己接管的目录逐个校验一遍。"""
+    root = _map_pick(mod_root)
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return {"ok": False, "msg": "找不到可写的 mod 目录", "items": []}
+    try:
+        desc = _mod_descriptor(top)
+    except Exception:
+        desc = {}
+    subs = [x.replace("\\", "/").strip("/") for x in (desc.get("replace") or [])]
+    items = []
+    for sub in subs:
+        if not sub:
+            continue
+        if not os.path.isdir(os.path.join(top, sub.replace("/", os.sep))):
+            items.append({"sub": sub, "ok": False,
+                          "msg": "已声明 replace_path 但目录不存在（会丢掉上级数据）",
+                          "missing_count": -1})
+            continue
+        items.append(verify_adopt(top, sub))
+    bad = [x for x in items if not x.get("ok")]
+    return {"ok": not bad, "items": items,
+            "msg": "接管 %d 个目录，%d 个有问题" % (len(items), len(bad))}
 
 
 def write_targets(root=None):
@@ -10895,11 +11022,16 @@ class Handler(SimpleHTTPRequestHandler):
                                       body.get("root")))
         elif self.path == "/api/equipment_delete":
             self._send(equipment_delete(body.get("id"), body.get("root")))
+        elif self.path == "/api/verify_adopt":
+            _sub = body.get("sub")
+            _root = body.get("root")
+            self._send(verify_adopt(_root, _sub) if _sub else verify_all_adopted(_root))
         elif self.path == "/api/adopt_dir":
             self._send(adopt_dir(body.get("root"), body.get("sub"),
                                  bool(body.get("force"))))
         elif self.path == "/api/write_targets":
-            self._send(write_targets(self.q.get("root", [None])[0]))
+            # POST 分支里 self.q 取不到参数，必须从 body 拿
+            self._send(write_targets(body.get("root") or None))
         elif self.path == "/api/supply_save":
             self._send(supply_area_save(body.get("id"), body.get("value"),
                                         body.get("states"), body.get("name"),
