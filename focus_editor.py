@@ -1458,26 +1458,23 @@ def state_save(sid, fields):
         return {"ok": False, "msg": "这个州没有来源文件"}
     if is_under_game(root):
         return {"ok": False, "msg": "原版目录只读：请先复制到自己的模组再修改"}
-    # 州的记录可能来自父 mod。直接改父 mod 的文件会污染别人的 mod，
-    # 正确做法是在链顶（当前加载的最上层）建同名文件覆盖它。
+    # history/states 常被某一层用 replace_path 独占，写在别处不会生效。
+    # write_base 会算出该目录真正的写入层：被接管就写接管层，否则写链顶。
     try:
-        _top = None
-        for _r in (ROOTS or []):
-            _lay = mod_layers(_r) or [_r]
-            _cand = _lay[-1] if _lay else _r
-            if _cand and not is_under_game(_cand):
-                _top = _cand
-        if _top and os.path.abspath(_top) != os.path.abspath(root):
-            root = _top
+        _target, _why = write_base(ROOTS[-1] if ROOTS else root, "history/states")
+        if _target and os.path.abspath(_target) != os.path.abspath(root):
+            _src = os.path.join(root, rel)
+            root = _target
             _dst = os.path.join(root, rel)
             os.makedirs(os.path.dirname(_dst) or root, exist_ok=True)
-            if not os.path.exists(_dst) and os.path.exists(os.path.join(s.get("root") or "", rel)):
-                # 父 mod 有原文件：先复制一份过来，再在副本上改
+            # 目标层还没有这个文件时，从原位置复制一份，保留未改动的字段
+            if not os.path.exists(_dst) and os.path.exists(_src):
                 try:
                     import shutil as _sh
-                    _sh.copyfile(os.path.join(s.get("root") or "", rel), _dst)
+                    _sh.copyfile(_src, _dst)
                 except Exception:
                     pass
+            _write_layer_hint["states"] = _why
     except Exception:
         pass
     p = os.path.join(root, rel)
@@ -3746,6 +3743,97 @@ def _layers_find(rel, layers):
         if os.path.exists(p):
             return p, r
     return None, None
+
+
+_write_layer_hint = {}
+
+
+def _replace_owner(mod_root, sub):
+    """某个目录被哪一层的 replace_path 独占接管。没有则返回 None。
+
+    HOI4 的 replace_path 语义：声明后该目录只从这一层读，其他 mod（含更后加载的）
+    在这一目录下的文件全部被忽略。所以想改这类目录，必须写进声明它的那一层。
+    """
+    norm = (sub or "").replace("\\", "/").strip("/").lower()
+    if not norm:
+        return None
+    for base in reversed(mod_layers(mod_root) or []):
+        if not base:
+            continue
+        try:
+            desc = _mod_descriptor(base)
+        except Exception:
+            continue
+        for rp in (desc.get("replace") or []):
+            r = (rp or "").replace("\\", "/").strip("/").lower()
+            if not r:
+                continue
+            if norm == r or norm.startswith(r + "/"):
+                return base
+    return None
+
+
+def write_base(mod_root, sub):
+    """写某目录下的文件时应该写到哪一层。
+
+    返回 (base, why)：
+      base = 目标 mod 根目录
+      why  = "replace_path"（被某层独占，必须写进去）或 "top"（写链顶）
+
+    没有 replace_path 接管时写链顶，才有「子 mod 覆盖父 mod」的效果；
+    有 replace_path 接管时写链顶反而不会生效，必须写进接管层。
+    """
+    owner = _replace_owner(mod_root, sub)
+    if owner:
+        return owner, "replace_path"
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    return top, "top"
+
+
+def write_note(mod_root, sub):
+    """给界面用的一句话说明：这个目录的改动会落到哪里。"""
+    owner = _replace_owner(mod_root, sub)
+    if owner:
+        return "%s 被 %s 的 replace_path 独占，改动只能写进该 mod" % (
+            sub, os.path.basename(owner.rstrip("\\/")) or owner)
+    return "%s 未被 replace_path 接管，改动写进当前 mod" % sub
+
+
+def write_targets(root=None):
+    """列出各类资源在叠加链里的真实写入目标，给界面做提示。
+
+    回答「我在这里改，游戏到底会不会读到」。"""
+    root = _map_pick(root)
+    subs = [
+        ("history/states", "州"),
+        ("history/countries", "国家历史"),
+        ("map/strategicregions", "战略区"),
+        ("map/supplyareas", "补给区"),
+        ("common/ideas", "想法"),
+        ("common/national_focus", "国策"),
+        ("common/technologies", "科技"),
+        ("common/units/equipment", "装备"),
+        ("common/units", "单位"),
+        ("events", "事件"),
+    ]
+    items = []
+    for sub, label in subs:
+        base, why = write_base(root, sub)
+        items.append({
+            "sub": sub, "label": label,
+            "base": base or "",
+            "mod": os.path.basename((base or "").rstrip("\\/")) or "",
+            "blocked": why == "replace_path",
+            "note": write_note(root, sub),
+        })
+    return {"ok": True, "items": items,
+            "msg": "共 %d 类，%d 类被 replace_path 接管" % (
+                len(items), sum(1 for x in items if x["blocked"]))}
 
 
 def _layer_files(rel_dir, layers, exts=(".txt",)):
@@ -7075,12 +7163,19 @@ def _sr_weather_template(root):
 
 
 def _sr_write_dir(root):
-    """新建战略区写到 mod 目录（输出模式下写到 output）"""
+    """新建战略区写到 mod 目录（输出模式下写到 output）。
+
+    map/strategicregions 常被某一层用 replace_path 独占（muvluvCN 就是），
+    写在别处游戏不读，所以按 write_base 算真实写入层。"""
     root = _map_pick(root)
-    base = root if root else (mod_layers(None) or [""])[0]
+    _calc = root if root else (ROOTS[-1] if ROOTS else "")
+    base, _why = write_base(_calc, "map/strategicregions")
+    if not base:
+        return None, None
     d = _out_path(base, os.path.join("map", "strategicregions")) if OUTPUT_MODE else \
         os.path.join(base, "map", "strategicregions")
     os.makedirs(d, exist_ok=True)
+    _write_layer_hint["strategicregions"] = _why
     return base, d
 
 
@@ -7838,14 +7933,16 @@ def _prov_type_map(root):
 
 
 def _supply_dir_write(root):
-    """补给区写到哪：链顶 mod 的 map/supplyareas"""
+    """补给区写到哪：按 replace_path 算真实写入层"""
     root = _map_pick(root)
-    base = root if root else (ROOTS[-1] if ROOTS else "")
+    _calc = root if root else (ROOTS[-1] if ROOTS else "")
+    base, _why = write_base(_calc, "map/supplyareas")
     if not base:
         return None, None
     d = _out_path(base, os.path.join("map", "supplyareas")) if OUTPUT_MODE else \
         os.path.join(base, "map", "supplyareas")
     os.makedirs(d, exist_ok=True)
+    _write_layer_hint["supplyareas"] = _why
     return base, d
 
 
@@ -10700,6 +10797,8 @@ class Handler(SimpleHTTPRequestHandler):
                                       body.get("root")))
         elif self.path == "/api/equipment_delete":
             self._send(equipment_delete(body.get("id"), body.get("root")))
+        elif self.path == "/api/write_targets":
+            self._send(write_targets(self.q.get("root", [None])[0]))
         elif self.path == "/api/supply_save":
             self._send(supply_area_save(body.get("id"), body.get("value"),
                                         body.get("states"), body.get("name"),
