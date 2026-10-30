@@ -4380,6 +4380,135 @@ def country_tech_toggle(root, tag, tech, on=True):
     return {"ok": True, "msg": "%s %s" % ("已加" if on else "已删", tech)}
 
 
+def load_country_ideas(root=None, tag=""):
+    """解析某国 history 里的 add_ideas（国家精神）。
+
+    格式和 set_technology 不同：
+        add_ideas = {
+            limited_exports        ← 直接写 id，没有 = 1
+            mvlv_nuclear_winter
+        }
+    """
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    if not tag:
+        return {"ok": False, "msg": "没给 tag", "ideas": []}
+    p, rel = _country_hist_file(root, tag)
+    if not p:
+        return {"ok": False, "msg": "找不到 %s 的国家历史文件" % tag, "ideas": []}
+    try:
+        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    except Exception as e:
+        return {"ok": False, "msg": "读取失败：%s" % e, "ideas": []}
+    text = _strip_keep_len(raw)
+    out, blocks = [], 0
+    for a, b, body in find_blocks(text, "add_ideas"):
+        blocks += 1
+        for ln in body.splitlines():
+            ln = ln.strip()
+            if not ln or ln.startswith("#"):
+                continue
+            m = re.match(r'([A-Za-z][A-Za-z0-9_\-]*)\s*$', ln)
+            if m:
+                out.append(m.group(1))
+    seen, uniq = set(), []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return {"ok": True, "tag": tag, "file": os.path.basename(p),
+            "blocks": blocks, "ideas": uniq, "count": len(uniq),
+            "msg": "%s：%d 项国家精神（%d 个 add_ideas 块）" % (tag, len(uniq), blocks)}
+
+
+def country_idea_toggle(root, tag, idea, on=True):
+    """给某国加上或去掉一项国家精神。"""
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    idea = (idea or "").strip()
+    if not tag or not idea:
+        return {"ok": False, "msg": "tag 和 idea id 都要给"}
+    src, rel = _country_hist_file(root, tag)
+    if not src:
+        return {"ok": False, "msg": "找不到 %s 的国家历史文件" % tag}
+    tgt, err = _country_hist_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    dst = os.path.join(tgt, rel)
+    os.makedirs(os.path.dirname(dst) or tgt, exist_ok=True)
+    if not os.path.exists(dst):
+        try:
+            import shutil as _sh
+            _sh.copyfile(src, dst)
+        except Exception as e:
+            return {"ok": False, "msg": "复制来源失败：%s" % e}
+
+    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw)
+    cur = load_country_ideas(root, tag)["ideas"]
+    has = idea in cur
+    if on and has:
+        return {"ok": True, "msg": "已经有 %s 了" % idea}
+    if (not on) and (not has):
+        return {"ok": True, "msg": "本来就没有 %s" % idea}
+
+    blocks = list(find_blocks(text, "add_ideas"))
+    if not blocks:
+        if not on:
+            return {"ok": True, "msg": "本来就没有 %s" % idea}
+        ins = "\n\tadd_ideas = {\n\t\t%s\n\t}\n" % idea
+        hi = text.find("history = {")
+        if hi >= 0:
+            br = text.find("{", hi)
+            pos = br + 1
+            new_text = raw[:pos] + ins + raw[pos:]
+        else:
+            new_text = raw.rstrip() + "\nhistory = {" + ins + "}\n"
+        snapshot(dst)
+        io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+        return {"ok": True, "msg": "已加 %s（新建 add_ideas 块）" % idea}
+
+    a, b, body = blocks[0]
+    if on:
+        ins = "\n\t\t%s" % idea
+        new_text = raw[:b - 1] + ins + raw[b - 1:]
+    else:
+        pat = re.compile(r'(?m)^[ \t]*' + re.escape(idea) + r'[ \t]*\r?\n?')
+        seg = raw[a:b]
+        seg2 = pat.sub('', seg)
+        if seg2 == seg:
+            return {"ok": False, "msg": "没定位到 %s 那一行" % idea}
+        new_text = raw[:a] + seg2 + raw[b:]
+
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "%s %s" % ("已加" if on else "已删", idea)}
+
+
+def country_ideas_payload(root=None, tag=""):
+    """界面用：已选中的国家精神 + 全部可选（按 IDEAS 的分类）。"""
+    info = load_country_ideas(root, tag)
+    if not info.get("ok"):
+        return info
+    chosen = set(info["ideas"])
+    items = []
+    for k, v in sorted(IDEAS.items()):
+        items.append({"id": k, "name": v.get("name") or k,
+                      "pic": v.get("picture") or "",
+                      "source": v.get("source") or "",
+                      "on": k in chosen})
+    # 已选但 IDEAS 里没有的（可能是别处定义的）也列出来
+    known = {x["id"] for x in items}
+    for k in info["ideas"]:
+        if k not in known:
+            items.append({"id": k, "name": k, "pic": "", "source": "（未在 ideas 里找到定义）",
+                          "on": True, "orphan": True})
+    return {"ok": True, "tag": tag, "file": info["file"],
+            "ideas": info["ideas"], "count": info["count"],
+            "items": items, "total": len(items),
+            "msg": info["msg"]}
+
+
 def tech_tree_graph(folder="", tag=None, root=None):
     """返回某个 folder 下的科技树节点与连线，供预览渲染。
 
@@ -11875,6 +12004,16 @@ class Handler(SimpleHTTPRequestHandler):
             self._send(tech_tree_graph(body.get("folder") or "",
                                        body.get("tag") or None,
                                        body.get("root") or None))
+        elif self.path == "/api/country_ideas":
+            self._send(country_ideas_payload(body.get("root") or None,
+                                             body.get("tag") or ""))
+        elif self.path == "/api/country_idea_toggle":
+            self._send(country_idea_toggle(body.get("root") or None,
+                                           body.get("tag"), body.get("idea"),
+                                           body.get("on", True)))
+        elif self.path == "/api/country_ideas_raw":
+            self._send(load_country_ideas(body.get("root") or None,
+                                          body.get("tag") or ""))
         elif self.path == "/api/country_techs":
             self._send(country_techs_payload(body.get("root") or None,
                                              body.get("tag") or ""))

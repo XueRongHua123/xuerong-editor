@@ -1406,9 +1406,23 @@
               <button class="btn" id="ttDraw">画</button>
             </div>
             <div class="mp-k" id="ttMsg" style="min-height:16px;line-height:1.5"></div>
-            <div id="ttBody" style="height:260px;overflow:hidden;border:1px solid var(--line);border-radius:4px;background:var(--bg)">
+            <div id="ttBody" style="height:200px;overflow:hidden;border:1px solid var(--line);border-radius:4px;background:var(--bg)">
               <svg id="techTreeSvg" style="display:block;width:100%;height:100%"></svg>
             </div>
+            <div class="mp-sep"></div>
+          </div>
+          <div id="cideaPanel">
+            <h4>国家精神</h4>
+            <div class="mp-acts">
+              <input id="cideaTag" placeholder="TAG" style="height:24px;width:56px">
+              <button class="btn" id="cideaLoad">载入</button>
+            </div>
+            <div class="mp-k" id="cideaMsg" style="min-height:16px;line-height:1.5"></div>
+            <div class="mp-k" style="margin-top:4px">已启用</div>
+            <div id="cideaOn" style="max-height:120px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
+            <div class="mp-k" style="margin-top:6px">搜索添加</div>
+            <input id="cideaQ" placeholder="输入 id 或名字过滤" style="width:100%;box-sizing:border-box;height:24px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:0 6px">
+            <div id="cideaHits" style="max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px;margin-top:4px"></div>
             <div class="mp-sep"></div>
           </div>
           <div id="selBox">
@@ -9103,6 +9117,107 @@ function makePannable(svg, body){
     const s2 = document.getElementById('ttFolder');
     if(s2 && !s2.dataset.bound){ s2.dataset.bound = '1'; s2.onchange = draw; }
     if(s2 && !s2.dataset.filled){ s2.dataset.filled = '1'; loadFolders(); }
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.7 国家精神（add_ideas）
+(function(){
+  let CIDEAS = [], CCHOSEN = new Set(), CTAG2 = '';
+
+  function msg(t, bad){
+    const el = document.getElementById('cideaMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  function renderOn(){
+    const box = document.getElementById('cideaOn');
+    if(!box) return;
+    const arr = [...CCHOSEN];
+    if(!arr.length){ box.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:2px">（无）</div>'; return; }
+    box.innerHTML = arr.map(function(id){
+      return '<div style="display:flex;gap:4px;align-items:center;font-size:10.5px;'
+        + 'font-family:Consolas,monospace;padding:1px 0">'
+        + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + id + '</span>'
+        + '<button class="btn ci-del" data-id="' + id + '" style="height:17px;font-size:9px;padding:0 4px">删</button>'
+        + '</div>';
+    }).join('');
+    box.querySelectorAll('.ci-del').forEach(function(b){
+      b.onclick = function(){ toggle(b.dataset.id, false); };
+    });
+  }
+
+  function renderHits(q){
+    const box = document.getElementById('cideaHits');
+    if(!box) return;
+    q = (q || '').trim().toLowerCase();
+    let hits;
+    if(!q){ hits = CIDEAS.slice(0, 40); }
+    else{
+      hits = CIDEAS.filter(function(x){
+        return x.id.toLowerCase().indexOf(q) >= 0
+          || (x.name || '').toLowerCase().indexOf(q) >= 0;
+      }).slice(0, 60);
+    }
+    if(!hits.length){ box.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:2px">没有匹配</div>'; return; }
+    box.innerHTML = hits.map(function(x){
+      const on = CCHOSEN.has(x.id);
+      return '<div style="display:flex;gap:5px;align-items:center;font-size:10.5px;'
+        + 'font-family:Consolas,monospace;padding:1px 0">'
+        + '<input type="checkbox" class="ci-add" data-id="' + x.id + '"' + (on ? ' checked disabled' : '') + '>'
+        + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (x.name||'') + '">'
+        + x.id + (x.name && x.name !== x.id ? '　' + x.name : '') + '</span>'
+        + '</div>';
+    }).join('');
+    box.querySelectorAll('.ci-add').forEach(function(cb){
+      cb.onchange = function(){ if(cb.checked) toggle(cb.dataset.id, true); };
+    });
+  }
+
+  async function load(){
+    const tag = ((document.getElementById('cideaTag')||{}).value || '').trim().toUpperCase();
+    if(!tag){ msg('填 tag', true); return; }
+    CTAG2 = tag;
+    msg('读取中…');
+    const r = await (await fetch('/api/country_ideas', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({tag: tag})})).json();
+    if(!r.ok){ msg(r.msg || '失败', true); return; }
+    CCHOSEN = new Set(r.ideas || []);
+    CIDEAS = r.items || [];
+    msg(r.msg || '');
+    renderOn();
+    renderHits('');
+  }
+
+  async function toggle(id, on){
+    if(!CTAG2) return;
+    msg('写入中…');
+    const r = await (await fetch('/api/country_idea_toggle', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({tag: CTAG2, idea: id, on: on})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){
+      status(r.msg);
+      if(on) CCHOSEN.add(id); else CCHOSEN.delete(id);
+      renderOn();
+      renderHits((document.getElementById('cideaQ')||{}).value || '');
+    }
+  }
+
+  function bind(){
+    const b = document.getElementById('cideaLoad');
+    if(b && !b.dataset.bound){ b.dataset.bound = '1'; b.onclick = load; }
+    const t = document.getElementById('cideaTag');
+    if(t && !t.dataset.bound){ t.dataset.bound = '1';
+      t.addEventListener('keydown', function(e){ if(e.key === 'Enter') load(); }); }
+    const q = document.getElementById('cideaQ');
+    if(q && !q.dataset.bound){ q.dataset.bound = '1';
+      let tm = null;
+      q.addEventListener('input', function(){
+        clearTimeout(tm);
+        tm = setTimeout(function(){ renderHits(q.value); }, 200);
+      }); }
   }
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);
