@@ -7053,6 +7053,14 @@ function makePannable(svg, body){
         + '<div class="mp-k" id="stOwnerMsg" style="min-height:16px"></div>'
         + '<div class="mp-k" style="margin-top:8px">开局部队</div>'
         + '<div id="provUnitsBox" style="max-height:140px;overflow:auto"></div>'
+        + '<div class="mp-acts" style="margin-top:4px" id="unitActBar">'
+        + '<select id="unitTpl" style="height:26px;max-width:150px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:5px;font-size:11px">'
+        + '<option value="">（选模板）</option>'
+        + '</select>'
+        + '<input id="unitCount" value="1" style="height:26px;width:44px" title="数量">'
+        + '<button class="btn" id="unitAddBtn">加部队</button>'
+        + '</div>'
+        + '<div class="mp-k" id="unitMsg" style="min-height:16px"></div>'
         + '<div class="mp-k" style="margin-top:10px">类别与人力</div>'
         + '<div class="mp-acts">'
         + '<select id="mvCat" style="height:26px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:5px">'
@@ -8499,6 +8507,142 @@ function makePannable(svg, body){
       return r;
     };
   }
+})();
+
+// v1.21.2 省面板部队增删改
+(function(){
+  let TPL_CACHE = null;
+
+  function msg(t, bad){
+    const el = document.getElementById('unitMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  async function loadTplOptions(){
+    const sel = document.getElementById('unitTpl');
+    if(!sel) return;
+    if(TPL_CACHE){ fill(sel, TPL_CACHE); return; }
+    let r = null;
+    try{
+      r = await (await fetch('/api/units', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+    }catch(e){ r = null; }
+    if(!r || !r.ok){ msg('模板读取失败', true); return; }
+    TPL_CACHE = (r.templates || []).map(function(t){ return t.name; });
+    fill(sel, TPL_CACHE);
+  }
+
+  function fill(sel, names){
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">（选模板）</option>' + names.map(function(n){
+      return '<option value="' + n.replace(/"/g, '&quot;') + '">' + n + '</option>';
+    }).join('');
+    if(cur) sel.value = cur;
+  }
+
+  async function refresh(){
+    if(window.__loadProvUnits) await window.__loadProvUnits();
+  }
+
+  async function addUnits(){
+    const pid = window.__curProvId;
+    const sel = document.getElementById('unitTpl');
+    const cnt = Number((document.getElementById('unitCount')||{}).value || 1);
+    if(!pid){ msg('先选一个省', true); return; }
+    if(!sel || !sel.value){ msg('先选模板', true); return; }
+    msg('写入中…');
+    let ok = 0, err = '';
+    for(let i=0;i<Math.max(1, cnt);i++){
+      const r = await (await fetch('/api/unit_add', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({location: pid, template: sel.value})})).json();
+      if(r.ok) ok++; else { err = r.msg || '失败'; break; }
+    }
+    if(ok){ msg('已在省 ' + pid + ' 加 ' + ok + ' 支', false); status('加 ' + ok + ' 支部队'); await refresh(); }
+    else msg(err, true);
+  }
+
+  async function delUnit(pid, idx){
+    if(!confirm('删除这一支部队？')) return;
+    msg('删除中…');
+    const r = await (await fetch('/api/unit_delete', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({location: pid, index: idx})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await refresh(); }
+  }
+
+  async function moveUnit(pid, idx){
+    const to = prompt('移到哪个省？（填省号）', '');
+    if(!to) return;
+    const n = Number(to);
+    if(!n || n <= 0){ msg('省号不合法', true); return; }
+    msg('移动中…');
+    const r = await (await fetch('/api/unit_move', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({location: pid, index: idx, to: n})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await refresh(); }
+  }
+
+  // 重写省部队渲染：带按钮
+  async function renderProvUnits(){
+    const box = document.getElementById('provUnitsBox');
+    if(!box) return;
+    const pid = window.__curProvId;
+    if(!pid){ box.innerHTML = ''; return; }
+    let r = null;
+    try{
+      r = await (await fetch('/api/units', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+    }catch(e){ r = null; }
+    if(!r || !r.ok){ box.innerHTML = '<div style="font-size:11px;color:var(--danger)">读取失败</div>'; return; }
+    TPL_CACHE = (r.templates || []).map(function(t){ return t.name; });
+    const lst = (r.by_prov || {})[String(pid)] || [];
+    if(!lst.length){
+      box.innerHTML = '<div style="font-size:11px;color:var(--t3)">这一省没有开局部队</div>';
+      return;
+    }
+    box.innerHTML = lst.map(function(d, i){
+      return '<div style="display:flex;gap:4px;align-items:center;font-size:11px;'
+        + 'font-family:Consolas,monospace;padding:1px 0">'
+        + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (d.template||'') + '">'
+        + (d.name || d.template || '(未命名)') + '</span>'
+        + '<button class="btn up-mv" data-i="' + i + '" style="height:18px;font-size:9px;padding:0 4px">移</button>'
+        + '<button class="btn up-del" data-i="' + i + '" style="height:18px;font-size:9px;padding:0 4px">删</button>'
+        + '</div>';
+    }).join('');
+    box.querySelectorAll('.up-del').forEach(function(b){
+      b.onclick = function(){ delUnit(pid, Number(b.dataset.i)); };
+    });
+    box.querySelectorAll('.up-mv').forEach(function(b){
+      b.onclick = function(){ moveUnit(pid, Number(b.dataset.i)); };
+    });
+  }
+  window.__renderProvUnits = renderProvUnits;
+
+  function bind(){
+    const add = document.getElementById('unitAddBtn');
+    if(add && !add.dataset.bound){ add.dataset.bound = '1'; add.onclick = addUnits; }
+    loadTplOptions();
+  }
+
+  // 省切换时用带按钮的渲染
+  const orig = window.mapShowOps;
+  if(typeof orig === 'function' && !orig.__unitsWrapped){
+    const wrapped = function(){
+      const r = orig.apply(this, arguments);
+      setTimeout(function(){
+        if((window.MAP_PICK_UNIT || 'prov') === 'prov'){ bind(); renderProvUnits(); }
+      }, 280);
+      return r;
+    };
+    wrapped.__unitsWrapped = 1;
+    window.mapShowOps = wrapped;
+  }
+
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
 })();
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */

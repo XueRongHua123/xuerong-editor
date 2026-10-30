@@ -4181,6 +4181,172 @@ def load_units(root=None, force=False):
     return out
 
 
+def _tpl_locate(root, name):
+    """找到某个 division_template 定义在哪个文件、哪个偏移。
+
+    返回 (目标写入路径, 块起, 块止, 原文) 或 (None, -1, -1, "")。
+    """
+    base, files = _units_files(root)
+    # 倒序：和 load_units 的「后者覆盖前者」一致，改到的才是列表里显示的那一份
+    for p in reversed(files or []):
+        try:
+            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        except Exception:
+            continue
+        text = _strip_keep_len(raw)
+        for a, b, body in find_blocks(text, "division_template"):
+            nm = _first(body, r'(?m)^\s*name\s*=\s*"([^"]*)"')
+            if nm == name:
+                # 写入层：拒写父 mod
+                tgt, err = _units_write_base(root)
+                if not tgt:
+                    return None, -1, -1, err
+                dst = os.path.join(tgt, os.path.join("history", "units",
+                                                     os.path.basename(p)))
+                os.makedirs(os.path.dirname(dst) or tgt, exist_ok=True)
+                if not os.path.exists(dst):
+                    import shutil as _sh
+                    _sh.copyfile(p, dst)
+                return dst, a, b, ""
+    return None, -1, -1, "没有这个模板：%s" % name
+
+
+def _tpl_render(name, regs, sup, locked, indent="\t", with_key=True):
+    """生成一个 division_template 文本。
+
+    with_key=False 时只从 { 开始 —— 替换已有块时用
+    （find_blocks 返回的偏移指向 { 的位置，块文本不能再带 division_template =）。
+    """
+    out = [("division_template = " if with_key else "") + "{\n"]
+    out.append('%sname = "%s"\n' % (indent, name))
+    if locked:
+        out.append("%sis_locked = yes\n" % indent)
+    if regs:
+        out.append("%sregiments = {\n" % indent)
+        for r in regs:
+            out.append("%s\t%s = { x = %d y = %d }\n" % (
+                indent, r["unit"], int(r.get("x") or 0), int(r.get("y") or 0)))
+        out.append("%s}\n" % indent)
+    if sup:
+        out.append("%ssupport = {\n" % indent)
+        for r in sup:
+            out.append("%s\t%s = { x = %d y = %d }\n" % (
+                indent, r["unit"], int(r.get("x") or 0), int(r.get("y") or 0)))
+        out.append("%s}\n" % indent)
+    out.append("}\n")
+    return "".join(out)
+
+def template_save(name, fields, root=None):
+    """改一个 division_template：名字 / 编制 / 支援 / 锁定。
+
+    fields 里给什么改什么：
+      new_name   改名
+      regiments  [{unit,x,y}]  整组替换
+      support    [{unit,x,y}]  整组替换
+      locked     bool
+    """
+    root = _map_pick(root)
+    if not name:
+        return {"ok": False, "msg": "模板名不能为空"}
+    dst, a, b, err = _tpl_locate(root, name)
+    if not dst:
+        return {"ok": False, "msg": err or "找不到模板"}
+
+    u = load_units(root, force=True)
+    cur = None
+    for t in u["templates"]:
+        if t["name"] == name:
+            cur = t
+            break
+    if not cur:
+        return {"ok": False, "msg": "找不到模板 %s" % name}
+
+    new_name = (fields.get("new_name") or name).strip()
+    regs = fields.get("regiments")
+    if regs is None:
+        regs = cur["regiments"]
+    sup = fields.get("support")
+    if sup is None:
+        sup = cur["support"]
+    locked = fields.get("locked")
+    if locked is None:
+        locked = cur["locked"]
+
+    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw)
+    # 重新定位（raw 和 text 长度一致，偏移可复用）
+    A = B = -1
+    for _a, _b, body in find_blocks(text, "division_template"):
+        if _first(body, r'(?m)^\s*name\s*=\s*"([^"]*)"') == name:
+            A, B = _a, _b
+            break
+    if A < 0:
+        return {"ok": False, "msg": "重新定位失败"}
+
+    # A 指向 { 的位置，块文本不能再带 division_template =
+    new_block = _tpl_render(new_name, regs, sup, locked, with_key=False)
+    new_text = raw[:A] + new_block + raw[B:]
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    load_units(root, force=True)
+    return {"ok": True, "name": new_name,
+            "msg": "模板「%s」已更新（编制 %d、支援 %d）" % (
+                new_name, len(regs), len(sup))}
+
+
+def template_delete(name, root=None):
+    """删掉一个 division_template。"""
+    root = _map_pick(root)
+    dst, a, b, err = _tpl_locate(root, name)
+    if not dst:
+        return {"ok": False, "msg": err or "找不到模板"}
+    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw)
+    A = B = -1
+    for _a, _b, body in find_blocks(text, "division_template"):
+        if _first(body, r'(?m)^\s*name\s*=\s*"([^"]*)"') == name:
+            A, B = _a, _b
+            break
+    if A < 0:
+        return {"ok": False, "msg": "重新定位失败"}
+    # 连同后面的换行一起删
+    st = A
+    while st > 0 and raw[st - 1] in " \t":
+        st -= 1
+    en = B
+    while en < len(raw) and raw[en] in "\r\n":
+        en += 1
+    new_text = raw[:st] + raw[en:]
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    load_units(root, force=True)
+    return {"ok": True, "msg": "已删除模板「%s」" % name}
+
+
+def template_add(name, unit, x=0, y=0, root=None):
+    """新建一个只有一格编制的 division_template。"""
+    root = _map_pick(root)
+    if not name:
+        return {"ok": False, "msg": "模板名不能为空"}
+    tgt, err = _units_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    d = os.path.join(tgt, "history", "units")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "zz_units.txt")
+    block = _tpl_render(name, [{"unit": unit or "infantry", "x": x, "y": y}], [], False)
+    if os.path.exists(p):
+        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    else:
+        raw = ""
+    new_text = (raw.rstrip() + "\n\n" if raw.strip() else "") + block
+    if os.path.exists(p):
+        snapshot(p)
+    io.open(p, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    load_units(root, force=True)
+    return {"ok": True, "msg": "已新建模板「%s」" % name}
+
+
 def units_payload(root=None):
     """给界面用的部队概况。"""
     u = load_units(root)
@@ -11424,6 +11590,15 @@ class Handler(SimpleHTTPRequestHandler):
                                       body.get("root")))
         elif self.path == "/api/equipment_delete":
             self._send(equipment_delete(body.get("id"), body.get("root")))
+        elif self.path == "/api/template_save":
+            self._send(template_save(body.get("name"), body.get("fields") or {},
+                                     body.get("root") or None))
+        elif self.path == "/api/template_delete":
+            self._send(template_delete(body.get("name"), body.get("root") or None))
+        elif self.path == "/api/template_add":
+            self._send(template_add(body.get("name"), body.get("unit"),
+                                    body.get("x", 0), body.get("y", 0),
+                                    body.get("root") or None))
         elif self.path == "/api/units":
             self._send(units_payload(body.get("root") or None))
         elif self.path == "/api/unit_add":
