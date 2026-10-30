@@ -1425,6 +1425,23 @@
             <div id="cideaHits" style="max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px;margin-top:4px"></div>
             <div class="mp-sep"></div>
           </div>
+          <div id="ofsPanel">
+            <h4>国家离岸建筑</h4>
+            <div class="mp-acts">
+              <input id="ofsTag" placeholder="TAG" style="height:24px;width:56px">
+              <button class="btn" id="ofsLoad">载入</button>
+            </div>
+            <div class="mp-k" id="ofsMsg" style="min-height:16px;line-height:1.5"></div>
+            <div id="ofsList" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
+            <div class="mp-k" style="margin-top:6px">添加</div>
+            <div class="mp-acts">
+              <select id="ofsType" style="height:24px;flex:1;min-width:0;font-size:11px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px">
+              </select>
+              <input id="ofsLevel" value="1" style="height:24px;width:46px" title="数量">
+              <button class="btn" id="ofsAdd">加</button>
+            </div>
+            <div class="mp-sep"></div>
+          </div>
           <div id="selBox">
           <h4>选中省份</h4>
           <div class="mp-row"><b class="mp-v" id="msId">—</b><span class="mp-k" id="msType"></span></div>
@@ -9218,6 +9235,99 @@ function makePannable(svg, body){
         clearTimeout(tm);
         tm = setTimeout(function(){ renderHits(q.value); }, 200);
       }); }
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.8 国家离岸建筑
+(function(){
+  let OTAG = '', OITEMS = [], OTYPES = [];
+
+  function msg(t, bad){
+    const el = document.getElementById('ofsMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  function renderList(){
+    const box = document.getElementById('ofsList');
+    if(!box) return;
+    if(!OITEMS.length){ box.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:2px">（无）</div>'; return; }
+    box.innerHTML = OITEMS.map(function(it){
+      return '<div style="display:flex;gap:4px;align-items:center;font-size:10.5px;'
+        + 'font-family:Consolas,monospace;padding:1px 0">'
+        + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + it.type + '</span>'
+        + '<span style="color:var(--t3)">×' + it.level + '</span>'
+        + '<button class="btn ofs-edit" data-i="' + it.i + '" data-t="' + it.type + '" data-l="' + it.level + '" style="height:17px;font-size:9px;padding:0 3px">改</button>'
+        + '<button class="btn ofs-del" data-i="' + it.i + '" style="height:17px;font-size:9px;padding:0 3px">删</button>'
+        + '</div>';
+    }).join('');
+    box.querySelectorAll('.ofs-del').forEach(function(b){
+      b.onclick = async function(){
+        if(!confirm('删除这一项？')) return;
+        const r = await (await fetch('/api/country_offsite_delete', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({tag: OTAG, index: Number(b.dataset.i)})})).json();
+        msg(r.msg || '', !r.ok);
+        if(r.ok){ status(r.msg); await load(); }
+      };
+    });
+    box.querySelectorAll('.ofs-edit').forEach(function(b){
+      b.onclick = async function(){
+        const nt = prompt('建筑类型：', b.dataset.t);
+        if(nt === null) return;
+        const nl = prompt('数量：', b.dataset.l);
+        if(nl === null) return;
+        const r = await (await fetch('/api/country_offsite_set', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({tag: OTAG, index: Number(b.dataset.i),
+                                type: nt.trim(), level: Number(nl)})})).json();
+        msg(r.msg || '', !r.ok);
+        if(r.ok){ status(r.msg); await load(); }
+      };
+    });
+  }
+
+  async function load(){
+    const tag = ((document.getElementById('ofsTag')||{}).value || '').trim().toUpperCase();
+    if(!tag){ msg('填 tag', true); return; }
+    OTAG = tag;
+    msg('读取中…');
+    const r = await (await fetch('/api/country_starter', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({tag: tag})})).json();
+    if(!r.ok){ msg(r.msg || '失败', true); return; }
+    OITEMS = r.items || [];
+    OTYPES = r.types || [];
+    msg(r.msg || '');
+    renderList();
+    const sel = document.getElementById('ofsType');
+    if(sel && !sel.dataset.filled){
+      sel.innerHTML = OTYPES.map(function(t){ return '<option value="' + t + '">' + t + '</option>'; }).join('');
+      sel.dataset.filled = '1';
+    }
+  }
+
+  async function add(){
+    const sel = document.getElementById('ofsType');
+    const lv = (document.getElementById('ofsLevel')||{}).value || '1';
+    if(!OTAG){ msg('先载入', true); return; }
+    if(!sel || !sel.value){ msg('选类型', true); return; }
+    msg('写入中…');
+    const r = await (await fetch('/api/country_offsite_add', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({tag: OTAG, type: sel.value, level: Number(lv)})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await load(); }
+  }
+
+  function bind(){
+    [['ofsLoad', load], ['ofsAdd', add]].forEach(function(p){
+      const el = document.getElementById(p[0]);
+      if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
+    });
+    const t = document.getElementById('ofsTag');
+    if(t && !t.dataset.bound){ t.dataset.bound = '1';
+      t.addEventListener('keydown', function(e){ if(e.key === 'Enter') load(); }); }
   }
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);

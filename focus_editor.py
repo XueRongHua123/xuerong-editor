@@ -4380,6 +4380,185 @@ def country_tech_toggle(root, tag, tech, on=True):
     return {"ok": True, "msg": "%s %s" % ("已加" if on else "已删", tech)}
 
 
+def load_country_offsite(root=None, tag=""):
+    """解析某国的 add_offsite_building（离岸建筑，不占州建筑位）。
+
+    格式（多个独立块，不是一个大块）：
+        add_offsite_building = {
+            type = arms_factory
+            level = 5
+        }
+    """
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    if not tag:
+        return {"ok": False, "msg": "没给 tag", "items": []}
+    p, rel = _country_hist_file(root, tag)
+    if not p:
+        return {"ok": False, "msg": "找不到 %s 的国家历史文件" % tag, "items": []}
+    try:
+        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    except Exception as e:
+        return {"ok": False, "msg": "读取失败：%s" % e, "items": []}
+    text = _strip_keep_len(raw)
+    items = []
+    for idx, (a, b, body) in enumerate(find_blocks(text, "add_offsite_building")):
+        tp = _first(body, r'(?m)^\s*type\s*=\s*([a-z_]+)')
+        lv = _first(body, r'(?m)^\s*level\s*=\s*(\d+)')
+        items.append({"i": idx, "type": tp or "", "level": int(lv or 0),
+                      "start": a, "end": b})
+    total = sum(x["level"] for x in items)
+    return {"ok": True, "tag": tag, "file": os.path.basename(p),
+            "items": items, "count": len(items), "total_level": total,
+            "msg": "%s：%d 项离岸建筑，合计 %d 级" % (tag, len(items), total)}
+
+
+def country_offsite_add(root, tag, btype, level=1):
+    """加一项离岸建筑。"""
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    btype = (btype or "").strip()
+    if not tag or not btype:
+        return {"ok": False, "msg": "tag 和建筑类型都要给"}
+    try:
+        level = int(level)
+    except Exception:
+        return {"ok": False, "msg": "level 必须是整数"}
+    if level <= 0:
+        return {"ok": False, "msg": "level 要大于 0"}
+    src, rel = _country_hist_file(root, tag)
+    if not src:
+        return {"ok": False, "msg": "找不到 %s 的国家历史文件" % tag}
+    tgt, err = _country_hist_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    dst = os.path.join(tgt, rel)
+    os.makedirs(os.path.dirname(dst) or tgt, exist_ok=True)
+    if not os.path.exists(dst):
+        try:
+            import shutil as _sh
+            _sh.copyfile(src, dst)
+        except Exception as e:
+            return {"ok": False, "msg": "复制来源失败：%s" % e}
+    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    ins = "\nadd_offsite_building = {\n\ttype = %s\n\tlevel = %d\n}\n" % (btype, level)
+    new_text = raw.rstrip() + "\n" + ins
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "已加 %s ×%d" % (btype, level)}
+
+
+def country_offsite_delete(root, tag, index):
+    """删掉第 index 项离岸建筑。"""
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    try:
+        index = int(index)
+    except Exception:
+        return {"ok": False, "msg": "index 不合法"}
+    info = load_country_offsite(root, tag)
+    if not info.get("ok"):
+        return {"ok": False, "msg": info.get("msg")}
+    items = info["items"]
+    if index < 0 or index >= len(items):
+        return {"ok": False, "msg": "没有第 %d 项" % (index + 1)}
+    it = items[index]
+    src, rel = _country_hist_file(root, tag)
+    tgt, err = _country_hist_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    dst = os.path.join(tgt, rel)
+    os.makedirs(os.path.dirname(dst) or tgt, exist_ok=True)
+    if not os.path.exists(dst):
+        try:
+            import shutil as _sh
+            _sh.copyfile(src, dst)
+        except Exception as e:
+            return {"ok": False, "msg": "复制来源失败：%s" % e}
+    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw)
+    blocks = list(find_blocks(text, "add_offsite_building"))
+    if index >= len(blocks):
+        return {"ok": False, "msg": "重新定位失败"}
+    a, b, body = blocks[index]
+    # 往前吃掉换行，往后吃掉空行
+    st = a
+    while st > 0 and raw[st - 1] in " \t":
+        st -= 1
+    if st > 0 and raw[st - 1] == "\n":
+        st -= 1
+    en = b
+    while en < len(raw) and raw[en] in "\r\n":
+        en += 1
+    new_text = raw[:st] + "\n" + raw[en:]
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "已删除 %s ×%d" % (it["type"], it["level"])}
+
+
+def country_offsite_set(root, tag, index, btype=None, level=None):
+    """改第 index 项离岸建筑的类型或数量。"""
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    try:
+        index = int(index)
+    except Exception:
+        return {"ok": False, "msg": "index 不合法"}
+    info = load_country_offsite(root, tag)
+    if not info.get("ok"):
+        return {"ok": False, "msg": info.get("msg")}
+    items = info["items"]
+    if index < 0 or index >= len(items):
+        return {"ok": False, "msg": "没有第 %d 项" % (index + 1)}
+    it = items[index]
+    nt = (btype or it["type"]).strip()
+    try:
+        nl = int(level) if level not in (None, "") else it["level"]
+    except Exception:
+        return {"ok": False, "msg": "level 必须是整数"}
+    if nl <= 0:
+        return {"ok": False, "msg": "level 要大于 0"}
+    src, rel = _country_hist_file(root, tag)
+    tgt, err = _country_hist_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    dst = os.path.join(tgt, rel)
+    os.makedirs(os.path.dirname(dst) or tgt, exist_ok=True)
+    if not os.path.exists(dst):
+        try:
+            import shutil as _sh
+            _sh.copyfile(src, dst)
+        except Exception as e:
+            return {"ok": False, "msg": "复制来源失败：%s" % e}
+    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw)
+    blocks = list(find_blocks(text, "add_offsite_building"))
+    if index >= len(blocks):
+        return {"ok": False, "msg": "重新定位失败"}
+    a, b, body = blocks[index]
+    seg = raw[a:b]
+    seg2 = re.sub(r'(?m)^([ \t]*)type\s*=\s*[a-z_]+', lambda m: (m.group(1) or "") + "type = " + nt, seg)
+    seg2 = re.sub(r'(?m)^([ \t]*)level\s*=\s*\d+', lambda m: (m.group(1) or "") + "level = " + str(nl), seg2)
+    if seg2 == seg and nt == it["type"] and nl == it["level"]:
+        return {"ok": True, "msg": "没有改动"}
+    new_text = raw[:a] + seg2 + raw[b:]
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "已改为 %s ×%d" % (nt, nl)}
+
+
+def country_starter_payload(root=None, tag=""):
+    """给界面用：离岸建筑清单 + 可选建筑类型（来自州建筑常量）。"""
+    info = load_country_offsite(root, tag)
+    if not info.get("ok"):
+        return info
+    return {"ok": True, "tag": tag, "file": info["file"],
+            "items": info["items"], "count": info["count"],
+            "total_level": info["total_level"],
+            "types": list(STATE_BUILDINGS) + ["ammunition_plant", "ammunition_silo"],
+            "msg": info["msg"]}
+
+
 def load_country_ideas(root=None, tag=""):
     """解析某国 history 里的 add_ideas（国家精神）。
 
@@ -12004,6 +12183,20 @@ class Handler(SimpleHTTPRequestHandler):
             self._send(tech_tree_graph(body.get("folder") or "",
                                        body.get("tag") or None,
                                        body.get("root") or None))
+        elif self.path == "/api/country_starter":
+            self._send(country_starter_payload(body.get("root") or None,
+                                               body.get("tag") or ""))
+        elif self.path == "/api/country_offsite_add":
+            self._send(country_offsite_add(body.get("root") or None,
+                                           body.get("tag"), body.get("type"),
+                                           body.get("level", 1)))
+        elif self.path == "/api/country_offsite_delete":
+            self._send(country_offsite_delete(body.get("root") or None,
+                                              body.get("tag"), body.get("index")))
+        elif self.path == "/api/country_offsite_set":
+            self._send(country_offsite_set(body.get("root") or None,
+                                           body.get("tag"), body.get("index"),
+                                           body.get("type"), body.get("level")))
         elif self.path == "/api/country_ideas":
             self._send(country_ideas_payload(body.get("root") or None,
                                              body.get("tag") or ""))
