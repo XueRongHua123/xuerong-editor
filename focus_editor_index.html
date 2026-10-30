@@ -1442,6 +1442,22 @@
             </div>
             <div class="mp-sep"></div>
           </div>
+          <div id="ctagPanel">
+            <h4>国家 TAG</h4>
+            <div class="mp-acts">
+              <button class="btn" id="ctagLoad">载入</button>
+              <input id="ctagQ" placeholder="过滤" style="height:24px;flex:1;min-width:0">
+            </div>
+            <div class="mp-k" id="ctagMsg" style="min-height:16px;line-height:1.5"></div>
+            <div id="ctagList" style="max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
+            <div class="mp-k" style="margin-top:6px">新增</div>
+            <div class="mp-acts">
+              <input id="ctagNew" placeholder="TAG" style="height:24px;width:50px" maxlength="4">
+              <input id="ctagColor" placeholder="r,g,b" style="height:24px;width:74px" title="颜色，留空自动生成">
+              <button class="btn" id="ctagAdd">加</button>
+            </div>
+            <div class="mp-sep"></div>
+          </div>
           <div id="selBox">
           <h4>选中省份</h4>
           <div class="mp-row"><b class="mp-v" id="msId">—</b><span class="mp-k" id="msType"></span></div>
@@ -9328,6 +9344,87 @@ function makePannable(svg, body){
     const t = document.getElementById('ofsTag');
     if(t && !t.dataset.bound){ t.dataset.bound = '1';
       t.addEventListener('keydown', function(e){ if(e.key === 'Enter') load(); }); }
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.9 国家 TAG 增删
+(function(){
+  let TAGS = [];
+
+  function msg(t, bad){
+    const el = document.getElementById('ctagMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  function render(){
+    const box = document.getElementById('ctagList');
+    if(!box) return;
+    const q = ((document.getElementById('ctagQ')||{}).value || '').trim().toUpperCase();
+    const list = q ? TAGS.filter(function(x){ return x.tag.indexOf(q) >= 0 || (x.def||'').toUpperCase().indexOf(q) >= 0; }) : TAGS;
+    if(!list.length){ box.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:2px">没有匹配</div>'; return; }
+    box.innerHTML = list.slice(0, 200).map(function(x){
+      return '<div style="display:flex;gap:4px;align-items:center;font-size:10.5px;'
+        + 'font-family:Consolas,monospace;padding:1px 0">'
+        + '<span style="width:38px">' + x.tag + '</span>'
+        + '<span style="flex:1;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (x.def||'') + '</span>'
+        + '<button class="btn ct-del" data-t="' + x.tag + '" style="height:16px;font-size:9px;padding:0 3px">删</button>'
+        + '</div>';
+    }).join('');
+    box.querySelectorAll('.ct-del').forEach(function(b){
+      b.onclick = function(){ del(b.dataset.t); };
+    });
+  }
+
+  async function load(){
+    msg('读取中…');
+    const r = await (await fetch('/api/country_tags', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+    if(!r.ok){ msg(r.msg || '失败', true); return; }
+    TAGS = r.items || [];
+    msg(r.msg || '');
+    render();
+  }
+
+  async function add(){
+    const tag = ((document.getElementById('ctagNew')||{}).value || '').trim().toUpperCase();
+    const col = ((document.getElementById('ctagColor')||{}).value || '').trim();
+    if(!tag){ msg('填 TAG', true); return; }
+    let color = null;
+    if(col){
+      const parts = col.split(/[,\s]+/).map(Number).filter(function(x){ return !isNaN(x); });
+      if(parts.length !== 3){ msg('颜色要三个数，如 200,80,60', true); return; }
+      color = parts;
+    }
+    msg('写入中…');
+    const r = await (await fetch('/api/country_tag_add', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({tag: tag, color: color})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await load(); }
+  }
+
+  async function del(tag){
+    let r = await (await fetch('/api/country_tag_delete', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({tag: tag})})).json();
+    if(!r.ok && r.need_confirm){
+      if(!confirm(r.msg + '\n\n仍然要删？')){ msg('已取消', true); return; }
+      msg('引用检查拦住时不能强删，请先清掉引用', true);
+      return;
+    }
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await load(); }
+  }
+
+  function bind(){
+    [['ctagLoad', load], ['ctagAdd', add]].forEach(function(p){
+      const el = document.getElementById(p[0]);
+      if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
+    });
+    const q = document.getElementById('ctagQ');
+    if(q && !q.dataset.bound){ q.dataset.bound = '1';
+      q.addEventListener('input', function(){ render(); }); }
   }
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);

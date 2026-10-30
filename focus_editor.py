@@ -4380,6 +4380,212 @@ def country_tech_toggle(root, tag, tech, on=True):
     return {"ok": True, "msg": "%s %s" % ("已加" if on else "已删", tech)}
 
 
+def load_country_tags(root=None):
+    """解析 common/country_tags 里的所有 tag。
+
+    格式：
+        BET = "countries/BETA.txt"
+        H00 = "countries/H00.txt"
+        dynamic_tags  = yes          ← 特殊行，不是 tag
+    """
+    root = _map_pick(root)
+    files, _rep = _layer_files("common/country_tags", mod_layers(root))
+    out, seen = [], {}
+    dyn = False
+    for p in (files or []):
+        fn = os.path.basename(p)
+        try:
+            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        except Exception:
+            continue
+        text = _strip_keep_len(raw)
+        for ln in text.splitlines():
+            s0 = ln.strip()
+            if not s0 or s0.startswith("#"):
+                continue
+            if re.match(r'(?i)dynamic_tags\s*=\s*yes', s0):
+                dyn = True
+                continue
+            m = re.match(r'([A-Z0-9]{2,4})\s*=\s*"([^"]+)"', s0)
+            if m:
+                seen[m.group(1)] = {"tag": m.group(1), "def": m.group(2), "file": fn}
+    out = sorted(seen.values(), key=lambda x: x["tag"])
+    return {"ok": True, "items": out, "count": len(out), "dynamic": dyn,
+            "msg": "共 %d 个 tag%s" % (len(out), "，含动态 tag 段" if dyn else "")}
+
+
+def _country_tags_write_base(root):
+    """common/country_tags 的写入层，拒写父 mod。"""
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return None, "找不到可写的 mod 目录"
+    tgt, why = write_base(root, "common/country_tags")
+    if not tgt:
+        return None, "找不到可写目录"
+    if os.path.abspath(tgt) != os.path.abspath(top):
+        nm = os.path.basename(tgt.rstrip("\\/")) or tgt
+        return None, ("common/country_tags 被 %s 的 replace_path 独占，"
+                      "直接写进去会改坏它。请先在「诊断 → 目录写入目标」里接管该目录" % nm)
+    return tgt, ""
+
+
+def country_tag_refs(root, tag):
+    """统计一个 tag 在哪些地方被引用，删之前先看清楚。"""
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    refs = {"states_owner": 0, "states_core": 0, "history_files": [], "trees": []}
+    try:
+        for sid, sty in (STATES or {}).items():
+            if (sty.get("owner") or "").upper() == tag:
+                refs["states_owner"] += 1
+            if tag in [x.upper() for x in (sty.get("cores") or [])]:
+                refs["states_core"] += 1
+    except Exception:
+        pass
+    try:
+        files, _r = _layer_files("history/countries", mod_layers(root))
+        for p in (files or []):
+            fn = os.path.basename(p)
+            m = re.match(r'([A-Z0-9]{2,4})\s*-', fn.upper())
+            if m and m.group(1) == tag:
+                refs["history_files"].append(fn)
+    except Exception:
+        pass
+    try:
+        for tid, t in (TREES or {}).items():
+            tags = [x.upper() for x in (t.get("country_tags") or [])]
+            if tag in tags:
+                refs["trees"].append(tid)
+    except Exception:
+        pass
+    total = refs["states_owner"] + refs["states_core"] + len(refs["history_files"]) + len(refs["trees"])
+    return {"tag": tag, "refs": refs, "total": total,
+            "msg": "%s 被引用 %d 处（州归属 %d、核心 %d、国家历史 %d、国策树 %d）" % (
+                tag, total, refs["states_owner"], refs["states_core"],
+                len(refs["history_files"]), len(refs["trees"]))}
+
+
+def country_tag_add(root, tag, color=None, culture="western_european_gfx"):
+    """加一个国家 tag，并生成配套的 common/countries 定义。"""
+    root = _map_pick(root)
+    tag = (tag or "").upper().strip()
+    if not re.match(r'^[A-Z][A-Z0-9]{1,3}$', tag):
+        return {"ok": False, "msg": "tag 格式不对（1 位字母 + 1-3 位字母数字，如 GER、UNI）"}
+    cur = load_country_tags(root)
+    if any(x["tag"] == tag for x in cur["items"]):
+        return {"ok": False, "msg": "已经有 %s 这个 tag 了" % tag}
+
+    rgb = color
+    if not rgb:
+        # 用 tag 的哈希生成一个稳定颜色
+        h = int(hashlib.md5(tag.encode()).hexdigest()[:6], 16)
+        rgb = [60 + (h >> 16) % 160, 60 + (h >> 8) % 160, 60 + h % 160]
+    try:
+        rgb = [int(x) for x in rgb][:3]
+        if len(rgb) != 3:
+            raise ValueError
+        rgb = [max(0, min(255, x)) for x in rgb]
+    except Exception:
+        return {"ok": False, "msg": "颜色要三个 0-255 的整数"}
+
+    tgt, err = _country_tags_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+
+    # 1) country_tags 追加
+    d = os.path.join(tgt, "common", "country_tags")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "zz_editor_tags.txt")
+    line = '%s = "countries/%s.txt"\n' % (tag, tag)
+    if os.path.exists(p):
+        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        if not raw.endswith("\n"):
+            raw += "\n"
+        new_text = raw + line
+    else:
+        new_text = line
+    if os.path.exists(p):
+        snapshot(p)
+    io.open(p, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+
+    # 2) common/countries 定义
+    cd = os.path.join(tgt, "common", "countries")
+    os.makedirs(cd, exist_ok=True)
+    cp = os.path.join(cd, tag + ".txt")
+    body = ("graphical_culture = %s\ngraphical_culture_2d = %s\n\n"
+            "color = { %d %d %d }\n") % (
+        culture, culture.replace("_gfx", "_2d"), rgb[0], rgb[1], rgb[2])
+    if not os.path.exists(cp):
+        io.open(cp, "wb").write(b"\xef\xbb\xbf" + body.encode("utf-8"))
+
+    try:
+        _LAYERS_CACHE.clear()
+    except Exception:
+        pass
+    reload_data()
+    return {"ok": True, "tag": tag, "color": rgb, "file": "zz_editor_tags.txt",
+            "msg": "已加 tag %s（颜色 %d,%d,%d，定义 countries/%s.txt）" % (
+                tag, rgb[0], rgb[1], rgb[2], tag)}
+
+
+def country_tag_delete(root, tag):
+    """删一个国家 tag（只从自己的 mod 层里摘，且要先看引用）。"""
+    root = _map_pick(root)
+    tag = (tag or "").upper().strip()
+    if not tag:
+        return {"ok": False, "msg": "tag 不能为空"}
+    info = country_tag_refs(root, tag)
+    if info["total"] > 0:
+        return {"ok": False, "need_confirm": True, "refs": info,
+                "msg": "%s 还被引用，直接删会留下悬空引用。%s" % (tag, info["msg"])}
+
+    tgt, err = _country_tags_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    d = os.path.join(tgt, "common", "country_tags")
+    if not os.path.isdir(d):
+        return {"ok": False, "msg": "自己的 mod 里没有 common/country_tags，还没接管"}
+
+    removed = False
+    for fn in sorted(os.listdir(d)):
+        if not fn.endswith(".txt"):
+            continue
+        p = os.path.join(d, fn)
+        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        pat = re.compile(r'(?m)^[ \t]*' + re.escape(tag) + r'\s*=\s*"[^"]*"[ \t]*\r?\n?')
+        new_text = pat.sub('', raw)
+        if new_text != raw:
+            snapshot(p)
+            io.open(p, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+            removed = True
+            break
+    if not removed:
+        return {"ok": False, "msg": "自己的 mod 里没找到 %s 这一行（可能在父 mod，只读）" % tag}
+    try:
+        _LAYERS_CACHE.clear()
+    except Exception:
+        pass
+    reload_data()
+    return {"ok": True, "tag": tag, "msg": "已删除 tag %s" % tag}
+
+
+def country_tags_payload(root=None):
+    info = load_country_tags(root)
+    if not info.get("ok"):
+        return info
+    return {"ok": True, "items": info["items"], "count": info["count"],
+            "dynamic": info["dynamic"],
+            "cultures": ["western_european_gfx", "commonwealth_gfx", "eastern_european_gfx",
+                         "middle_eastern_gfx", "asian_gfx", "south_american_gfx",
+                         "african_gfx", "generic_gfx"],
+            "msg": info["msg"]}
+
+
 def load_country_offsite(root=None, tag=""):
     """解析某国的 add_offsite_building（离岸建筑，不占州建筑位）。
 
@@ -12183,6 +12389,15 @@ class Handler(SimpleHTTPRequestHandler):
             self._send(tech_tree_graph(body.get("folder") or "",
                                        body.get("tag") or None,
                                        body.get("root") or None))
+        elif self.path == "/api/country_tags":
+            self._send(country_tags_payload(body.get("root") or None))
+        elif self.path == "/api/country_tag_add":
+            self._send(country_tag_add(body.get("root") or None, body.get("tag"),
+                                       body.get("color"), body.get("culture")))
+        elif self.path == "/api/country_tag_delete":
+            self._send(country_tag_delete(body.get("root") or None, body.get("tag")))
+        elif self.path == "/api/country_tag_refs":
+            self._send(country_tag_refs(body.get("root") or None, body.get("tag")))
         elif self.path == "/api/country_starter":
             self._send(country_starter_payload(body.get("root") or None,
                                                body.get("tag") or ""))
