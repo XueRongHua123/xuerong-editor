@@ -4864,7 +4864,20 @@ def _find_state_of_prov(pid):
 
 
 def _state_file_for(sid):
-    """按州 id 找文件路径：(root, rel, path)。按叠加链最高优先级找。"""
+    """按州 id 找文件路径：(root, rel, path)。
+
+    优先用 STATES 里已经定下来的那条记录 —— 同一个 id 在多个文件里出现时
+    （比如原版有 1-France.txt、mod 又加了 1-Corsica.txt），
+    按文件名遍历会挑到和 STATES 不一致的那一个，后续写入就落到错误文件。"""
+    try:
+        _s = STATES.get(int(sid)) if isinstance(STATES, dict) else None
+    except Exception:
+        _s = None
+    if _s and _s.get("root") and _s.get("file"):
+        _p = os.path.join(_s["root"], _s["file"])
+        if os.path.exists(_p):
+            return _s["root"], _s["file"], _p
+
     _bases = []
     for _r in (ROOTS or []):
         for _b in (mod_layers(_r) or [_r]):
