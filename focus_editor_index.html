@@ -1732,6 +1732,28 @@
             <button class="btn" id="msTypeApply">转换</button>
           </div>
           <div class="mp-k" id="msBatchMsg" style="min-height:16px;line-height:1.5"></div>
+          <div id="hpPanel">
+            <h4>高程笔刷</h4>
+            <div class="mp-k" style="line-height:1.5;color:var(--t3)">在地图上拖拽刷高度（0=海，255=最高）</div>
+            <div class="mp-acts" style="margin-top:4px">
+              <span style="font-size:10.5px;color:var(--t2)">高度</span>
+              <input id="hpVal" type="range" min="0" max="255" value="140" style="flex:1;min-width:0"
+                     oninput="document.getElementById('hpValT').textContent=this.value">
+              <span id="hpValT" style="font-size:10.5px;font-family:Consolas,monospace;width:26px;text-align:right">140</span>
+            </div>
+            <div class="mp-acts" style="margin-top:3px">
+              <span style="font-size:10.5px;color:var(--t2)">半径</span>
+              <input id="hpBrush" type="range" min="1" max="60" value="8" style="flex:1;min-width:0"
+                     oninput="document.getElementById('hpBrushT').textContent=this.value">
+              <span id="hpBrushT" style="font-size:10.5px;font-family:Consolas,monospace;width:22px;text-align:right">8</span>
+            </div>
+            <div class="mp-acts" style="margin-top:3px">
+              <label style="font-size:10px;display:flex;align-items:center;gap:3px">
+                <input type="checkbox" id="hpFeather" checked>羽化</label>
+              <button class="btn" id="hpToggle">开始刷</button>
+            </div>
+            <div class="mp-k" id="hpMsg" style="min-height:16px;line-height:1.5"></div>
+          </div>
           <h4>地形笔刷</h4>
           <div class="mp-acts">
             <button class="btn" id="msBrushToggle">开启笔刷</button>
@@ -10546,6 +10568,83 @@ function makePannable(svg, body){
   }
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.23.9 高程笔刷
+(function(){
+  let ON = false;
+
+  function msg(t, bad){
+    const el = document.getElementById('hpMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  async function paint(points){
+    const hv = Number((document.getElementById('hpVal')||{}).value || 140);
+    const br = Number((document.getElementById('hpBrush')||{}).value || 8);
+    const fe = !!(document.getElementById('hpFeather')||{}).checked;
+    try{
+      const r = await (await fetch('/api/height_paint', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({points: points, height: hv, brush: br, feather: fe})})).json();
+      if(r.ok){
+        msg(r.msg);
+        // 刷完清缓存重载高度图
+        const clr = document.getElementById('mapClear');
+        if(clr) clr.click();
+      } else msg(r.msg || '失败', true);
+    }catch(e){ msg('请求失败：' + e, true); }
+  }
+
+  function bind(){
+    const btn = document.getElementById('hpToggle');
+    if(!btn || btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.onclick = function(){
+      ON = !ON;
+      btn.textContent = ON ? '停止刷' : '开始刷';
+      btn.style.background = ON ? 'var(--accent)' : '';
+      msg(ON ? '左键拖拽刷高度（像素坐标）' : '已停止');
+      window.__heightBrush = ON;
+    };
+  }
+
+  // 在地图画布上接管拖拽
+  function attach(){
+    const cv = document.getElementById('mapSelCanvas') || document.querySelector('#mapStageWrap canvas');
+    if(!cv || cv.dataset.hpBound) return;
+    cv.dataset.hpBound = '1';
+    let drawing = false;
+    const toMap = function(ev){
+      const r = cv.getBoundingClientRect();
+      const x = (ev.clientX - r.left - (window.MAP ? MAP.x : 0)) / (window.MAP ? MAP.k : 1);
+      const y = (ev.clientY - r.top - (window.MAP ? MAP.y : 0)) / (window.MAP ? MAP.k : 1);
+      return [Math.round(x), Math.round(y)];
+    };
+    cv.addEventListener('mousedown', function(ev){
+      if(!window.__heightBrush || ev.button !== 0) return;
+      ev.stopPropagation(); ev.preventDefault();
+      drawing = true;
+      paint([toMap(ev)]);
+    }, true);
+    cv.addEventListener('mousemove', function(ev){
+      if(!drawing) return;
+      ev.stopPropagation(); ev.preventDefault();
+      paint([toMap(ev)]);
+    }, true);
+    cv.addEventListener('mouseup', function(ev){
+      if(drawing){ drawing = false; ev.stopPropagation(); }
+    }, true);
+    cv.addEventListener('mouseleave', function(){ drawing = false; });
+  }
+
+  if(document.readyState !== 'loading'){
+    setTimeout(function(){ bind(); attach(); }, 800);
+  } else {
+    document.addEventListener('DOMContentLoaded', function(){
+      setTimeout(function(){ bind(); attach(); }, 800);
+    });
+  }
 })();
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */

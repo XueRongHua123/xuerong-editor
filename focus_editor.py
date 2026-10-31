@@ -10887,6 +10887,131 @@ def prov_terrain_by_type(from_type, to_type, root=None):
     return r
 
 
+def height_paint(points, height, brush=8, feather=True, root=None):
+    """画笔式刷高程：直接改 heightmap.bmp 的灰度。
+
+    HOI4 的 heightmap.bmp 是 8 位灰度，0 = 海平面，值越大越高。
+    points: [[x, y], ...]（地图坐标）
+    height: 0-255
+    brush:  笔刷半径（像素）
+    feather: 边缘渐变，避免硬边
+    """
+    try:
+        brush = max(1, min(60, int(brush or 1)))
+    except Exception:
+        brush = 1
+    try:
+        hv = int(height)
+    except Exception:
+        return {"ok": False, "msg": "高度必须是 0-255 的整数"}
+    if hv < 0 or hv > 255:
+        return {"ok": False, "msg": "高度必须是 0-255 的整数"}
+    if not points:
+        return {"ok": False, "msg": "没有落点"}
+    root = _map_pick(root)
+    layers = mod_layers(root)
+    hbmp, hbase = _layers_find("map/heightmap.bmp", layers)
+    pbmp, pbase = _layers_find("map/provinces.bmp", layers)
+    if not hbmp:
+        return {"ok": False, "msg": "找不到 heightmap.bmp"}
+    if os.path.abspath(hbase or "") != os.path.abspath(pbase or ""):
+        return {"ok": False, "msg": "heightmap.bmp 与 provinces.bmp 不同源，刷高程会错位"}
+
+    info = bmp_info(hbmp)
+    if not info or info.get("bpp") != 8:
+        return {"ok": False, "msg": "heightmap.bmp 不是 8 位图，无法按像素刷"}
+    W, H = info["w"], info["h"]
+    off0, rowb = info["offset"], info["row"]
+    top_down = bool(info.get("top_down"))
+
+    # 收集要刷的像素 + 目标值（羽化时按距离插值）
+    hit = {}
+    for pt in points:
+        try:
+            cx, cy = int(pt[0]), int(pt[1])
+        except Exception:
+            continue
+        for dy in range(-brush, brush + 1):
+            for dx in range(-brush, brush + 1):
+                d2 = dx * dx + dy * dy
+                if d2 > brush * brush:
+                    continue
+                x, y = cx + dx, cy + dy
+                if not (0 <= x < W and 0 <= y < H):
+                    continue
+                if feather:
+                    t = 1.0 - (d2 ** 0.5) / float(brush)   # 中心 1 → 边缘 0
+                    t = max(0.0, min(1.0, t))
+                    v = int(round(255 * t + hv * (1 - t))) if False else hv
+                    # 羽化：新值和旧值按 t 混合，t 在中心接近 1
+                    hit[(x, y)] = (hv, t)
+                else:
+                    hit[(x, y)] = (hv, 1.0)
+    if not hit:
+        return {"ok": False, "msg": "笔刷没落在图内"}
+
+    snapshot(hbmp)
+    n = 0
+    with open(hbmp, "r+b") as f:
+        for (x, y), (target, t) in hit.items():
+            fy = y if top_down else (H - 1 - y)
+            f.seek(off0 + fy * rowb + x)
+            cur = f.read(1)
+            old = cur[0] if cur else 0
+            if feather and t < 1.0:
+                new = int(round(old * (1 - t) + target * t))
+            else:
+                new = target
+            new = max(0, min(255, new))
+            f.seek(off0 + fy * rowb + x)
+            f.write(bytes((new,)))
+            n += 1
+    try:
+        _REFINE_IDS_CACHE.pop("cur", None)
+    except Exception:
+        pass
+    return {"ok": True, "painted": n, "to": hv,
+            "msg": "刷了 %d 个像素，高度 %d%s" % (n, hv, "（羽化）" if feather else "")}
+
+
+def height_sample(points, radius=1, root=None):
+    """读某几个点附近的高程，返回平均值（用来画等高线或显示）。"""
+    if not points:
+        return {"ok": True, "values": []}
+    root = _map_pick(root)
+    hbmp, _ = _layers_find("map/heightmap.bmp", mod_layers(root))
+    if not hbmp:
+        return {"ok": False, "msg": "找不到 heightmap.bmp", "values": []}
+    info = bmp_info(hbmp)
+    if not info or info.get("bpp") != 8:
+        return {"ok": False, "msg": "heightmap.bmp 不是 8 位图", "values": []}
+    W, H = info["w"], info["h"]
+    off0, rowb = info["offset"], info["row"]
+    top_down = bool(info.get("top_down"))
+    r = max(0, min(8, int(radius or 0)))
+    out = []
+    with open(hbmp, "rb") as f:
+        for pt in points:
+            try:
+                cx, cy = int(pt[0]), int(pt[1])
+            except Exception:
+                out.append(None)
+                continue
+            vals = []
+            for dy in range(-r, r + 1):
+                for dx in range(-r, r + 1):
+                    x, y = cx + dx, cy + dy
+                    if not (0 <= x < W and 0 <= y < H):
+                        continue
+                    fy = y if top_down else (H - 1 - y)
+                    f.seek(off0 + fy * rowb + x)
+                    b = f.read(1)
+                    if b:
+                        vals.append(b[0])
+            out.append(int(sum(vals) / len(vals)) if vals else None)
+    return {"ok": True, "values": out}
+
+
 def terrain_paint(points, terrain, brush=3, root=None):
     """画笔式刷地形：直接改 terrain.bmp 的像素索引，不动 definition.csv。
 
@@ -14897,6 +15022,13 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path == "/api/terrain_by_type":
             self._send(prov_terrain_by_type(body.get("from"), body.get("to"),
                                             body.get("root")))
+        elif self.path == "/api/height_paint":
+            self._send(height_paint(body.get("points") or [], body.get("height"),
+                                    body.get("brush", 8), body.get("feather", True),
+                                    body.get("root") or None))
+        elif self.path == "/api/height_sample":
+            self._send(height_sample(body.get("points") or [], body.get("radius", 1),
+                                     body.get("root") or None))
         elif self.path == "/api/terrain_paint":
             self._send(terrain_paint(body.get("points"), body.get("terrain"),
                                      body.get("brush"), body.get("root")))
