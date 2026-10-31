@@ -1640,8 +1640,12 @@
                 <option value="country_leader">country_leader</option>
                 <option value="operative">operative</option>
               </select>
+              <input id="chNewCountry" placeholder="国家 TAG" style="height:22px;width:56px" title="归属国家，决定写进哪个文件">
               <input id="chNewSkill" value="3" style="height:22px;width:36px" title="技能">
               <button class="btn" id="chAddBtn">新建</button>
+            </div>
+            <div class="mp-acts" style="margin-top:3px">
+              <input id="chPortrait" placeholder="头像图片路径（png/jpg，可空）" style="height:22px;flex:1;min-width:0" title="会自动转成 156x210 的 DDS 并注册 sprite">
             </div>
             <div class="mp-sep"></div>
           </div>
@@ -10541,13 +10545,18 @@ function makePannable(svg, body){
     const id = ((document.getElementById('chNewId')||{}).value || '').trim();
     const name = ((document.getElementById('chNewName')||{}).value || '').trim();
     const type = (document.getElementById('chNewType')||{}).value || 'corps_commander';
+    const country = ((document.getElementById('chNewCountry')||{}).value || '').trim().toUpperCase();
     const skill = Number((document.getElementById('chNewSkill')||{}).value || 3);
+    const psrc = ((document.getElementById('chPortrait')||{}).value || '').trim();
     if(!id){ msg('填 id', true); return; }
     if(!name){ msg('填名字', true); return; }
-    msg('新建中…');
+    if(!country){ msg('填国家 TAG（决定写进哪个文件）', true); return; }
+    msg(psrc ? '新建并导入头像中…' : '新建中…');
     const r = await (await fetch('/api/character_add', {method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({id: id, name: name, type: type, skill: skill,
+                            country: country,
+                            portrait_src: psrc || null,
                             attack: skill, defense: skill, planning: skill,
                             logistics: skill})})).json();
     msg(r.msg || '', !r.ok);

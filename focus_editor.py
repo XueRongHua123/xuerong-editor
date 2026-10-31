@@ -4587,6 +4587,111 @@ def country_tech_toggle(root, tag, tech, on=True):
     return {"ok": True, "msg": "%s %s" % ("已加" if on else "已删", tech)}
 
 
+PORTRAIT_W, PORTRAIT_H = 156, 210
+PORTRAIT_SMALL = 64
+
+
+def portrait_import(root, src_path, tag, cid=None, overwrite=False, small=False):
+    """把一张图导入成人物头像。
+
+    流程：转 DDS（大图 156x210 / 小图 64x64）→ 放 gfx/leaders/<TAG>/
+    → 在 interface/zz_editor_portraits.gfx 里注册 sprite → 返回 sprite 名。
+
+    返回 {"ok", "sprite", "file", "msg"}。
+    """
+    root = _map_pick(root)
+    tag = (tag or "").strip().upper()
+    if not tag:
+        return {"ok": False, "msg": "没给国家 tag"}
+    if not src_path or not os.path.isfile(src_path):
+        return {"ok": False, "msg": "源文件不存在：%s" % src_path}
+
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return {"ok": False, "msg": "找不到可写的 mod 目录"}
+
+    base = os.path.splitext(os.path.basename(src_path))[0]
+    base = re.sub(r'[^A-Za-z0-9_\-]', '_', base) or "portrait"
+    if cid:
+        stem = re.sub(r'[^A-Za-z0-9_\-]', '_', str(cid))
+    else:
+        stem = base
+    fname = ("small_" if small else "") + stem
+    sprite = "GFX_portrait_%s_%s" % (tag, stem)
+
+    W, H = (PORTRAIT_SMALL, PORTRAIT_SMALL) if small else (PORTRAIT_W, PORTRAIT_H)
+    try:
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None
+        im = Image.open(src_path).convert("RGBA")
+        # 保持比例塞进目标框，剩下的补透明边（不裁切、不拉伸）
+        im.thumbnail((W, H), Image.LANCZOS)
+        canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        canvas.paste(im, ((W - im.width) // 2, (H - im.height) // 2), im)
+    except Exception as e:
+        return {"ok": False, "msg": "读图失败：%s" % e}
+
+    rel_dir = "gfx/leaders/%s" % tag
+    d = os.path.join(top, rel_dir.replace("/", os.sep))
+    os.makedirs(d, exist_ok=True)
+    dst = os.path.join(d, fname + ".dds")
+    if os.path.exists(dst) and not overwrite:
+        return {"ok": False, "need_confirm": True,
+                "msg": "头像已存在：%s/%s.dds，要覆盖吗？" % (rel_dir, fname)}
+
+    try:
+        canvas.save(dst, format="DDS")
+    except Exception as e:
+        return {"ok": False, "msg": "存 DDS 失败：%s" % e}
+
+    rel_tex = "%s/%s.dds" % (rel_dir, fname)
+
+    # 注册 sprite
+    gfx_dir = os.path.join(top, "interface")
+    os.makedirs(gfx_dir, exist_ok=True)
+    gfxp = os.path.join(gfx_dir, "zz_editor_portraits.gfx")
+    block = ('\tSpriteType = {\n'
+             '\t\tname = "%s"\n'
+             '\t\ttexturefile = "%s"\n'
+             '\t}\n') % (sprite, rel_tex)
+    if os.path.exists(gfxp):
+        raw = io.open(gfxp, encoding="utf-8-sig", errors="replace").read()
+    else:
+        raw = "spriteTypes = {\n}\n"
+    m = re.search(r'spriteTypes\s*=\s*\{', raw)
+    if m:
+        b = raw.find("{", m.end() - 1)
+        e = brace_match(raw, b)
+        if e > b:
+            if re.search(r'name\s*=\s*"' + re.escape(sprite) + r'"', raw):
+                new = raw
+            else:
+                pos = e
+                while pos > 0 and raw[pos - 1] in " \t":
+                    pos -= 1
+                if pos > 0 and raw[pos - 1] == "}":
+                    pos -= 1
+                ls = raw.rfind("\n", 0, pos) + 1
+                new = raw[:ls] + block + raw[ls:]
+        else:
+            new = raw.rstrip() + "\n" + block + "}\n"
+    else:
+        new = raw.rstrip() + "\nspriteTypes = {\n" + block + "}\n"
+    if new != raw:
+        if os.path.exists(gfxp):
+            snapshot(gfxp)
+        io.open(gfxp, "wb").write(_bom_for(gfxp) + new.encode("utf-8"))
+
+    return {"ok": True, "sprite": sprite, "file": rel_tex,
+            "size": "%dx%d" % (W, H),
+            "msg": "头像已导入：%s（%dx%d）" % (sprite, W, H)}
+
+
 GFX_KINDS = {
     "goal":  {"dir": "gfx/interface/goals",   "prefix": "GFX_goal_",   "label": "国策"},
     "idea":  {"dir": "gfx/interface/ideas",   "prefix": "GFX_idea_",   "label": "想法"},
@@ -5913,7 +6018,8 @@ def _char_write_base(root):
 
 def character_add(root, cid, name, ctype="corps_commander", skill=3,
                   attack=3, defense=3, planning=3, logistics=3,
-                  portrait_large="", portrait_small="", country=None):
+                  portrait_large="", portrait_small="", country=None,
+                  portrait_src=None, portrait_overwrite=False):
     """新建人物。
 
     写进 common/characters/zz_editor_characters.txt（不覆盖别人已有的文件）。
@@ -5981,6 +6087,20 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
                     pass
     else:
         p = os.path.join(d, "zz_editor_characters.txt")
+
+    # 给了图片就先导入成头像，自动拿到 sprite 名
+    portrait_note = ""
+    if portrait_src and country:
+        try:
+            pr = portrait_import(root, portrait_src, country, cid,
+                                 portrait_overwrite or False, False)
+            if pr.get("ok"):
+                portrait_large = pr.get("sprite")
+                portrait_note = "，头像 %s" % pr.get("sprite")
+            else:
+                portrait_note = "（头像导入失败：%s）" % (pr.get("msg") or "")[:40]
+        except Exception as e:
+            portrait_note = "（头像导入异常：%s）" % str(e)[:40]
 
     body = ['\t%s = {' % cid,
             '\t\tname = "%s"' % name.replace('"', "")]
@@ -6066,7 +6186,8 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
         except Exception as e:
             rec_note = "（招募写入失败：%s）" % str(e)[:40]
 
-    return {"ok": True, "msg": "已新建人物「%s」（%s，%s）%s" % (name, cid, ctype, rec_note)}
+    return {"ok": True, "msg": "已新建人物「%s」（%s，%s）%s%s" % (
+        name, cid, ctype, rec_note, portrait_note)}
 
 
 def character_set(root, cid, fields):
@@ -15217,7 +15338,9 @@ class Handler(SimpleHTTPRequestHandler):
                                      body.get("logistics", 3),
                                      body.get("portrait_large"),
                                      body.get("portrait_small"),
-                                     body.get("country")))
+                                     body.get("country"),
+                                     body.get("portrait_src"),
+                                     body.get("portrait_overwrite", False)))
         elif self.path == "/api/character_set":
             self._send(character_set(body.get("root") or None, body.get("id"),
                                      body.get("fields") or {}))
@@ -15284,6 +15407,11 @@ class Handler(SimpleHTTPRequestHandler):
                                              body.get("fi"), body.get("ti")))
         elif self.path == "/api/gfx_list":
             self._send(gfx_list(body.get("root") or None, body.get("kind") or "goal"))
+        elif self.path == "/api/portrait_import":
+            self._send(portrait_import(body.get("root") or None,
+                                       body.get("src_path"), body.get("tag"),
+                                       body.get("id"), body.get("overwrite", False),
+                                       body.get("small", False)))
         elif self.path == "/api/gfx_import":
             self._send(gfx_import(body.get("root") or None, body.get("src"),
                                   body.get("kind") or "goal", body.get("name"),
