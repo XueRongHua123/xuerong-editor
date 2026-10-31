@@ -28,15 +28,70 @@ def write_provinces(labels, colors, path):
     Image.fromarray(rgb, "RGB").save(path)
 
 
-def write_definition_csv(labels, colors, path, name_prefix="PROV"):
-    """每省一行：id;r;g;b;land;terrain;continent;name"""
+def write_definition_csv(labels, colors, path, name_prefix="PROV", names=None):
+    """每省一行：id;r;g;b;land;terrain;continent;name
+
+    names 给了就用真实省名（GeoJSON 来源）。
+    """
     n = int(labels.max())
+    names = names or {}
     lines = ["0;0;0;0;sea;ocean;0;"]
     for i in range(1, n + 1):
         c = colors[i - 1] if i - 1 < len(colors) else (1, 1, 1)
-        lines.append("%d;%d;%d;%d;land;plains;0;%s%d" % (
-            i, c[0], c[1], c[2], name_prefix, i))
+        nm = str(names.get(i) or (name_prefix + str(i))).replace(";", ",")
+        lines.append("%d;%d;%d;%d;land;plains;0;%s" % (
+            i, c[0], c[1], c[2], nm))
     io.open(path, "w", encoding="utf-8", newline="").write("\n".join(lines) + "\n")
+
+# 原版 terrain.bmp 的常用索引（实测自 HoI4 1.19 的调色板）
+TERRAIN_PLAINS = 0     # (86,124,27) 绿
+TERRAIN_FOREST = 1     # (0,86,6)    深绿
+TERRAIN_HILLS = 2      # (112,74,31) 褐
+TERRAIN_DESERT = 3     # (206,169,99) 沙
+TERRAIN_GRASS = 4      # (6,200,11)  亮绿
+TERRAIN_MOUNTAIN = 11  # (92,83,76)  灰
+TERRAIN_SEA = 15       # (8,31,130)  深蓝
+TERRAIN_SNOW = 16      # (255,255,255) 白
+
+
+def write_terrain(labels, thint, path, palette_from=None):
+    """按地形提示写 terrain.bmp。
+
+    labels  省图（0 = 海）
+    thint   地形提示（0 plains / 1 hills / 2 mountain / 3 snow / 4 desert），
+            可为 None
+    palette_from  从哪个文件借调色板（一般是原版 terrain.bmp）
+    """
+    h, w = labels.shape
+    arr = np.full((h, w), TERRAIN_PLAINS, dtype=np.uint8)
+    # 海
+    arr[labels == 0] = TERRAIN_SEA
+    if thint is not None and thint.shape == labels.shape:
+        land = labels > 0
+        arr[land & (thint == 1)] = TERRAIN_HILLS
+        arr[land & (thint == 2)] = TERRAIN_MOUNTAIN
+        arr[land & (thint == 3)] = TERRAIN_SNOW
+        arr[land & (thint == 4)] = TERRAIN_DESERT
+    img = Image.fromarray(arr, "L").convert("P")
+    pal = None
+    if palette_from and os.path.isfile(palette_from):
+        try:
+            pal = Image.open(palette_from).getpalette()
+        except Exception:
+            pal = None
+    if not pal:
+        # 兜底：造一个够用的调色板
+        pal = [0] * (256 * 3)
+        pal[TERRAIN_PLAINS*3:TERRAIN_PLAINS*3+3] = [86, 124, 27]
+        pal[TERRAIN_FOREST*3:TERRAIN_FOREST*3+3] = [0, 86, 6]
+        pal[TERRAIN_HILLS*3:TERRAIN_HILLS*3+3] = [112, 74, 31]
+        pal[TERRAIN_DESERT*3:TERRAIN_DESERT*3+3] = [206, 169, 99]
+        pal[TERRAIN_GRASS*3:TERRAIN_GRASS*3+3] = [6, 200, 11]
+        pal[TERRAIN_MOUNTAIN*3:TERRAIN_MOUNTAIN*3+3] = [92, 83, 76]
+        pal[TERRAIN_SEA*3:TERRAIN_SEA*3+3] = [8, 31, 130]
+        pal[TERRAIN_SNOW*3:TERRAIN_SNOW*3+3] = [255, 255, 255]
+    img.putpalette(pal)
+    img.save(path)
 
 
 def write_heightmap(land, path, base=110, noise=18, seed=5):
@@ -136,16 +191,31 @@ def write_empty_texts(out_root):
     return written
 
 
-def write_strategic_regions(out_root, labels, per_region=60):
-    """按省的顺序切成若干战略区。"""
+def write_strategic_regions(out_root, labels, groups=None, per_region=60):
+    """写战略区。groups 给了就按地理聚类分组，否则按 id 顺序切。"""
     d = os.path.join(out_root, "strategicregions")
     _ensure(d)
     n = int(labels.max())
     if n == 0:
         return 0
-    # 简化：按 id 连续分组（真实项目可以按地理位置聚类）
     made = 0
     rid = 1
+    if groups:
+        order = sorted(groups.keys())
+        for g in order:
+            pids = sorted(groups[g])
+            if not pids:
+                continue
+            body = ("strategic_region={\n\tid=%d\n\tname=\"REGION_%d\"\n"
+                    "\tprovinces={\n%s\n\t}\n\tweather={\n\t\tperiod={\n"
+                    "\t\t\ttemperature={\n\t\t\t\tmin=0\n\t\t\t\tmax=0\n\t\t\t}\n"
+                    "\t\t}\n\t}\n}\n") % (
+                rid, rid, "".join("\t\t%d\n" % x for x in pids))
+            io.open(os.path.join(d, "%d-region.txt" % rid), "w", encoding="utf-8",
+                    newline="").write(body)
+            made += 1
+            rid += 1
+        return made
     for start in range(1, n + 1, per_region):
         end = min(n, start + per_region - 1)
         pids = list(range(start, end + 1))
@@ -161,7 +231,8 @@ def write_strategic_regions(out_root, labels, per_region=60):
     return made
 
 
-def write_supply_areas(out_root, labels, per_area=120):
+def write_supply_areas(out_root, labels, groups=None, per_area=120):
+    """写补给区。groups 给了就按地理聚类分组。"""
     d = os.path.join(out_root, "supplyareas")
     _ensure(d)
     n = int(labels.max())
@@ -169,6 +240,19 @@ def write_supply_areas(out_root, labels, per_area=120):
         return 0
     made = 0
     sid = 1
+    if groups:
+        for g in sorted(groups.keys()):
+            pids = sorted(groups[g])
+            if not pids:
+                continue
+            body = ("supply_area={\n\tid=%d\n\tname=\"SUPPLYAREA_%d\"\n\tvalue=10\n"
+                    "\tstates={\n%s\n\t}\n}\n") % (
+                sid, sid, "".join("\t\t%d\n" % x for x in pids))
+            io.open(os.path.join(d, "%d-SupplyArea.txt" % sid), "w", encoding="utf-8",
+                    newline="").write(body)
+            made += 1
+            sid += 1
+        return made
     for start in range(1, n + 1, per_area):
         end = min(n, start + per_area - 1)
         states = list(range(start, end + 1))

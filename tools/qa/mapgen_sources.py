@@ -187,14 +187,16 @@ def from_terrain_map(path, width=None, height=None, n_provinces=None,
     # 绿多 → plains；褐/黄多 → hills/mountain；白 → snow；黄橙 → desert
     greenish = (g > r * 1.05) & (g > b * 1.05) & land
     brownish = (r > g * 1.05) & (g > b) & land
-    bright = (r > 190) & (g > 190) & (b > 190) & land
+    # 雪：三个通道都亮（阈值放宽到 185/175，190 太严会漏掉偏黄的雪）
+    bright = (r >= 185) & (g >= 185) & (b >= 175) & land
     sandy = (r > 170) & (g > 140) & (b < 130) & land
     terrain[greenish] = 0
     terrain[brownish] = 1
     terrain[sandy] = 4
     terrain[bright] = 3
     # 非常暗的褐色 → 高山
-    dark_brown = brownish & (mx < 110)
+    # 暗褐才算山地：褐色 (120,90,60) 的 mx=120，暗褐 (70,55,40) 的 mx=70
+    dark_brown = brownish & (mx < 100)
     terrain[dark_brown] = 2
 
     labels = core.filter_small(labels, min_size)
