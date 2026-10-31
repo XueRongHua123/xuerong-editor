@@ -1383,6 +1383,7 @@
               <div class="mp-k" style="margin-top:6px">支援连（最多 5 个，师级）</div>
               <div id="tplSup" style="display:flex;flex-direction:column;gap:2px;margin-top:2px"></div>
               <div class="mp-acts" style="margin-top:6px">
+                <input id="tplTag" placeholder="TAG" style="height:24px;width:52px" title="归属国家，决定写进哪个文件">
                 <button class="btn" id="tplSave">保存</button>
                 <button class="btn" id="tplDel">删除</button>
                 <button class="btn" id="tplNew">新建</button>
@@ -1492,7 +1493,8 @@
             <div id="navyList" style="max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
             <div class="mp-k" style="margin-top:6px">加船（选舰队/特遣队）</div>
             <div class="mp-acts">
-              <input id="nvFi" value="0" style="height:22px;width:32px" title="舰队序号">
+              <input id="nvTag" placeholder="TAG" style="height:22px;width:46px" title="国家，用来筛出该国的舰队">
+              <input id="nvFi" value="0" style="height:22px;width:32px" title="该国第几支舰队（从 0 起）">
               <input id="nvTi" value="0" style="height:22px;width:32px" title="特遣队序号">
               <input id="nvShipName" placeholder="舰名" style="height:22px;flex:1;min-width:0">
             </div>
@@ -1503,7 +1505,7 @@
             </div>
             <div class="mp-k" style="margin-top:6px">加特遣队</div>
             <div class="mp-acts">
-              <input id="nvTfFi" value="0" style="height:22px;width:32px" title="舰队序号">
+              <input id="nvTfFi" value="0" style="height:22px;width:32px" title="该国第几支舰队（从 0 起）">
               <input id="nvTfName" placeholder="队名" style="height:22px;flex:1;min-width:0">
               <input id="nvTfLoc" placeholder="省号" style="height:22px;width:56px">
               <button class="btn" id="nvAddTf">加队</button>
@@ -8937,7 +8939,8 @@ function makePannable(svg, body){
     for(let i=0;i<Math.max(1, cnt);i++){
       const r = await (await fetch('/api/unit_add', {method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({location: pid, template: sel.value})})).json();
+        body: JSON.stringify({location: pid, template: sel.value,
+                              tag: (st && (st.owner || st.owner_tag)) || null})})).json();
       if(r.ok) ok++; else { err = r.msg || '失败'; break; }
     }
     if(ok){ msg('已在省 ' + pid + ' 加 ' + ok + ' 支', false); status('加 ' + ok + ' 支部队'); await refresh(); }
@@ -9199,7 +9202,8 @@ function makePannable(svg, body){
     const unit = prompt('第一格兵种 id：','infantry') || 'infantry';
     const r = await (await fetch('/api/template_add', {method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({name: nm, unit: unit, x: 0, y: 0})})).json();
+      body: JSON.stringify({name: nm, unit: unit, x: 0, y: 0,
+                            tag: ((document.getElementById('tplTag')||{}).value||'').trim().toUpperCase() || null})})).json();
     msg(r.msg || '', !r.ok);
     if(r.ok){ status(r.msg); await loadTpls(); }
   }
@@ -9871,7 +9875,8 @@ function makePannable(svg, body){
     const r = await (await fetch('/api/navy_add_ship', {method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({fi: fi, ti: ti, name: name || null,
-                            definition: def, exp: exp})})).json();
+                            definition: def, exp: exp,
+                            tag: ((document.getElementById('nvTag')||{}).value||'').trim().toUpperCase() || null})})).json();
     msg(r.msg || '', !r.ok);
     if(r.ok){ status(r.msg); }
   }
@@ -9884,7 +9889,8 @@ function makePannable(svg, body){
     const r = await (await fetch('/api/navy_add_tf', {method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({fi: fi, name: name || null,
-                            location: loc ? Number(loc) : null})})).json();
+                            location: loc ? Number(loc) : null,
+                            tag: ((document.getElementById('nvTag')||{}).value||'').trim().toUpperCase() || null})})).json();
     msg(r.msg || '', !r.ok);
     if(r.ok){ status(r.msg); }
   }
