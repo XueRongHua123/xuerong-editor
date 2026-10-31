@@ -1509,6 +1509,24 @@
             </div>
             <div class="mp-sep"></div>
           </div>
+          <div id="airPanel">
+            <h4>开局空军</h4>
+            <div class="mp-acts"><button class="btn" id="airLoad">载入联队</button></div>
+            <div class="mp-k" id="airMsg" style="min-height:16px;line-height:1.5"></div>
+            <div id="airList" style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
+            <div class="mp-k" style="margin-top:6px">加联队</div>
+            <div class="mp-acts">
+              <input id="airProv" placeholder="省号" style="height:22px;width:56px">
+              <input id="airName" placeholder="联队名" style="height:22px;flex:1;min-width:0">
+            </div>
+            <div class="mp-acts" style="margin-top:3px">
+              <input id="airType" value="fighter_equipment_1" placeholder="装备类型" style="height:22px;flex:1;min-width:0">
+              <input id="airOwner" placeholder="TAG" style="height:22px;width:46px">
+              <input id="airAmt" value="10" style="height:22px;width:42px">
+              <button class="btn" id="airAdd">加</button>
+            </div>
+            <div class="mp-sep"></div>
+          </div>
           <div id="selBox">
           <h4>选中省份</h4>
           <div class="mp-row"><b class="mp-v" id="msId">—</b><span class="mp-k" id="msType"></span></div>
@@ -9649,6 +9667,81 @@ function makePannable(svg, body){
 
   function bind(){
     [['nvAddShip', addShip], ['nvAddTf', addTf]].forEach(function(p){
+      const el = document.getElementById(p[0]);
+      if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
+    });
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.13 开局空军
+(function(){
+  let WINGS = [];
+
+  function msg(t, bad){
+    const el = document.getElementById('airMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  function render(){
+    const box = document.getElementById('airList');
+    if(!box) return;
+    if(!WINGS.length){ box.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:2px">（无联队）</div>'; return; }
+    box.innerHTML = WINGS.map(function(w, i){
+      const eq = (w.equipment || []).map(function(x){
+        return x.type.replace(/_equipment.*$/, '') + '×' + x.amount;
+      }).join(', ');
+      return '<div style="display:flex;gap:4px;align-items:center;font-size:10px;'
+        + 'font-family:Consolas,monospace;padding:1px 0">'
+        + '<span style="width:44px;color:var(--t3)">省' + w.province + '</span>'
+        + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + eq + '">'
+        + w.name + '</span>'
+        + '<span style="color:var(--t3);font-size:9px">' + w.eq_count + '</span>'
+        + '<button class="btn air-del" data-i="' + i + '" style="height:15px;font-size:8px;padding:0 3px">删</button>'
+        + '</div>';
+    }).join('');
+    box.querySelectorAll('.air-del').forEach(function(b){
+      b.onclick = async function(){
+        if(!confirm('删掉这支联队？')) return;
+        const r = await (await fetch('/api/air_wing_delete', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({index: Number(b.dataset.i)})})).json();
+        msg(r.msg || '', !r.ok);
+        if(r.ok){ status(r.msg); await load(); }
+      };
+    });
+  }
+
+  async function load(){
+    msg('读取中…');
+    const r = await (await fetch('/api/air_wings', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+    if(!r.ok){ msg(r.msg || '失败', true); return; }
+    WINGS = r.wings || [];
+    msg(r.msg || '');
+    render();
+  }
+
+  async function add(){
+    const prov = Number((document.getElementById('airProv')||{}).value || 0);
+    const name = ((document.getElementById('airName')||{}).value || '').trim();
+    const type = ((document.getElementById('airType')||{}).value || 'fighter_equipment_1').trim();
+    const owner = ((document.getElementById('airOwner')||{}).value || '').trim().toUpperCase();
+    const amt = Number((document.getElementById('airAmt')||{}).value || 10);
+    if(!prov){ msg('填省号', true); return; }
+    if(!owner){ msg('填 TAG', true); return; }
+    msg('写入中…');
+    const r = await (await fetch('/api/air_wing_add', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({province: prov, name: name || null, type: type,
+                            owner: owner, amount: amt})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await load(); }
+  }
+
+  function bind(){
+    [['airLoad', load], ['airAdd', add]].forEach(function(p){
       const el = document.getElementById(p[0]);
       if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
     });

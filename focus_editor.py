@@ -5210,6 +5210,216 @@ def load_navy(root=None):
             "msg": "%d 支舰队，%d 艘船" % (len(fleets), total_ships)}
 
 
+def load_air_wings(root=None):
+    """解析 history/units 里的 air_wings（开局空军联队）。
+
+    结构：
+        air_wings = {
+            524 = {                              ← 省号（基地）
+                name = "中华太空舰队"
+                transport_plane_equipment_1 = {
+                    owner = "CHI"
+                    amount = 5
+                }
+            }
+        }
+    """
+    root = _map_pick(root)
+    _base, files = _units_files(root)
+    wings = []
+    for p in (files or []):
+        try:
+            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        except Exception:
+            continue
+        text = _strip_keep_len(raw)
+        rel = os.path.join("history", "units", os.path.basename(p))
+        src = ""
+        try:
+            for b in (mod_layers(root) or []):
+                if os.path.abspath(p).startswith(os.path.abspath(b) + os.sep):
+                    src = os.path.basename(b.rstrip("\\/")) or b
+                    break
+        except Exception:
+            pass
+        for am in re.finditer(r'(?m)^[ \t]*air_wings[ \t]*=\s*\{', text):
+            ab = text.find("{", am.end() - 1)
+            ae = brace_match(text, ab)
+            if ae <= ab:
+                continue
+            abody = text[ab + 1:ae - 1]
+            # 每个顶层的 省号 = { ... }
+            for wm in re.finditer(r'(?m)^[ \t]*(\d+)[ \t]*=\s*\{', abody):
+                pid = int(wm.group(1))
+                wb = abody.find("{", wm.end() - 1)
+                we = brace_match(abody, wb)
+                if we <= wb:
+                    continue
+                wbody = abody[wb + 1:we - 1]
+                nm = _first(wbody, r'(?m)^\s*name\s*=\s*"([^"]*)"')
+                eqs = []
+                for em in re.finditer(r'(?m)^[ \t]*([A-Za-z0-9_]+)[ \t]*=\s*\{', wbody):
+                    etype = em.group(1)
+                    if etype in ("name",):
+                        continue
+                    eb = wbody.find("{", em.end() - 1)
+                    ee = brace_match(wbody, eb)
+                    if ee <= eb:
+                        continue
+                    ebody = wbody[eb + 1:ee - 1]
+                    ow = _first(ebody, r'(?m)^\s*owner\s*=\s*"?([A-Z0-9]+)"?')
+                    amt = _first(ebody, r'(?m)^\s*amount\s*=\s*(\d+)')
+                    eqs.append({"type": etype, "owner": ow,
+                                "amount": int(amt or 0)})
+                # start 取「省号 = {」那一行的行首，否则删完会剩半截 "999 ="
+                _wline = abody.rfind("\n", 0, wm.start()) + 1
+                wings.append({"province": pid, "name": nm,
+                              "equipment": eqs,
+                              "eq_count": sum(x["amount"] for x in eqs),
+                              "file": rel, "source": src,
+                              "start": ab + 1 + _wline,
+                              "end": ab + 1 + we})
+    total = sum(x["eq_count"] for x in wings)
+    return {"ok": True, "wings": wings, "count": len(wings),
+            "eq_total": total,
+            "msg": "%d 支航空联队，%d 架飞机" % (len(wings), total)}
+
+
+def _air_locate(root, idx):
+    """按序号重新定位 air_wings 里第 idx 个联队。"""
+    info = load_air_wings(root)
+    wings = info["wings"]
+    if idx < 0 or idx >= len(wings):
+        return None, None, -1, -1, "没有第 %d 支联队" % (idx + 1)
+    w = wings[idx]
+    src = None
+    for p in (_units_files(root)[1] or []):
+        if os.path.basename(p) == os.path.basename(w["file"]):
+            src = p
+            break
+    if not src:
+        return None, None, -1, -1, "找不到来源文件"
+    return src, w["file"], w["start"], w["end"], ""
+
+
+def air_wing_delete(root, idx):
+    """删掉第 idx 支航空联队。"""
+    root = _map_pick(root)
+    try:
+        idx = int(idx)
+    except Exception:
+        return {"ok": False, "msg": "index 不合法"}
+    src, rel, st, en, err = _air_locate(root, idx)
+    if not src:
+        return {"ok": False, "msg": err}
+    tgt, werr = _units_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": werr}
+    dst = os.path.join(tgt, rel)
+    os.makedirs(os.path.dirname(dst) or tgt, exist_ok=True)
+    if not os.path.exists(dst):
+        try:
+            import shutil as _sh
+            _sh.copyfile(src, dst)
+        except Exception as e:
+            return {"ok": False, "msg": "复制来源失败：%s" % e}
+    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    n = len(raw)
+    if not (0 <= st < n and 0 <= en <= n and st < en):
+        return {"ok": False, "msg": "偏移不合法"}
+    s2 = st
+    while s2 > 0 and raw[s2 - 1] in " \t":
+        s2 -= 1
+    if s2 > 0 and raw[s2 - 1] == "\n":
+        s2 -= 1
+    e2 = en
+    while e2 < n and raw[e2] in "\r\n":
+        e2 += 1
+    info = load_air_wings(root)
+    nm = info["wings"][idx]["name"] if idx < len(info["wings"]) else ""
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + (raw[:s2] + "\n" + raw[e2:]).encode("utf-8"))
+    return {"ok": True, "msg": "已删除联队「%s」" % nm}
+
+
+def air_wing_add(root, province, name, eq_type, owner, amount=10, tag=None):
+    """给某个国家的 history/units 文件加一支航空联队。
+
+    加进哪个文件：优先按 owner 找 TAG_*.txt，找不到就建 zz_air_wings.txt。
+    """
+    root = _map_pick(root)
+    try:
+        province = int(province)
+    except Exception:
+        return {"ok": False, "msg": "省号不合法"}
+    if province <= 0:
+        return {"ok": False, "msg": "省号不合法"}
+    owner = (owner or "").upper()
+    if not owner:
+        return {"ok": False, "msg": "owner tag 不能为空"}
+    try:
+        amount = int(amount)
+    except Exception:
+        return {"ok": False, "msg": "数量必须是整数"}
+    if amount <= 0:
+        return {"ok": False, "msg": "数量要大于 0"}
+    eq_type = eq_type or "fighter_equipment_1"
+
+    tgt, err = _units_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    d = os.path.join(tgt, "history", "units")
+    os.makedirs(d, exist_ok=True)
+
+    # 找现有的同 owner 文件里的 air_wings；没有就用 zz_air_wings.txt
+    dst = os.path.join(d, "zz_air_wings.txt")
+    block = ('\t%d = {\n'
+             '\t\tname = "%s"\n'
+             '\t\t%s = {\n'
+             '\t\t\towner = "%s"\n'
+             '\t\t\tamount = %d\n'
+             '\t\t}\n'
+             '\t}\n') % (province, (name or "新联队").replace('"', ""),
+                          eq_type, owner, amount)
+
+    if os.path.exists(dst):
+        raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    else:
+        raw = "air_wings = {\n}\n"
+    text = _strip_keep_len(raw)
+    am = re.search(r'(?m)^[ \t]*air_wings[ \t]*=\s*\{', text)
+    if am:
+        ab = text.find("{", am.end() - 1)
+        ae = brace_match(text, ab)
+        if ae > ab:
+            # 插在 air_wings 的 } 所在行的行首前
+            p = ae
+            while p > 0 and raw[p - 1] in " \t":
+                p -= 1
+            if p > 0 and raw[p - 1] == "}":
+                p -= 1
+            ls = raw.rfind("\n", 0, p) + 1
+            new_text = raw[:ls] + block + raw[ls:]
+        else:
+            new_text = raw.rstrip() + "\n" + block
+    else:
+        new_text = raw.rstrip() + "\nair_wings = {\n" + block + "}\n"
+
+    if os.path.exists(dst):
+        snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "已在省 %d 加联队「%s」（%s ×%d，owner %s）" % (
+        province, name or "新联队", eq_type, amount, owner)}
+
+
+def air_wings_payload(root=None):
+    info = load_air_wings(root)
+    if not info.get("ok"):
+        return info
+    return {"ok": True, "wings": info["wings"], "count": info["count"],
+            "eq_total": info["eq_total"], "msg": info["msg"]}
+
+
 def navy_delete_fleet(root, fi):
     """删掉第 fi 支舰队（整块）。"""
     root = _map_pick(root)
@@ -12965,6 +13175,14 @@ class Handler(SimpleHTTPRequestHandler):
                                        body.get("root") or None))
         elif self.path == "/api/navy":
             self._send(navy_payload(body.get("root") or None))
+        elif self.path == "/api/air_wings":
+            self._send(air_wings_payload(body.get("root") or None))
+        elif self.path == "/api/air_wing_add":
+            self._send(air_wing_add(body.get("root") or None, body.get("province"),
+                                    body.get("name"), body.get("type"),
+                                    body.get("owner"), body.get("amount", 10)))
+        elif self.path == "/api/air_wing_delete":
+            self._send(air_wing_delete(body.get("root") or None, body.get("index")))
         elif self.path == "/api/navy_add_ship":
             self._send(navy_add_ship(body.get("root") or None, body.get("fi"),
                                      body.get("ti"), body.get("name"),
