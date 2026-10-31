@@ -1567,6 +1567,20 @@
             </div>
             <div class="mp-sep"></div>
           </div>
+          <div id="cfPanel">
+            <h4>开局已完成国策</h4>
+            <div class="mp-acts">
+              <input id="cfTag" placeholder="TAG" style="height:24px;width:56px">
+              <button class="btn" id="cfLoad">载入</button>
+            </div>
+            <div class="mp-k" id="cfMsg" style="min-height:16px;line-height:1.5"></div>
+            <div id="cfList" style="max-height:150px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
+            <div class="mp-acts" style="margin-top:3px">
+              <input id="cfId" placeholder="国策 id" style="height:22px;flex:1;min-width:0">
+              <button class="btn" id="cfAdd">加</button>
+            </div>
+            <div class="mp-sep"></div>
+          </div>
           <div id="selBox">
           <h4>选中省份</h4>
           <div class="mp-row"><b class="mp-v" id="msId">—</b><span class="mp-k" id="msType"></span></div>
@@ -9895,6 +9909,75 @@ function makePannable(svg, body){
 
   function bind(){
     [['polLoad', load], ['polSave', savePol], ['popSave', savePops], ['warAdd', addWar]].forEach(function(p){
+      const el = document.getElementById(p[0]);
+      if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
+    });
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.15 开局已完成国策
+(function(){
+  let CTAG2 = '', ITEMS = [];
+
+  function msg(t, bad){
+    const el = document.getElementById('cfMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  function render(){
+    const box = document.getElementById('cfList');
+    if(!box) return;
+    if(!ITEMS.length){ box.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:2px">（无）</div>'; return; }
+    box.innerHTML = ITEMS.map(function(x, i){
+      const tip = x.known ? (x.name || x.tree) : '未在国策树里找到';
+      return '<div style="display:flex;gap:4px;align-items:center;font-size:10px;'
+        + 'font-family:Consolas,monospace;padding:1px 0">'
+        + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + tip + '">'
+        + x.focus + (x.known ? '' : ' ⚠') + '</span>'
+        + '<button class="btn cf-del" data-i="' + i + '" style="height:15px;font-size:8px;padding:0 3px">删</button>'
+        + '</div>';
+    }).join('');
+    box.querySelectorAll('.cf-del').forEach(function(b){
+      b.onclick = async function(){
+        if(!confirm('删掉这条？')) return;
+        const r = await (await fetch('/api/focus_complete_delete', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({tag: CTAG2, index: Number(b.dataset.i)})})).json();
+        msg(r.msg || '', !r.ok);
+        if(r.ok){ status(r.msg); await load(); }
+      };
+    });
+  }
+
+  async function load(){
+    const tag = ((document.getElementById('cfTag')||{}).value || '').trim().toUpperCase();
+    if(!tag){ msg('填 tag', true); return; }
+    CTAG2 = tag;
+    msg('读取中…');
+    const r = await (await fetch('/api/completed_focuses', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({tag: tag})})).json();
+    if(!r.ok){ msg(r.msg || '失败', true); return; }
+    ITEMS = r.items || [];
+    msg(r.msg || '');
+    render();
+  }
+
+  async function add(){
+    const fid = ((document.getElementById('cfId')||{}).value || '').trim();
+    if(!CTAG2){ msg('先载入', true); return; }
+    if(!fid){ msg('填国策 id', true); return; }
+    msg('写入中…');
+    const r = await (await fetch('/api/focus_complete_add', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({tag: CTAG2, focus: fid})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await load(); }
+  }
+
+  function bind(){
+    [['cfLoad', load], ['cfAdd', add]].forEach(function(p){
       const el = document.getElementById(p[0]);
       if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
     });

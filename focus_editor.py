@@ -5210,6 +5210,148 @@ def load_navy(root=None):
             "msg": "%d 支舰队，%d 艘船" % (len(fleets), total_ships)}
 
 
+def load_completed_focuses(root=None, tag=""):
+    """读某国 history 里的 complete_national_focus / mark_focus_tree_completed。
+
+    两种写法都认：
+        complete_national_focus = { focus = xxx }
+        complete_national_focus = xxx
+        mark_focus_tree_completed = yes
+    """
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    if not tag:
+        return {"ok": False, "msg": "没给 tag", "items": []}
+    p, rel = _country_hist_file(root, tag)
+    if not p:
+        return {"ok": False, "msg": "找不到 %s 的国家历史文件" % tag, "items": []}
+    try:
+        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    except Exception as e:
+        return {"ok": False, "msg": "读取失败：%s" % e, "items": []}
+    text = _strip_keep_len(raw)
+    items = []
+    for a, b, body in find_blocks(text, "complete_national_focus"):
+        f = _first(body, r'(?m)^\s*focus\s*=\s*([A-Za-z0-9_]+)')
+        if f:
+            items.append({"focus": f, "form": "block"})
+    # 简写形式 complete_national_focus = xxx（不是 {）
+    for m in re.finditer(r'(?m)^[ 	]*complete_national_focus[ 	]*=[ 	]*([A-Za-z0-9_]+)[ 	]*(?:#.*)?$', text):
+        items.append({"focus": m.group(1), "form": "inline"})
+    tree_done = bool(re.search(r'(?m)^[ 	]*mark_focus_tree_completed[ 	]*=[ 	]*yes', text))
+    return {"ok": True, "tag": tag, "file": os.path.basename(p),
+            "items": items, "count": len(items), "tree_completed": tree_done,
+            "msg": "%s：%d 个已完成国策%s" % (
+                tag, len(items), "，整树标记完成" if tree_done else "")}
+
+
+def focus_complete_add(root, tag, focus_id):
+    """给某国加一个「开局已完成」的国策。"""
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    focus_id = (focus_id or "").strip()
+    if not tag or not focus_id:
+        return {"ok": False, "msg": "tag 和国策 id 都要给"}
+    if not re.match(r'^[A-Za-z][A-Za-z0-9_]*$', focus_id):
+        return {"ok": False, "msg": "国策 id 格式不对"}
+    cur = load_completed_focuses(root, tag)
+    if not cur.get("ok"):
+        return {"ok": False, "msg": cur.get("msg")}
+    if any(x["focus"] == focus_id for x in cur["items"]):
+        return {"ok": True, "msg": "已经有 %s 了" % focus_id}
+    known = focus_id in (TREES.get("") or {})
+    found = any(focus_id in {f.get("id") for f in (t.get("focuses") or [])}
+                for t in (TREES or {}).values())
+    dst, rel, err = _politics_write(root, tag)
+    if not dst:
+        return {"ok": False, "msg": err}
+    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    block = "\n\tcomplete_national_focus = {\n\t\tfocus = %s\n\t}\n" % focus_id
+    text = _strip_keep_len(raw)
+    hi = text.find("history = {")
+    if hi >= 0:
+        br = text.find("{", hi)
+        pos = br + 1
+        new_text = raw[:pos] + block + raw[pos:]
+    else:
+        new_text = raw.rstrip() + "\nhistory = {" + block + "}\n"
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    tip = "" if found else "（注意：现有国策树里没找到这个 id）"
+    return {"ok": True, "msg": "%s 已标记完成 %s%s" % (tag, focus_id, tip)}
+
+
+def focus_complete_delete(root, tag, index):
+    """删掉第 index 个已完成国策。"""
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    try:
+        index = int(index)
+    except Exception:
+        return {"ok": False, "msg": "index 不合法"}
+    cur = load_completed_focuses(root, tag)
+    if not cur.get("ok"):
+        return {"ok": False, "msg": cur.get("msg")}
+    if index < 0 or index >= len(cur["items"]):
+        return {"ok": False, "msg": "没有第 %d 个" % (index + 1)}
+    fid = cur["items"][index]["focus"]
+    dst, rel, err = _politics_write(root, tag)
+    if not dst:
+        return {"ok": False, "msg": err}
+    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw)
+    blocks = list(find_blocks(text, "complete_national_focus"))
+    # 先在块式里找
+    for bi, (a, b, body) in enumerate(blocks):
+        f = _first(body, r'(?m)^\s*focus\s*=\s*([A-Za-z0-9_]+)')
+        if f != fid:
+            continue
+        st = a
+        while st > 0 and raw[st - 1] in " \t":
+            st -= 1
+        if st > 0 and raw[st - 1] == "\n":
+            st -= 1
+        en = b
+        while en < len(raw) and raw[en] in "\r\n":
+            en += 1
+        snapshot(dst)
+        io.open(dst, "wb").write(b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
+        return {"ok": True, "msg": "已删除 %s" % fid}
+    # 再找简写形式
+    pat = re.compile(r'(?m)^[ \t]*complete_national_focus[ \t]*=[ \t]*' + re.escape(fid) + r'[ \t]*(?:#.*)?\r?\n?')
+    new_text = pat.sub('', raw)
+    if new_text != raw:
+        snapshot(dst)
+        io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+        return {"ok": True, "msg": "已删除 %s" % fid}
+    return {"ok": False, "msg": "没定位到 %s" % fid}
+
+
+def completed_focuses_payload(root=None, tag=""):
+    info = load_completed_focuses(root, tag)
+    if not info.get("ok"):
+        return info
+    items = info["items"]
+    out = []
+    for x in items:
+        name = ""
+        tree = ""
+        for tid, t in (TREES or {}).items():
+            for f in (t.get("focuses") or []):
+                if f.get("id") == x["focus"]:
+                    name = f.get("name") or ""
+                    tree = tid
+                    break
+            if name or tree:
+                break
+        out.append({"focus": x["focus"], "form": x["form"],
+                    "name": name, "tree": tree, "known": bool(name or tree)})
+    return {"ok": True, "tag": tag, "file": info["file"],
+            "items": out, "count": info["count"],
+            "tree_completed": info["tree_completed"],
+            "msg": info["msg"]}
+
+
 IDEOLOGIES = ("democratic", "fascism", "communism", "neutrality")
 
 
@@ -13452,6 +13594,15 @@ class Handler(SimpleHTTPRequestHandler):
                                        body.get("root") or None))
         elif self.path == "/api/navy":
             self._send(navy_payload(body.get("root") or None))
+        elif self.path == "/api/completed_focuses":
+            self._send(completed_focuses_payload(body.get("root") or None,
+                                                 body.get("tag") or ""))
+        elif self.path == "/api/focus_complete_add":
+            self._send(focus_complete_add(body.get("root") or None,
+                                          body.get("tag"), body.get("focus")))
+        elif self.path == "/api/focus_complete_delete":
+            self._send(focus_complete_delete(body.get("root") or None,
+                                             body.get("tag"), body.get("index")))
         elif self.path == "/api/politics":
             self._send(politics_payload(body.get("root") or None, body.get("tag") or ""))
         elif self.path == "/api/politics_save":
