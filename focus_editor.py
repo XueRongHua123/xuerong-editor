@@ -1093,6 +1093,20 @@ def load_states(root):
 
             pm = re.search(r'provinces\s*=\s*\{([^}]*)\}', body)
             provs = [int(x) for x in re.findall(r'\d+', pm.group(1))] if pm else []
+            res = {}
+            rm = re.search(r'(?m)^[ \t]*resources\s*=\s*\{', body)
+            if rm:
+                rb = body.find("{", rm.end() - 1)
+                re_ = brace_match(body, rb)
+                if re_ > rb:
+                    for k, v, has in top_items(body[rb + 1:re_ - 1]):
+                        if not has:
+                            try:
+                                iv = int(str(v).strip())
+                            except Exception:
+                                continue
+                            if iv > 0:
+                                res[k] = iv
             hist_date = _first(body, r'(?m)^[ \t]*(\d{3,4}\.\d{1,2}\.\d{1,2})\s*=\s*\{')
 
             STATES[sid] = {
@@ -1103,6 +1117,7 @@ def load_states(root):
                 "owner": owner, "cores": sorted(set(cores)),
                 "provinces": provs, "province_count": len(provs),
                 "buildings": blds, "province_buildings": prov_blds,
+                "resources": res,
                 "victory_points": vps,
                 "history_date": hist_date,
                 "has_history": hb > 0,
@@ -1223,6 +1238,54 @@ def _drop_in_scope(body, key, depths, lo, hi):
         return body
     out.append(body[last:])
     return "".join(out)
+
+
+STATE_RESOURCES = ("oil", "rubber", "steel", "aluminium", "tungsten", "chromium")
+
+
+def _set_resource(body, key, value):
+    """改/建 state 顶层的 resources = { key = value }。"""
+    if value <= 0:
+        # 归零就删掉这一行
+        m = re.search(r'(?m)^[ \t]*resources\s*=\s*\{', body)
+        if not m:
+            return body
+        b = body.find("{", m.end() - 1)
+        e = brace_match(body, b)
+        if e <= b:
+            return body
+        inner = body[b + 1:e - 1]
+        pat = re.compile(r'(?m)^[ \t]*' + re.escape(key) + r'[ \t]*=[ \t]*\d+[ \t]*\r?\n?')
+        inner2 = pat.sub('', inner)
+        if inner2 == inner:
+            return body
+        # 块空了就整段删
+        if not inner2.strip():
+            st = m.start()
+            while st > 0 and body[st - 1] in " \t":
+                st -= 1
+            if st > 0 and body[st - 1] == "\n":
+                st -= 1
+            en = e
+            while en < len(body) and body[en] in "\r\n":
+                en += 1
+            return body[:st] + "\n" + body[en:]
+        return body[:b + 1] + inner2 + body[e - 1:]
+
+    m = re.search(r'(?m)^[ \t]*resources\s*=\s*\{', body)
+    if not m:
+        return body.rstrip() + "\n\tresources={\n\t\t%s=%d\n\t}\n" % (key, value)
+    b = body.find("{", m.end() - 1)
+    e = brace_match(body, b)
+    if e <= b:
+        return body
+    inner = body[b + 1:e - 1]
+    pat = re.compile(r'(?m)^([ \t]*)' + re.escape(key) + r'\s*=\s*\d+')
+    if pat.search(inner):
+        inner2 = pat.sub(lambda mm: (mm.group(1) or "\t\t") + "%s=%d" % (key, value), inner, count=1)
+    else:
+        inner2 = "\n\t\t%s=%d" % (key, value) + inner.rstrip("\r\n") + "\n\t"
+    return body[:b + 1] + inner2 + body[e - 1:]
 
 
 def _set_building(body, key, value):
@@ -1436,6 +1499,7 @@ def state_detail(sid, full=False):
         "provinces": s.get("provinces", []) if full else s.get("provinces", [])[:300],
         "province_count": s.get("province_count", 0),
         "buildings": s.get("buildings", {}),
+        "resources": s.get("resources", {}),
         "province_buildings": s.get("province_buildings", {}),
         "victory_points": s.get("victory_points", [])[:20],
         "categories": list(STATE_CATEGORIES),
@@ -1504,6 +1568,16 @@ def state_save(sid, fields):
             continue
         if iv >= 0:
             blds[k] = iv
+    res = {}
+    for k, v in (fields.get("resources") or {}).items():
+        if k not in STATE_RESOURCES:
+            continue
+        try:
+            iv = int(v)
+        except Exception:
+            continue
+        if iv >= 0:
+            res[k] = iv
 
     text, has_bom = _read_bom_text(p)
     loc = _state_locate(text)
@@ -1564,6 +1638,16 @@ def state_save(sid, fields):
         body = _set_building(body, k, v)
         diff.append({"key": "b_" + k, "label": "建筑 " + k,
                      "old": str(old_blds.get(k, "")), "new": str(v)})
+
+    old_res = (s.get("resources") or {})
+    for k in sorted(set(list(res.keys()) + list(old_res.keys()))):
+        v = res.get(k, 0)
+        if old_res.get(k, 0) == v:
+            continue
+        body = _set_resource(body, k, v)
+        diff.append({"key": "res_" + k, "label": "资源 " + k,
+                     "old": str(old_res.get(k, "")), "new": str(v)})
+
 
     # v0.58 省份编辑
     pb = fields.get("province_buildings")
