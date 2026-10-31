@@ -4916,12 +4916,14 @@ def _diag_recruit_last_line(root):
             lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
         except Exception:
             continue
-        # 去掉空行和纯注释行后看最后一句
-        real = [(i, ln) for i, ln in enumerate(lines, 1)
-                if ln.strip() and not ln.strip().startswith("#")]
-        if not real:
+        # 文档说的是「文件末尾必须至少还有一行，哪怕空行」，
+        # 所以看的是物理最后一行，不是最后一个非空行。
+        if not lines:
             continue
-        i, ln = real[-1]
+        i = len(lines)
+        ln = lines[-1]
+        if not ln.strip():
+            continue
         if re.match(r'^\s*recruit_character\s*=', ln):
             out.append(_finding(
                 "script.recruit.last_line", "warning",
@@ -4996,6 +4998,288 @@ def _diag_decision_category(root):
     return out
 
 
+def _loc_keys(root):
+    """收集所有层 localisation/*.yml 里定义的键。"""
+    keys = set()
+    for b in (mod_layers(root) or []):
+        if not b:
+            continue
+        for sub in ("localisation", "localisation/simp_chinese", "localisation/english"):
+            d = os.path.join(b, sub.replace("/", os.sep))
+            if not os.path.isdir(d):
+                continue
+            for fn in os.listdir(d):
+                if not fn.lower().endswith(".yml"):
+                    continue
+                try:
+                    txt = io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace").read()
+                except Exception:
+                    continue
+                for m in re.finditer(r'(?m)^[ \t]*([A-Za-z_][A-Za-z0-9_.\-]*)\s*:\d*\s*"', txt):
+                    keys.add(m.group(1))
+    return keys
+
+
+def _diag_character_unrecruited(root):
+    """common/characters 里有定义，但没有任何国家的 recruit_character 招募它。
+
+    人物光定义不招募，游戏里不出现在将领/领袖列表，也不报错。
+    """
+    out = []
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return out
+
+    # 我们自己的 character id
+    mine = {}
+    cd = os.path.join(top, "common", "characters")
+    if not os.path.isdir(cd):
+        return out
+    for fn in sorted(os.listdir(cd)):
+        if not fn.endswith(".txt"):
+            continue
+        p = os.path.join(cd, fn)
+        try:
+            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+        except Exception:
+            continue
+        # 只取 characters 块的直接子级。块里的 corps_commander / advisor /
+        # country_leader 是类型块，不是人物 id，按花括号深度区分。
+        in_chars = False
+        depth = 0
+        for i, ln in enumerate(lines, 1):
+            stripped = ln.strip()
+            if not in_chars:
+                if re.match(r'^[ \t]*characters[ \t]*=\s*\{\s*$', ln):
+                    in_chars = True
+                    depth = 1
+                continue
+            if depth == 1 and stripped.endswith('{'):
+                m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)[ \t]*=\s*\{\s*$', stripped)
+                if m:
+                    mine[m.group(1)] = (fn, i, stripped)
+            depth += ln.count('{') - ln.count('}')
+            if depth <= 0:
+                in_chars = False
+    if not mine:
+        return out
+
+    # 所有层里被招募的
+    recruited = set()
+    for b in (mod_layers(top) or []):
+        if not b:
+            continue
+        hd = os.path.join(b, "history", "countries")
+        if not os.path.isdir(hd):
+            continue
+        for fn in os.listdir(hd):
+            if not fn.endswith(".txt"):
+                continue
+            try:
+                txt = io.open(os.path.join(hd, fn), encoding="utf-8-sig", errors="replace").read()
+            except Exception:
+                continue
+            for m in re.finditer(r'(?m)^\s*recruit_character\s*=\s*([A-Za-z0-9_]+)', txt):
+                recruited.add(m.group(1))
+
+    for cid, (fn, ln, raw) in sorted(mine.items()):
+        if cid in recruited:
+            continue
+        out.append(_finding(
+            "script.character.not_recruited", "warning",
+            "%s 里定义了人物 %s，但没有任何国家的 recruit_character 招募它，"
+            "游戏里不会出现在将领或领袖列表" % (fn, cid),
+            os.path.join("common", "characters", fn).replace(os.sep, "/"), ln, raw,
+            "在对应国家的 history/countries 里加 recruit_character = %s" % cid))
+    return out
+
+
+def _diag_localisation_missing(root):
+    """mod 里引用的本地化键有没有定义。
+
+    只查我们自己写的文件（人物的 name、剧本的 name/desc、决议的 title），
+    父层和本体的键不查，避免误报。
+    """
+    out = []
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return out
+    keys = _loc_keys(top)
+    if not keys:
+        return out
+
+    def check(path, rel, pat, what):
+        p = os.path.join(top, path.replace("/", os.sep))
+        if not os.path.isfile(p):
+            return
+        try:
+            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+        except Exception:
+            return
+        for i, ln in enumerate(lines, 1):
+            m = re.search(pat, ln)
+            if not m:
+                continue
+            k = m.group(1).strip().strip('"')
+            # 纯文本（含空格或非 ASCII）不是键，跳过
+            if not re.match(r'^[A-Za-z_][A-Za-z0-9_.\-]*$', k):
+                continue
+            if k in keys:
+                continue
+            out.append(_finding(
+                "loc.key_missing", "info",
+                "%s 第 %d 行的%s用了键 %s，但 localisation 里没有这个键，界面会显示裸 key"
+                % (rel, i, what, k),
+                rel, i, ln.strip(),
+                '在 localisation 下补一行 %s:0 "显示文本"' % k))
+
+    # 剧本
+    check("common/bookmarks/zz_editor_bookmarks.txt",
+          "common/bookmarks/zz_editor_bookmarks.txt",
+          r'^\s*(?:name|desc)\s*=\s*"?([A-Za-z_][A-Za-z0-9_.\-]*)"?', "剧本名/描述")
+    # 人物
+    cd = os.path.join(top, "common", "characters")
+    if os.path.isdir(cd):
+        for fn in os.listdir(cd):
+            if fn.endswith(".txt"):
+                check("common/characters/" + fn, "common/characters/" + fn,
+                      r'^\s*name\s*=\s*"?([A-Za-z_][A-Za-z0-9_.\-]*)"?', "人物名")
+    return out
+
+
+def _diag_tag_def_missing(root):
+    """新建的国家 tag 缺 TAG_DEF 本地化。
+
+    缺了不报错，但通用事件和决议里引用该国名字的地方会显示异常。
+    """
+    out = []
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return out
+
+    cd = os.path.join(top, "common", "countries")
+    if not os.path.isdir(cd):
+        return out
+    keys = _loc_keys(top)
+
+    # tag 从 country_tags 反查文件名
+    tags = {}
+    for fn in os.listdir(cd):
+        if not fn.endswith(".txt"):
+            continue
+        stem = fn[:-4]
+        tags[stem] = fn
+
+    td = os.path.join(top, "common", "country_tags")
+    tagmap = {}
+    if os.path.isdir(td):
+        for fn in os.listdir(td):
+            if not fn.endswith(".txt"):
+                continue
+            try:
+                txt = io.open(os.path.join(td, fn), encoding="utf-8-sig", errors="replace").read()
+            except Exception:
+                continue
+            for m in re.finditer(r'(?m)^\s*([A-Z0-9]{3})\s*=\s*"([^"]+)"', txt):
+                tagmap[m.group(1)] = m.group(2)
+
+    for tag, cfn in sorted(tagmap.items()):
+        if tag + "_DEF" in keys:
+            continue
+        out.append(_finding(
+            "loc.tag_def_missing", "warning",
+            "国家 %s 缺 %s_DEF 本地化，通用事件/决议里引用该国名字时会显示异常"
+            % (tag, tag),
+            os.path.join("common", "country_tags", "zz_editor_tags.txt").replace(os.sep, "/"),
+            0, tag,
+            '在 localisation 下补 %s_DEF:0 "国家全名" 和 %s:0 "短名"' % (tag, tag)))
+    return out
+
+
+def _diag_division_template_missing(root):
+    """units 里引用的 division_template 有没有定义。"""
+    out = []
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return out
+
+    ud = os.path.join(top, "history", "units")
+    if not os.path.isdir(ud):
+        return out
+
+    defined = set()
+    used = []
+    for fn in sorted(os.listdir(ud)):
+        if not fn.endswith(".txt"):
+            continue
+        p = os.path.join(ud, fn)
+        try:
+            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+        except Exception:
+            continue
+        for i, ln in enumerate(lines, 1):
+            m = re.match(r'^[ \t]*division_template\s*=\s*\{\s*$', ln)
+            if m:
+                # 下一行通常是 name = "..."
+                for j in range(i, min(i + 5, len(lines))):
+                    nm = re.search(r'name\s*=\s*"([^"]+)"', lines[j])
+                    if nm:
+                        defined.add(nm.group(1))
+                        break
+                continue
+            m2 = re.search(r'division_template\s*=\s*"([^"]+)"', ln)
+            if m2:
+                used.append((fn, i, m2.group(1), ln.strip()))
+
+    # 父层也可能定义模板
+    for b in (mod_layers(top) or []):
+        if not b:
+            continue
+        d2 = os.path.join(b, "history", "units")
+        if not os.path.isdir(d2):
+            continue
+        for fn in os.listdir(d2):
+            if not fn.endswith(".txt"):
+                continue
+            try:
+                txt = io.open(os.path.join(d2, fn), encoding="utf-8-sig", errors="replace").read()
+            except Exception:
+                continue
+            for m in re.finditer(r'division_template\s*=\s*\{[^}]*?name\s*=\s*"([^"]+)"', txt, re.S):
+                defined.add(m.group(1))
+
+    for fn, i, tname, raw in used:
+        if tname in defined:
+            continue
+        out.append(_finding(
+            "script.division_template.missing", "error",
+            "%s 第 %d 行引用了师团模板 %s，但整个叠加链里都没有定义这个模板"
+            % (fn, i, tname),
+            os.path.join("history", "units", fn).replace(os.sep, "/"), i, raw,
+            '补一个 division_template = { name = "%s" ... }，或改成已存在的模板名' % tname))
+    return out
+
+
 def diagnose(root=None):
     """扫描当前 mod，返回结构化诊断列表。"""
     root = _map_pick(root) if root else (ROOTS[-1] if ROOTS else None)
@@ -5003,7 +5287,9 @@ def diagnose(root=None):
         return {"ok": False, "msg": "没有打开的 mod", "findings": []}
     findings = []
     for fn in (_diag_oob_not_referenced, _diag_gfx_missing,
-               _diag_recruit_last_line, _diag_decision_category):
+               _diag_recruit_last_line, _diag_decision_category,
+               _diag_character_unrecruited, _diag_localisation_missing,
+               _diag_tag_def_missing, _diag_division_template_missing):
         try:
             findings.extend(fn(root))
         except Exception:
