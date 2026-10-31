@@ -316,6 +316,38 @@ def ensure_file_writable(root, sub, basename):
     return dst, "已从 %s 复制单个文件" % (os.path.basename(os.path.dirname(src)) or "父层")
 
 
+def _atomic_write(path, data):
+    """原子写文件：先写同目录临时文件，成功后 os.replace 覆盖。
+
+    直接 _atomic_write(path, ) 在写到一半崩溃/断电时会留下半截文件，
+    原来的内容也没了。临时文件 + rename 保证要么是旧内容，要么是新内容。
+    """
+    path = os.path.abspath(path)
+    d = os.path.dirname(path) or "."
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    tmp = "%s.tmp%d" % (path, os.getpid())
+    try:
+        with io.open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except Exception:
+                pass
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        raise
+
+
 def _bom_for(path):
     """新建文件一律不加 BOM。
 
@@ -1942,7 +1974,7 @@ def _write_bom_text(path, text, has_bom):
         data = b"\xef\xbb\xbf" + data
     target = _out_path(path)             # 输出模式下写到 output/，源文件不动
     os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
-    io.open(target, "wb").write(data)
+    _atomic_write(target, data)
 
 
 def _first_in(text, pat):
@@ -2856,7 +2888,7 @@ def _save_point_undo(bmp, changes):
     for idx, rgb in changes:
         buf += struct.pack("<I", idx)
         buf += bytes((rgb[0], rgb[1], rgb[2]))
-    io.open(fn, "wb").write(bytes(buf))
+    _atomic_write(fn, bytes(buf))
     return fn
 
 
@@ -3184,7 +3216,7 @@ def refine_apply(pid, k=2, root=None, base_pid=None):
     # 写 definition.csv
     snapshot(csvp)
     body = chr(10).join(rows + new_rows) + chr(10)
-    io.open(csvp, "wb").write(body.encode("utf-8"))
+    _atomic_write(csvp, body.encode("utf-8"))
 
     # 写 bmp：只改这块区域内像素
     xs = [p % w for p in owner]
@@ -4089,7 +4121,7 @@ def adopt_dir(mod_root, sub, force=False):
             if txt and not txt.endswith("\n"):
                 txt += "\n"
             txt += 'replace_path="%s"\n' % sub
-            io.open(desc_path, "wb").write(_bom_for(desc_path) + txt.encode("utf-8"))
+            _atomic_write(desc_path, _bom_for(desc_path) + txt.encode("utf-8"))
             added = True
     except Exception as e:
         return {"ok": False, "msg": "目录已拷贝，但 descriptor.mod 写入失败：%s" % e}
@@ -4565,7 +4597,7 @@ def country_tech_toggle(root, tag, tech, on=True):
         else:
             new_text = raw.rstrip() + "\nhistory = {" + ins + "}\n"
         snapshot(dst)
-        io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+        _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
         return {"ok": True, "msg": "已加 %s（新建 set_technology 块）" % tech}
 
     a, b, body = blocks[0]
@@ -4583,7 +4615,7 @@ def country_tech_toggle(root, tag, tech, on=True):
         new_text = raw[:a] + seg2 + raw[b:]
 
     snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "%s %s" % ("已加" if on else "已删", tech)}
 
 
@@ -4685,11 +4717,300 @@ def portrait_import(root, src_path, tag, cid=None, overwrite=False, small=False)
     if new != raw:
         if os.path.exists(gfxp):
             snapshot(gfxp)
-        io.open(gfxp, "wb").write(_bom_for(gfxp) + new.encode("utf-8"))
+        _atomic_write(gfxp, _bom_for(gfxp) + new.encode("utf-8"))
 
     return {"ok": True, "sprite": sprite, "file": rel_tex,
             "size": "%dx%d" % (W, H),
             "msg": "头像已导入：%s（%dx%d）" % (sprite, W, H)}
+
+
+# ---------- 诊断系统 ----------
+# 每条诊断的形状统一：改前端、写检查项、做修复按钮都吃这一套。
+#   code      稳定的错误码，前端按它分组/给图标，不随文案变
+#   severity  error / warning / info
+#   file      mod 内相对路径
+#   line      1 起的行号，0 表示不知道
+#   excerpt   出错那段原文，方便直接看出问题
+#   msg       给人看的一句话
+#   repair    怎么改，能自动修的填路由名
+
+def _finding(code, severity, msg, file="", line=0, excerpt="", repair=""):
+    return {"code": code, "severity": severity, "msg": msg,
+            "file": file, "line": line or 0,
+            "excerpt": (excerpt or "").strip()[:200], "repair": repair}
+
+
+def _diag_oob_not_referenced(root):
+    """history/units 下的 OOB 文件有没有被国家历史点名。
+
+    HOI4 不扫描这个目录，靠 set_oob / set_air_oob / set_naval_oob 逐条点名。
+    自己起个文件名写进去，游戏一个单位都不会加载，而且 error.log 里不会有任何提示。
+    """
+    out = []
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return out
+
+    ud = os.path.join(top, "history", "units")
+    if not os.path.isdir(ud):
+        return out
+
+    # 收集所有被点名的名字
+    referenced = set()
+    hd = os.path.join(top, "history", "countries")
+    layers = mod_layers(top) or [top]
+    for b in layers:
+        if not b:
+            continue
+        h2 = os.path.join(b, "history", "countries")
+        if not os.path.isdir(h2):
+            continue
+        for fn in os.listdir(h2):
+            if not fn.endswith(".txt"):
+                continue
+            try:
+                txt = io.open(os.path.join(h2, fn), encoding="utf-8-sig", errors="replace").read()
+            except Exception:
+                continue
+            for k in ("set_oob", "oob", "set_air_oob", "air_oob",
+                      "set_naval_oob", "naval_oob", "load_oob"):
+                for m in re.finditer(r'(?m)^\s*' + k + r'\s*=\s*"([^"]+)"', txt):
+                    referenced.add(m.group(1).strip())
+
+    for fn in sorted(os.listdir(ud)):
+        if not fn.endswith(".txt"):
+            continue
+        stem = fn[:-4]
+        if stem in referenced:
+            continue
+        p = os.path.join(ud, fn)
+        try:
+            txt = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        except Exception:
+            continue
+        if not re.search(r'(?m)^\s*(units|air_wings|division_template|fleet)\s*=\s*\{', txt):
+            continue
+        first = ""
+        for i, ln in enumerate(txt.splitlines(), 1):
+            if ln.strip():
+                first = ln.strip()
+                break
+        out.append(_finding(
+            "script.oob.not_referenced", "warning",
+            "%s 里有内容，但没有被任何国家历史的 set_oob / set_air_oob / set_naval_oob 点名，"
+            "游戏不会加载它（也不报错）" % fn,
+            os.path.join("history", "units", fn).replace(os.sep, "/"),
+            0, first,
+            "给你自己的国家加一条 set_oob = \"%s\"；或者把内容并进已被点名的那个文件"
+            % stem))
+    return out
+
+
+def _gfx_names(root):
+    """收集所有 interface/*.gfx 里定义的 sprite 名。"""
+    names = set()
+    for b in (mod_layers(root) or []):
+        if not b:
+            continue
+        gd = os.path.join(b, "interface")
+        if not os.path.isdir(gd):
+            continue
+        for fn in os.listdir(gd):
+            if not fn.lower().endswith(".gfx"):
+                continue
+            try:
+                txt = io.open(os.path.join(gd, fn), encoding="utf-8-sig", errors="replace").read()
+            except Exception:
+                continue
+            for m in re.finditer(r'name\s*=\s*"([^"]+)"', txt):
+                names.add(m.group(1))
+    return names
+
+
+def _diag_gfx_missing(root):
+    """icon / picture 引用的 sprite 在本体和 mod 里都找不到。
+
+    HOI4 的决议 icon 会自动补 GFX_decision_，国策 icon 用完整名，
+    精神 picture 自动补 GFX_idea_。名字写错不报错，界面上一片空白。
+    """
+    out = []
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return out
+    known = _gfx_names(top)
+    if not known:
+        return out
+
+    targets = [
+        ("common/decisions", r'(?m)^\s*icon\s*=\s*([A-Za-z_][A-Za-z0-9_]*)'),
+        ("common/decisions/categories", r'(?m)^\s*icon\s*=\s*([A-Za-z_][A-Za-z0-9_]*)'),
+        ("common/national_focus", r'(?m)^\s*icon\s*=\s*([A-Za-z_][A-Za-z0-9_]*)'),
+        ("common/ideas", r'(?m)^\s*picture\s*=\s*([A-Za-z_][A-Za-z0-9_]*)'),
+    ]
+    for sub, pat in targets:
+        d = os.path.join(top, sub.replace("/", os.sep))
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(os.listdir(d)):
+            if not fn.endswith(".txt"):
+                continue
+            p = os.path.join(d, fn)
+            try:
+                lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+            except Exception:
+                continue
+            for i, ln in enumerate(lines, 1):
+                m = re.search(pat, ln + "\n")
+                if not m:
+                    continue
+                raw = m.group(1).strip()
+                # 已经是完整 sprite 名就直接查；裸名按各自命名空间补前缀
+                cands = [raw]
+                if not raw.startswith("GFX_"):
+                    cands += ["GFX_" + raw, "GFX_decision_" + raw, "GFX_idea_" + raw,
+                              "GFX_decision_category_" + raw]
+                if any(c in known for c in cands):
+                    continue
+                out.append(_finding(
+                    "gfx.sprite_missing", "warning",
+                    "%s 第 %d 行引用了 %s，但在 interface/*.gfx 里找不到这个 sprite，"
+                    "界面上会显示空白或默认图" % (fn, i, raw),
+                    os.path.join(sub, fn).replace(os.sep, "/"), i, ln.strip(),
+                    "检查拼写；决议 icon 写裸名（游戏自动补 GFX_decision_），"
+                    "国策 icon 写完整 GFX_ 名，精神 picture 写裸名（自动补 GFX_idea_）"))
+    return out
+
+
+def _diag_recruit_last_line(root):
+    """history/countries 里 recruit_character 不能是最后一行。
+
+    文件末尾就是 recruit_character 时招募会静默失败——人物定义了但游戏里不出现。
+    """
+    out = []
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return out
+    d = os.path.join(top, "history", "countries")
+    if not os.path.isdir(d):
+        return out
+    for fn in sorted(os.listdir(d)):
+        if not fn.endswith(".txt"):
+            continue
+        p = os.path.join(d, fn)
+        try:
+            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+        except Exception:
+            continue
+        # 去掉空行和纯注释行后看最后一句
+        real = [(i, ln) for i, ln in enumerate(lines, 1)
+                if ln.strip() and not ln.strip().startswith("#")]
+        if not real:
+            continue
+        i, ln = real[-1]
+        if re.match(r'^\s*recruit_character\s*=', ln):
+            out.append(_finding(
+                "script.recruit.last_line", "warning",
+                "%s 的 recruit_character 在文件最后一行，招募会静默失败" % fn,
+                os.path.join("history", "countries", fn).replace(os.sep, "/"), i, ln.strip(),
+                "在文件末尾补一个空行或注释"))
+    return out
+
+
+def _diag_decision_category(root):
+    """决议引用的类别有没有在 common/decisions/categories 里定义。
+
+    1.13 起决议类别必须注册，否则报 Unknown category / Invalid Decision Category。
+    """
+    out = []
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return out
+    dd = os.path.join(top, "common", "decisions")
+    if not os.path.isdir(dd):
+        return out
+
+    # 已定义的类别（含父层）
+    cats = set()
+    for b in (mod_layers(top) or []):
+        if not b:
+            continue
+        cd = os.path.join(b, "common", "decisions", "categories")
+        if not os.path.isdir(cd):
+            continue
+        for fn in os.listdir(cd):
+            if not fn.endswith(".txt"):
+                continue
+            try:
+                txt = io.open(os.path.join(cd, fn), encoding="utf-8-sig", errors="replace").read()
+            except Exception:
+                continue
+            for m in re.finditer(r'(?m)^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=\s*\{', txt):
+                cats.add(m.group(1))
+
+    for fn in sorted(os.listdir(dd)):
+        if not fn.endswith(".txt"):
+            continue
+        p = os.path.join(dd, fn)
+        try:
+            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+        except Exception:
+            continue
+        for i, ln in enumerate(lines, 1):
+            m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)[ \t]*=\s*\{\s*$', ln)
+            if not m:
+                continue
+            name = m.group(1)
+            if name in cats or name.endswith("_category") is False and name in cats:
+                continue
+            if name in cats:
+                continue
+            # 顶层块名就是类别名；只要不是已注册的类别就提醒
+            if name in ("categories",):
+                continue
+            out.append(_finding(
+                "script.decision.category_undefined", "warning",
+                "%s 第 %d 行的顶层块 %s 看起来是决议类别，但没有在 "
+                "common/decisions/categories 里注册" % (fn, i, name),
+                os.path.join("common", "decisions", fn).replace(os.sep, "/"), i, ln.strip(),
+                "在该文件里补一个同名类别块，或确认这里用的是已注册类别"))
+    return out
+
+
+def diagnose(root=None):
+    """扫描当前 mod，返回结构化诊断列表。"""
+    root = _map_pick(root) if root else (ROOTS[-1] if ROOTS else None)
+    if not root:
+        return {"ok": False, "msg": "没有打开的 mod", "findings": []}
+    findings = []
+    for fn in (_diag_oob_not_referenced, _diag_gfx_missing,
+               _diag_recruit_last_line, _diag_decision_category):
+        try:
+            findings.extend(fn(root))
+        except Exception:
+            pass
+    order = {"error": 0, "warning": 1, "info": 2}
+    findings.sort(key=lambda x: (order.get(x["severity"], 3), x["file"], x["line"]))
+    return {"ok": True, "findings": findings, "count": len(findings)}
 
 
 def _oob_files(root, tag, kind="land"):
@@ -4806,7 +5127,7 @@ def gfx_sprite_new(root, name, texturefile):
         new_text = block.lstrip("\n")
     if os.path.exists(p):
         snapshot(p)
-    io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
+    _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "已注册 sprite %s → %s" % (name, texturefile),
             "file": "interface/zz_editor_icons.gfx"}
 
@@ -5038,7 +5359,7 @@ def country_tag_add(root, tag, color=None, culture="western_european_gfx"):
         new_text = line
     if os.path.exists(p):
         snapshot(p)
-    io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
+    _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
 
     # 2) common/countries 定义
     cd = os.path.join(tgt, "common", "countries")
@@ -5048,7 +5369,7 @@ def country_tag_add(root, tag, color=None, culture="western_european_gfx"):
             "color = { %d %d %d }\n") % (
         culture, culture.replace("_gfx", "_2d"), rgb[0], rgb[1], rgb[2])
     if not os.path.exists(cp):
-        io.open(cp, "wb").write(_bom_for(cp) + body.encode("utf-8"))
+        _atomic_write(cp, _bom_for(cp) + body.encode("utf-8"))
 
     try:
         _LAYERS_CACHE.clear()
@@ -5088,7 +5409,7 @@ def country_tag_delete(root, tag):
         new_text = pat.sub('', raw)
         if new_text != raw:
             snapshot(p)
-            io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
+            _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
             removed = True
             break
     if not removed:
@@ -5177,7 +5498,7 @@ def country_offsite_add(root, tag, btype, level=1):
     ins = "\nadd_offsite_building = {\n\ttype = %s\n\tlevel = %d\n}\n" % (btype, level)
     new_text = raw.rstrip() + "\n" + ins
     snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "已加 %s ×%d" % (btype, level)}
 
 
@@ -5225,7 +5546,7 @@ def country_offsite_delete(root, tag, index):
         en += 1
     new_text = raw[:st] + "\n" + raw[en:]
     snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "已删除 %s ×%d" % (it["type"], it["level"])}
 
 
@@ -5276,7 +5597,7 @@ def country_offsite_set(root, tag, index, btype=None, level=None):
         return {"ok": True, "msg": "没有改动"}
     new_text = raw[:a] + seg2 + raw[b:]
     snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "已改为 %s ×%d" % (nt, nl)}
 
 
@@ -5377,7 +5698,7 @@ def country_idea_toggle(root, tag, idea, on=True):
         else:
             new_text = raw.rstrip() + "\nhistory = {" + ins + "}\n"
         snapshot(dst)
-        io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+        _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
         return {"ok": True, "msg": "已加 %s（新建 add_ideas 块）" % idea}
 
     a, b, body = blocks[0]
@@ -5393,7 +5714,7 @@ def country_idea_toggle(root, tag, idea, on=True):
         new_text = raw[:a] + seg2 + raw[b:]
 
     snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "%s %s" % ("已加" if on else "已删", idea)}
 
 
@@ -5771,7 +6092,7 @@ def _dec_category_register(root, category, icon="GFX_decision_category_generic")
         new_text = body
     if os.path.exists(p):
         snapshot(p)
-    io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
+    _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
     return True, "已注册类别"
 
 
@@ -5896,7 +6217,7 @@ def decision_add(root, did, category, icon="GFX_decision_category_generic", cost
 
     if os.path.exists(p):
         snapshot(p)
-    io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
+    _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
     where = "已有类别 %s" % category if cat_exists else "新建类别 %s" % category
     return {"ok": True, "msg": "已新建决议 %s（%s，cost %d）" % (did, where, cost)}
 
@@ -5931,7 +6252,7 @@ def decision_set(root, did, fields):
         return {"ok": True, "msg": "没有改动（字段不存在或未变）"}
     new_text = raw[:a] + new_seg + raw[b:]
     snapshot(p)
-    io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
+    _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "决议 %s 已更新：%s" % (did, ", ".join(changed))}
 
 
@@ -5954,7 +6275,7 @@ def decision_delete(root, did):
     while en < len(raw) and raw[en] in "\r\n":
         en += 1
     snapshot(p)
-    io.open(p, "wb").write(b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
+    _atomic_write(p, b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
     return {"ok": True, "msg": "已删除决议 %s" % did}
 
 
@@ -6202,7 +6523,7 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
 
     if os.path.exists(p):
         snapshot(p)
-    io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
+    _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
 
     # 光在 common/characters 里定义还不够，HOI4 还要求国家历史里写一条
     # recruit_character = <id>，否则人物不会出现在将领列表里。
@@ -6238,7 +6559,7 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
                         else:
                             new_h = hraw.rstrip() + "\n\nrecruit_character = %s\n" % cid
                         snapshot(hp)
-                        io.open(hp, "wb").write(_bom_for(hp) + new_h.encode("utf-8"))
+                        _atomic_write(hp, _bom_for(hp) + new_h.encode("utf-8"))
                         rec_note = "，并在 %s 里加了 recruit_character" % os.path.basename(hp)
         except Exception as e:
             rec_note = "（招募写入失败：%s）" % str(e)[:40]
@@ -6342,7 +6663,7 @@ def character_set(root, cid, fields):
         return {"ok": True, "msg": "没有改动"}
     new_text = raw[:a] + new_seg + raw[b:]
     snapshot(p)
-    io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
+    _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "%s 已更新：%s" % (it["name"], ", ".join(changed))}
 
 
@@ -6403,7 +6724,7 @@ def character_delete(root, cid):
     while en < len(raw) and raw[en] in "\r\n":
         en += 1
     snapshot(p)
-    io.open(p, "wb").write(_bom_for(p) + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
+    _atomic_write(p, _bom_for(p) + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
 
     # 同步清掉国家历史里的 recruit_character，否则游戏会引用一个不存在的人物
     rec_note = ""
@@ -6433,7 +6754,7 @@ def character_delete(root, cid):
                 nh = pat.sub("", ht2)
                 if nh != ht2:
                     snapshot(target)
-                    io.open(target, "wb").write(_bom_for(target) + nh.encode("utf-8"))
+                    _atomic_write(target, _bom_for(target) + nh.encode("utf-8"))
                     rec_note = "，并清掉了 %s 里的 recruit_character" % fn
     except Exception:
         pass
@@ -6670,7 +6991,7 @@ def bookmark_add(root, name, date, desc=None, picture=None, default_country=None
         new_text = raw.rstrip() + "\nbookmarks = {\n" + block_txt + "}\n"
     if os.path.exists(p):
         snapshot(p)
-    io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
+    _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
     try:
         _bookmark_loc(root, name, desc or name, clist)
     except Exception:
@@ -6750,7 +7071,7 @@ def bookmark_set(root, index, fields):
         return {"ok": True, "msg": "没有改动"}
     new_text = raw[:a] + new_seg + raw[b:]
     snapshot(p)
-    io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
+    _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "剧本「%s」已更新：%s" % (it["name"], ", ".join(changed))}
 
 
@@ -6814,7 +7135,7 @@ def bookmark_delete(root, index):
     while en < len(raw) and raw[en] in "\r\n":
         en += 1
     snapshot(p)
-    io.open(p, "wb").write(b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
+    _atomic_write(p, b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
     return {"ok": True, "msg": "已删除剧本「%s」" % it["name"]}
 
 
@@ -6892,7 +7213,7 @@ def focus_complete_add(root, tag, focus_id):
     else:
         new_text = raw.rstrip() + "\nhistory = {" + block + "}\n"
     snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     tip = "" if found else "（注意：现有国策树里没找到这个 id）"
     return {"ok": True, "msg": "%s 已标记完成 %s%s" % (tag, focus_id, tip)}
 
@@ -6931,14 +7252,14 @@ def focus_complete_delete(root, tag, index):
         while en < len(raw) and raw[en] in "\r\n":
             en += 1
         snapshot(dst)
-        io.open(dst, "wb").write(b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
+        _atomic_write(dst, b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
         return {"ok": True, "msg": "已删除 %s" % fid}
     # 再找简写形式
     pat = re.compile(r'(?m)^[ \t]*complete_national_focus[ \t]*=[ \t]*' + re.escape(fid) + r'[ \t]*(?:#.*)?\r?\n?')
     new_text = pat.sub('', raw)
     if new_text != raw:
         snapshot(dst)
-        io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+        _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
         return {"ok": True, "msg": "已删除 %s" % fid}
     return {"ok": False, "msg": "没定位到 %s" % fid}
 
@@ -7096,7 +7417,7 @@ def politics_save(root, tag, fields):
                 return {"ok": True, "msg": "没有改动"}
             new_text = raw[:pb + 1] + nb + raw[pe - 1:]
             snapshot(dst)
-            io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+            _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
             return {"ok": True, "msg": "%s 已更新：%s" % (tag, ", ".join(changed) or "无变化")}
     # 没有 set_politics：在 history 里新建
     block = ('\n\tset_politics = {\n'
@@ -7116,7 +7437,7 @@ def politics_save(root, tag, fields):
     else:
         new_text = raw.rstrip() + "\nhistory = {" + block + "}\n"
     snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "%s 新建 set_politics 块" % tag}
 
 
@@ -7159,7 +7480,7 @@ def popularities_save(root, tag, pops):
         else:
             new_text = raw.rstrip() + "\nhistory = {" + block + "}\n"
     snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     tip = "（合计 %d）" % total
     return {"ok": True, "msg": "%s 支持率已更新%s" % (tag, tip)}
 
@@ -7195,7 +7516,7 @@ def war_add(root, tag, target, wargoal_type="annex"):
     else:
         new_text = raw.rstrip() + "\nhistory = {" + block + "}\n"
     snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "%s 对 %s 宣战（%s）" % (tag, target, wargoal_type)}
 
 
@@ -7231,7 +7552,7 @@ def war_delete(root, tag, index):
         en += 1
     tgt_tag = cur["wars"][index]["target"]
     snapshot(dst)
-    io.open(dst, "wb").write(b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
+    _atomic_write(dst, b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
     return {"ok": True, "msg": "已删除对 %s 的宣战" % tgt_tag}
 
 
@@ -7373,7 +7694,7 @@ def air_wing_delete(root, idx):
     info = load_air_wings(root)
     nm = info["wings"][idx]["name"] if idx < len(info["wings"]) else ""
     snapshot(dst)
-    io.open(dst, "wb").write(b"\xef\xbb\xbf" + (raw[:s2] + "\n" + raw[e2:]).encode("utf-8"))
+    _atomic_write(dst, b"\xef\xbb\xbf" + (raw[:s2] + "\n" + raw[e2:]).encode("utf-8"))
     return {"ok": True, "msg": "已删除联队「%s」" % nm}
 
 
@@ -7459,7 +7780,7 @@ def air_wing_add(root, province, name, eq_type, owner, amount=10, tag=None):
 
     if os.path.exists(dst):
         snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "已在省 %d 加联队「%s」（%s ×%d，owner %s）" % (
         province, name or "新联队", eq_type, amount, owner)}
 
@@ -7638,7 +7959,7 @@ def navy_add_ship(root, fi, ti, name=None, definition="destroyer", exp=0.3, tag=
     ins = _ship_line(name, definition, exp)
     new_text = _insert_before_close(raw2, en2, ins)
     snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "已在第 %d 个特遣队加 1 艘 %s" % (ti + 1, definition)}
 
 
@@ -7688,7 +8009,7 @@ def navy_add_tf(root, fi, name=None, location=None, tag=None):
              '\t\t\t}\n') % (nm.replace('"', ""), loc)
     new_text = _insert_before_close(raw2, en2, block)
     snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "已在舰队「%s」加特遣队「%s」" % (f["name"], nm)}
 
 
@@ -7793,7 +8114,7 @@ def navy_set_ship(root, fi, ti, si, fields):
         return {"ok": True, "msg": "没有改动"}
     new_text = raw2[:st2] + new_seg + raw2[en2:]
     snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "已改第 %d 艘船：%s / %s" % (si + 1, nm, df)}
 
 
@@ -7834,7 +8155,7 @@ def _navy_cut(root, rel, start, end, what):
         return {"ok": False, "msg": "偏移不合法（切完为空）"}
     new_text = raw[:st] + "\n" + raw[en:]
     snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     return {"ok": True, "msg": "已删除 %s" % what}
 
 
@@ -7960,7 +8281,7 @@ def template_save(name, fields, root=None):
     new_block = _tpl_render(new_name, regs, sup, locked, with_key=False)
     new_text = raw[:A] + new_block + raw[B:]
     snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     load_units(root, force=True)
     return {"ok": True, "name": new_name,
             "msg": "模板「%s」已更新（编制 %d、支援 %d）" % (
@@ -7991,7 +8312,7 @@ def template_delete(name, root=None):
         en += 1
     new_text = raw[:st] + raw[en:]
     snapshot(dst)
-    io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     load_units(root, force=True)
     return {"ok": True, "msg": "已删除模板「%s」" % name}
 
@@ -8035,7 +8356,7 @@ def template_add(name, unit, x=0, y=0, root=None, tag=None):
     new_text = (raw.rstrip() + "\n\n" if raw.strip() else "") + block
     if os.path.exists(p):
         snapshot(p)
-    io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
+    _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
     load_units(root, force=True)
     return {"ok": True, "msg": "已新建模板「%s」" % name}
 
@@ -8141,7 +8462,7 @@ def unit_add(location, template, name=None, exp=None, eq=None, root=None, tag=No
         new_text = raw.rstrip() + "\nunits = {\n" + block + "}\n"
 
     snapshot(p) if os.path.exists(p) else None
-    io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
+    _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
     # 其它 DLC 分支的 OOB 也补一份，否则换 DLC 组合部队就没了
     for _nm in _oobs[1:]:
         _p2 = os.path.join(d, _nm + ".txt")
@@ -8174,7 +8495,7 @@ def unit_add(location, template, name=None, exp=None, eq=None, root=None, tag=No
             _new2 = _raw2.rstrip() + "\nunits = {\n" + block + "}\n"
         if os.path.exists(_p2):
             snapshot(_p2)
-        io.open(_p2, "wb").write(_bom_for(_p2) + _new2.encode("utf-8"))
+        _atomic_write(_p2, _bom_for(_p2) + _new2.encode("utf-8"))
 
     load_units(root, force=True)
     return {"ok": True, "file": os.path.relpath(p, tgt),
@@ -8244,7 +8565,7 @@ def unit_delete(location, index, root=None):
                 en += 1
             new_text = raw[:st] + raw[en:]
             snapshot(dst)
-            io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+            _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
             load_units(root, force=True)
             return {"ok": True, "msg": "已删除省 %d 的第 %d 支部队" % (location, index + 1)}
     return {"ok": False, "msg": "没定位到要删的部队"}
@@ -8312,7 +8633,7 @@ def unit_move(location, index, new_location, root=None):
             s1 = db + 1 + lm.end()
             new_text = raw[:s0] + (lm.group(1) or "") + "location = %d" % new_location + raw[s1:]
             snapshot(dst)
-            io.open(dst, "wb").write(_bom_for(dst) + new_text.encode("utf-8"))
+            _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
             load_units(root, force=True)
             return {"ok": True, "msg": "省 %d 第 %d 支已移到省 %d" % (
                 location, index + 1, new_location)}
@@ -10165,7 +10486,7 @@ def loc_generate(root=None, keys=None, lang="simp_chinese", dry=False):
         lines.append(' %s:0 "%s"' % (k, v))
     body = chr(10).join(lines) + chr(10)
     snapshot(fn) if os.path.exists(fn) else None
-    io.open(fn, "wb").write(_bom_for(fn) + body.encode("utf-8"))
+    _atomic_write(fn, _bom_for(fn) + body.encode("utf-8"))
     reload_data()
     return {"ok": True, "written": added, "total": len(existing), "path": fn,
             "msg": "已写入 %d 个键到 %s（占位值=键名，改完重新加载本地化）" % (
@@ -10557,7 +10878,7 @@ def event_space_create(ns, root=None):
         "}\n"
     ) % (ns, ns, ns, ns, ns)
     snapshot(fn) if os.path.exists(fn) else None
-    io.open(fn, "wb").write(_bom_for(fn) + body.encode("utf-8"))
+    _atomic_write(fn, _bom_for(fn) + body.encode("utf-8"))
     _EVENT_GRAPH_CACHE.clear()
 
     # 同时生成本地化，省得再手动补键
@@ -10570,7 +10891,7 @@ def event_space_create(ns, root=None):
                  ' %s.1.t:0 "【未命名事件】"' % ns,
                  ' %s.1.d:0 "（在这里写事件描述）"' % ns,
                  ' %s.1.a:0 "确定"' % ns]
-        io.open(loc_fn, "wb").write(b"\xef\xbb\xbf" + (chr(10).join(lines) + chr(10)).encode("utf-8"))
+        _atomic_write(loc_fn, b"\xef\xbb\xbf" + (chr(10).join(lines) + chr(10)).encode("utf-8"))
         loc_msg = "，本地化已写到 localisation/simp_chinese/%s" % os.path.basename(loc_fn)
     except Exception as _e:
         loc_msg = "，本地化生成失败（%s）" % _e
@@ -10650,7 +10971,7 @@ def event_space_delete(ns, root=None):
                 touched.append("%s（已删空，文件移除）" % os.path.relpath(p, root))
             else:
                 snapshot(p)
-                io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
+                _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
                 touched.append("%s（删 %d 个块）" % (os.path.relpath(p, root), len(spans)))
             removed += max(1, len(spans))     # 只剩 add_namespace 声明时也算删过
     if not removed:
@@ -10683,7 +11004,7 @@ def _loc_write_pairs(root, pairs, lang="simp_chinese"):
     lines = ["l_%s:" % lang]
     for k in sorted(existing):
         lines.append(' %s:0 "%s"' % (k, existing[k]))
-    io.open(fn, "wb").write(b"\xef\xbb\xbf" + (chr(10).join(lines) + chr(10)).encode("utf-8"))
+    _atomic_write(fn, b"\xef\xbb\xbf" + (chr(10).join(lines) + chr(10)).encode("utf-8"))
     return os.path.basename(fn)
 
 
@@ -10954,7 +11275,7 @@ def event_edit(eid, title=None, desc=None, options=None, root=None,
                             "msg": "已更新 %s 的文本（写进 %s）" % (eid, _lf)}
                 return {"ok": False, "msg": "没有实际改动（参数为空或未匹配到字段）"}
             snapshot(p)
-            io.open(p, "wb").write(b"\xef\xbb\xbf" + "".join(out).encode("utf-8"))
+            _atomic_write(p, b"\xef\xbb\xbf" + "".join(out).encode("utf-8"))
             # 中文文本写进本地化，不塞回事件文件
             _pairs = {}
             if title_text and title:
@@ -11111,7 +11432,7 @@ def railway_set_level(index, level, root=None):
         if not lines[i].endswith(chr(10)):
             lines[i] += chr(10)
         snapshot(path)
-        io.open(path, "wb").write(b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
+        _atomic_write(path, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
         return {"ok": True, "index": index, "level": level,
                 "msg": "第 %d 条铁路等级改为 %d" % (index, level)}
     return {"ok": False, "msg": "这条铁路是块式写法，暂不支持改等级"}
@@ -11175,7 +11496,7 @@ def railway_edit(index, level=None, provs=None, root=None):
         lines[i] = "%d %d %s%s" % (new_level, len(new_provs),
                                    " ".join(str(p) for p in new_provs), tail)
         snapshot(path)
-        io.open(path, "wb").write(b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
+        _atomic_write(path, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
         return {"ok": True, "index": index, "level": new_level, "provs": new_provs,
                 "msg": "第 %d 条铁路已更新：等级 %d，%d 个省" % (
                     index, new_level, len(new_provs))}
@@ -11195,7 +11516,7 @@ def railway_edit(index, level=None, provs=None, root=None):
         new_level, "\n\t\t".join(str(p) for p in new_provs)))
     new_raw = raw[:b + 1] + body + raw[e - 1:]
     snapshot(path)
-    io.open(path, "wb").write(_bom_for(path) + new_raw.encode("utf-8"))
+    _atomic_write(path, _bom_for(path) + new_raw.encode("utf-8"))
     return {"ok": True, "index": index, "level": new_level, "provs": new_provs,
             "msg": "第 %d 条铁路（块式）已重建" % index}
 
@@ -11233,7 +11554,7 @@ def railway_delete(index, root=None):
             return {"ok": False, "msg": "定位不到这一行"}
         del lines[rows[index]]
         snapshot(path)
-        io.open(path, "wb").write(b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
+        _atomic_write(path, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
         return {"ok": True, "msg": "已删除第 %d 条铁路（%d 个省）" % (index, len(cur["provs"]))}
     return {"ok": False, "msg": "块式铁路暂不支持删除"}
 
@@ -11422,7 +11743,7 @@ def prov_terrain_set(pid, terrain, root=None):
 
     snapshot(csvp)
     snapshot(tbmp)
-    io.open(csvp, "wb").write(b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
+    _atomic_write(csvp, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
     if not bmp_write_rect_8(tbmp, bx, by, bw, bh, buf):
         return {"ok": False, "msg": "terrain.bmp 写入失败（不是 8 位索引图）"}
 
@@ -11507,7 +11828,7 @@ def _terrain_apply(csvp, tbmp, ids, w, h, pid_set, new_idx, renumber_from=None):
 
     snapshot(csvp)
     snapshot(tbmp)
-    io.open(csvp, "wb").write(b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
+    _atomic_write(csvp, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
     if not bmp_write_rect_8(tbmp, bx, by, bw, bh, buf):
         return 0, 0, old_types
     try:
@@ -11914,7 +12235,7 @@ def strategic_region_create(root=None, sid=None, name=None, provinces=None):
     if weather:
         body += "\tweather=" + weather + "\n"
     body += "}\n"
-    io.open(path, "wb").write(_bom_for(path) + body.encode("utf-8"))
+    _atomic_write(path, _bom_for(path) + body.encode("utf-8"))
     reload_data()
     return {"ok": True, "id": sid, "file": os.path.relpath(path, b),
             "provinces": len(provs), "weatherCopied": bool(weather),
@@ -11965,7 +12286,7 @@ def strategic_region_set_provinces(sid, provinces, root=None):
         body2 = body + "\n\tprovinces={" + inner + "}"
     new_text = text[:b + 1] + body2 + text[e - 1:]
     snapshot(path)
-    io.open(path, "wb").write(_bom_for(path) + new_text.encode("utf-8"))
+    _atomic_write(path, _bom_for(path) + new_text.encode("utf-8"))
     return {"ok": True, "id": sid, "provinces": len(provs),
             "msg": "战略区 %d 现在覆盖 %d 个省" % (sid, len(provs))}
 
@@ -11999,7 +12320,7 @@ def strategic_region_delete(sid, root=None):
         start = b
     new_text = text[:start] + text[e:]
     snapshot(path)
-    io.open(path, "wb").write(_bom_for(path) + new_text.encode("utf-8"))
+    _atomic_write(path, _bom_for(path) + new_text.encode("utf-8"))
     return {"ok": True, "id": sid, "removedFile": False,
             "msg": "已从文件里移除战略区 %d（文件里还有 %d 个）" % (sid, len(others))}
 
@@ -12132,7 +12453,7 @@ def adjacency_edit(line, adj_type=None, root=None):
     tail = chr(10) if lines[idx].endswith(chr(10)) else ""
     lines[idx] = ";".join(c) + tail
     snapshot(path)
-    io.open(path, "wb").write(b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
+    _atomic_write(path, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
     return {"ok": True, "line": line, "from": old, "to": c[2],
             "msg": "第 %d 行的类型 %s → %s" % (line, old, c[2])}
 
@@ -12157,7 +12478,7 @@ def adjacency_delete(line, root=None):
     gone = lines[idx].rstrip("\r\n")
     del lines[idx]
     snapshot(path)
-    io.open(path, "wb").write(b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
+    _atomic_write(path, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
     return {"ok": True, "line": line, "removed": gone[:60],
             "msg": "已删除第 %d 行连接" % line}
 
@@ -12192,7 +12513,7 @@ def adjacency_add(frm, to, adj_type="sea", through="", root=None):
         lines[-1] = lines[-1] + chr(10)
     lines.append(row + chr(10))
     snapshot(path)
-    io.open(path, "wb").write(b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
+    _atomic_write(path, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
     return {"ok": True, "from": frm, "to": to, "type": adj_type,
             "msg": "已新增连接 %d ↔ %d（%s）" % (frm, to, adj_type or "sea")}
 
@@ -12343,7 +12664,7 @@ def equipment_edit(eid, props, root=None):
 
     new_raw = raw[:b + 1] + new_body + raw[e - 1:]
     snapshot(path)
-    io.open(path, "wb").write(_bom_for(path) + new_raw.encode("utf-8"))
+    _atomic_write(path, _bom_for(path) + new_raw.encode("utf-8"))
     reload_data()
     return {"ok": True, "id": eid, "changed": changed,
             "msg": "已更新 %s：%s" % (eid, "，".join(changed))}
@@ -12369,7 +12690,7 @@ def equipment_delete(eid, root=None):
         start = b
     new_raw = raw[:start] + raw[e:]
     snapshot(path)
-    io.open(path, "wb").write(_bom_for(path) + new_raw.encode("utf-8"))
+    _atomic_write(path, _bom_for(path) + new_raw.encode("utf-8"))
     reload_data()
     return {"ok": True, "id": eid,
             "msg": "已删除装备 %s" % eid}
@@ -12724,7 +13045,7 @@ def supply_area_save(sid, value=None, states=None, name=None, root=None):
     inner = "\n" + "".join("\t\t%d\n" % x for x in cur_states) + "\t"
     body = ('supply_area={\n\tid=%d\n\tname="%s"\n\tvalue=%d\n\tstates={%s}\n}\n'
             % (sid, cur_name, cur_value, inner))
-    io.open(path, "wb").write(_bom_for(path) + body.encode("utf-8"))
+    _atomic_write(path, _bom_for(path) + body.encode("utf-8"))
     reload_data()
     return {"ok": True, "id": sid, "file": os.path.basename(path),
             "value": cur_value, "states": cur_states,
@@ -15611,6 +15932,8 @@ class Handler(SimpleHTTPRequestHandler):
                                        body.get("src_path"), body.get("tag"),
                                        body.get("id"), body.get("overwrite", False),
                                        body.get("small", False)))
+        elif self.path == "/api/diagnose":
+            self._send(diagnose(body.get("root") or None))
         elif self.path == "/api/gfx_import":
             self._send(gfx_import(body.get("root") or None, body.get("src"),
                                   body.get("kind") or "goal", body.get("name"),

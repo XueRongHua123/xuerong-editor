@@ -942,6 +942,7 @@
     <details open>
       <summary>国家与州</summary>
       <div id="countryEntry" class="tabbtn">🌍 国家中心</div>
+      <div id="diagEntry" class="tabbtn">🩺 诊断</div>
       <div id="lintEntry" class="tabbtn">🩺 项目体检</div>
       <div id="scriptEntry" class="tabbtn">🔍 脚本检查</div>
       <div id="mapEntry" class="tabbtn">🗺 地图</div>
@@ -1104,7 +1105,21 @@
         </div>
       </div>
     </div>
-    <div id="countryModal">
+    <div id="diagPanel" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(980px,92vw);max-height:82vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;z-index:60;padding:14px;box-shadow:0 12px 40px rgba(0,0,0,.5)">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+    <b style="font-size:13px">诊断</b>
+    <span id="diagCount" style="font-size:11px;color:var(--muted)"></span>
+    <span style="flex:1"></span>
+    <button class="btn" id="diagRun">重新扫描</button>
+    <button class="btn" id="diagClose">关闭</button>
+  </div>
+  <div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.6">
+    检查的是「游戏读不到但也不会报错」这类问题：OOB 没被点名、sprite 名拼错、
+    招募写在文件末尾、决议类别没注册。全在本地算，不启动游戏。
+  </div>
+  <div id="diagList"></div>
+</div>
+<div id="countryModal">
       <div class="cm-card">
         <div class="cm-head">
           <b>国家中心</b>
@@ -12313,6 +12328,64 @@ initMascot();
 initMascotFloatSize();
 initDensity();
 loadData();
+
+// ---------- 诊断 ----------
+(function(){
+  const entry = document.getElementById('diagEntry');
+  const panel = document.getElementById('diagPanel');
+  if(!entry || !panel) return;
+  const list  = document.getElementById('diagList');
+  const cnt   = document.getElementById('diagCount');
+
+  const SEV = { error:['#e05','严重'], warning:['#e90','警告'], info:['#39c','提示'] };
+
+  function esc(t){
+    return String(t==null?'':t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  }
+
+  function render(items){
+    if(!items || !items.length){
+      list.innerHTML = '<div style="padding:18px;text-align:center;color:var(--muted);font-size:12px">没有发现问题</div>';
+      return;
+    }
+    list.innerHTML = items.map(function(f, i){
+      const sev = SEV[f.severity] || ['#888','?'];
+      return '<div style="border-left:3px solid '+sev[0]+';background:rgba(255,255,255,.02);padding:7px 9px;margin-bottom:6px;border-radius:4px">'
+        + '<div style="display:flex;gap:6px;align-items:baseline;font-size:11px">'
+        + '<span style="color:'+sev[0]+';font-weight:600">'+sev[1]+'</span>'
+        + '<span style="color:var(--muted)">'+esc(f.code)+'</span>'
+        + '<span style="flex:1"></span>'
+        + '<span style="color:var(--muted)">'+esc(f.file||'')+(f.line?' : '+f.line:'')+'</span>'
+        + '</div>'
+        + '<div style="font-size:12px;margin-top:3px;line-height:1.5">'+esc(f.msg)+'</div>'
+        + (f.excerpt ? '<div style="font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:#9ab;background:rgba(0,0,0,.25);padding:3px 6px;margin-top:4px;border-radius:3px;white-space:pre-wrap;overflow-wrap:anywhere">'+esc(f.excerpt)+'</div>' : '')
+        + (f.repair ? '<div style="font-size:11px;color:#7c9;margin-top:4px">修：'+esc(f.repair)+'</div>' : '')
+        + '</div>';
+    }).join('');
+  }
+
+  async function run(){
+    cnt.textContent = '扫描中…';
+    try{
+      const r = await (await fetch('/api/diagnose', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify({})})).json();
+      if(r.ok === false){ cnt.textContent = r.msg || '失败'; render([]); return; }
+      const items = r.findings || [];
+      const bad = items.filter(function(x){ return x.severity === 'error'; }).length;
+      const warn = items.filter(function(x){ return x.severity === 'warning'; }).length;
+      cnt.textContent = items.length
+        ? (items.length + ' 项（严重 ' + bad + ' / 警告 ' + warn + '）')
+        : '没有发现问题';
+      render(items);
+    }catch(e){
+      cnt.textContent = '请求失败';
+    }
+  }
+
+  entry.onclick = function(){ panel.style.display = 'block'; run(); };
+  document.getElementById('diagClose').onclick = function(){ panel.style.display = 'none'; };
+  document.getElementById('diagRun').onclick = run;
+})();
 </script>
 </body>
 </html>

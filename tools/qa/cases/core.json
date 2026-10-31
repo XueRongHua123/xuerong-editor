@@ -1,0 +1,124 @@
+{
+  "_readme": [
+    "黄金测试用例。加用例只改这个文件，不改代码。",
+    "每个 case：",
+    "  name    用例名",
+    "  fn      要调的纯函数（focus_editor 里的名字，不含括号）",
+    "  args    位置参数数组，可选",
+    "  fixture 可选，{目录名: {相对路径: 内容}}，会先铺到临时目录再传路径当第 0 个参数",
+    "  expect  期望返回值",
+    "  note    说明这个用例是防什么回归的"
+  ],
+  "cases": [
+    {
+      "name": "bookmark_date_three_segments",
+      "fn": "_bookmark_date",
+      "args": [
+        "1936.1.1"
+      ],
+      "expect": "1936.1.1.12",
+      "note": "HOI4 剧本日期是四段，只写三段游戏会把日当时，界面显示成 148月,1939"
+    },
+    {
+      "name": "bookmark_date_four_segments",
+      "fn": "_bookmark_date",
+      "args": [
+        "1936.1.1.12"
+      ],
+      "expect": "1936.1.1.12",
+      "note": "已经四段就不要动"
+    },
+    {
+      "name": "bookmark_date_custom_hour",
+      "fn": "_bookmark_date",
+      "args": [
+        "1939.9.1.8"
+      ],
+      "expect": "1939.9.1.8",
+      "note": "自定义小时不能被覆盖成 12"
+    },
+    {
+      "name": "bom_never_emitted",
+      "fn": "_bom_for",
+      "args": [
+        "whatever.txt"
+      ],
+      "note": "HOI4 会把 BOM 吃进第一个 token，导致类别名变成 \\ufeffXXX。一律不加 BOM。",
+      "expect_bytes": ""
+    },
+    {
+      "name": "oob_files_land_ger",
+      "fn": "_oob_files",
+      "fixture": {
+        "history/countries/GER - Germany.txt": "set_oob = \"GER_1936\"\nset_oob = \"GER_1936_nsb\"\nset_oob = \"GER_1939\"\nset_oob = \"GER_1939_nsb\"\n"
+      },
+      "args_after_fixture": [
+        "GER",
+        "land"
+      ],
+      "expect": [
+        "GER_1936",
+        "GER_1936_nsb"
+      ],
+      "note": "只取同年份的 DLC 分支。1939 那份属于 1939 剧本，改了没意义还会污染。"
+    },
+    {
+      "name": "oob_files_air_ger",
+      "fn": "_oob_files",
+      "fixture": {
+        "history/countries/GER - Germany.txt": "set_air_oob = \"GER_1936_air_bba\"\nset_air_oob = \"GER_1936_air_legacy\"\nset_air_oob = \"GER_1939_air_bba\"\n"
+      },
+      "args_after_fixture": [
+        "GER",
+        "air"
+      ],
+      "expect": [
+        "GER_1936_air_bba",
+        "GER_1936_air_legacy"
+      ],
+      "note": "空军 OOB 同样是点名加载，不是扫目录"
+    },
+    {
+      "name": "oob_files_naval_ger",
+      "fn": "_oob_files",
+      "fixture": {
+        "history/countries/GER - Germany.txt": "set_naval_oob = \"GER_1936_naval\"\nset_naval_oob = \"GER_1936_naval_mtg\"\n"
+      },
+      "args_after_fixture": [
+        "GER",
+        "naval"
+      ],
+      "expect": [
+        "GER_1936_naval",
+        "GER_1936_naval_mtg"
+      ],
+      "note": "有 Man the Guns 时生效的是 _naval_mtg，两个都要写"
+    },
+    {
+      "name": "oob_files_missing_tag",
+      "fn": "_oob_files",
+      "fixture": {
+        "history/countries/GER - Germany.txt": "set_oob = \"GER_1936\"\n"
+      },
+      "args_after_fixture": [
+        "ZZZ",
+        "land"
+      ],
+      "expect": [],
+      "note": "找不到国家历史就返回空，不能抛异常"
+    },
+    {
+      "name": "character_block_has_division_name",
+      "fn": "_bookmark_country_block",
+      "args": [
+        "GER"
+      ],
+      "expect_contains": [
+        "\"GER\" = {",
+        "history = \"GER_DESC\"",
+        "ideology = neutrality"
+      ],
+      "note": "剧本里的国家块必须有 history/ideology，否则选国家界面是空的"
+    }
+  ]
+}
