@@ -1488,7 +1488,25 @@
             <h4>开局舰队</h4>
             <div class="mp-acts"><button class="btn" id="navyLoad">载入舰队</button></div>
             <div class="mp-k" id="navyMsg" style="min-height:16px;line-height:1.5"></div>
-            <div id="navyList" style="max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
+            <div id="navyList" style="max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
+            <div class="mp-k" style="margin-top:6px">加船（选舰队/特遣队）</div>
+            <div class="mp-acts">
+              <input id="nvFi" value="0" style="height:22px;width:32px" title="舰队序号">
+              <input id="nvTi" value="0" style="height:22px;width:32px" title="特遣队序号">
+              <input id="nvShipName" placeholder="舰名" style="height:22px;flex:1;min-width:0">
+            </div>
+            <div class="mp-acts" style="margin-top:3px">
+              <input id="nvShipDef" value="destroyer" placeholder="船型" style="height:22px;flex:1;min-width:0" title="destroyer/battleship/carrier/submarine…">
+              <input id="nvShipExp" value="0.3" style="height:22px;width:42px" title="经验">
+              <button class="btn" id="nvAddShip">加船</button>
+            </div>
+            <div class="mp-k" style="margin-top:6px">加特遣队</div>
+            <div class="mp-acts">
+              <input id="nvTfFi" value="0" style="height:22px;width:32px" title="舰队序号">
+              <input id="nvTfName" placeholder="队名" style="height:22px;flex:1;min-width:0">
+              <input id="nvTfLoc" placeholder="省号" style="height:22px;width:56px">
+              <button class="btn" id="nvAddTf">加队</button>
+            </div>
             <div class="mp-sep"></div>
           </div>
           <div id="selBox">
@@ -9586,6 +9604,54 @@ function makePannable(svg, body){
   function bind(){
     const b = document.getElementById('navyLoad');
     if(b && !b.dataset.bound){ b.dataset.bound = '1'; b.onclick = load; }
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.12 舰队增改前端
+(function(){
+  function msg(t, bad){
+    const el = document.getElementById('navyMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+  function v(id, dflt){
+    const el = document.getElementById(id);
+    return el && el.value !== '' ? el.value : dflt;
+  }
+
+  async function addShip(){
+    const fi = Number(v('nvFi', 0)), ti = Number(v('nvTi', 0));
+    const name = v('nvShipName', '');
+    const def = v('nvShipDef', 'destroyer');
+    const exp = v('nvShipExp', '0.3');
+    msg('加船中…');
+    const r = await (await fetch('/api/navy_add_ship', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({fi: fi, ti: ti, name: name || null,
+                            definition: def, exp: exp})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); }
+  }
+
+  async function addTf(){
+    const fi = Number(v('nvTfFi', 0));
+    const name = v('nvTfName', '');
+    const loc = v('nvTfLoc', '');
+    msg('加队中…');
+    const r = await (await fetch('/api/navy_add_tf', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({fi: fi, name: name || null,
+                            location: loc ? Number(loc) : null})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); }
+  }
+
+  function bind(){
+    [['nvAddShip', addShip], ['nvAddTf', addTf]].forEach(function(p){
+      const el = document.getElementById(p[0]);
+      if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
+    });
   }
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);

@@ -5245,6 +5245,254 @@ def navy_delete_taskforce(root, fi, ti):
                      "特遣队「%s」" % t["name"])
 
 
+def _insert_before_close(raw, pos, text_to_insert):
+    """把内容插到 pos 所在块的 } 那一行前面。
+
+    只跳过同一行内的缩进，绝不跨行 —— 跨行会退到内层块的 } 上。
+    最后定位到 } 所在行的行首，保证 } 的缩进不被吃掉。
+    """
+    n = len(raw)
+    if pos > n:
+        pos = n
+    p = pos
+    while p > 0 and raw[p - 1] in " \t":
+        p -= 1
+    if p > 0 and raw[p - 1] == "}":
+        p -= 1
+    # 定位到这一行的行首，插在前面
+    ls = raw.rfind("\n", 0, p) + 1
+    return raw[:ls] + text_to_insert + raw[ls:]
+
+def _navy_locate(root, fi=None, ti=None):
+    """重新定位舰队/特遣队在文件里的偏移。
+
+    返回 (目标路径, rel, start, end, raw) 或 (None, "", -1, -1, "")。
+    start/end 直接来自 find_blocks（start 是 { 位置，end 是 } 位置）。
+    """
+    root = _map_pick(root)
+    _base, files = _units_files(root)
+    idx = -1
+    for p in (files or []):
+        try:
+            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        except Exception:
+            continue
+        text = _strip_keep_len(raw)
+        rel = os.path.join("history", "units", os.path.basename(p))
+        for um in re.finditer(r'(?m)^[ \t]*units[ \t]*=\s*\{', text):
+            ub = text.find("{", um.end() - 1)
+            ue = brace_match(text, ub)
+            if ue <= ub:
+                continue
+            ubody = text[ub + 1:ue - 1]
+            for fb, fend, fbody in find_blocks(ubody, "fleet"):
+                idx += 1
+                if fi is not None and idx != fi:
+                    continue
+                if ti is None:
+                    return p, rel, ub + 1 + fb, ub + 1 + fend, raw
+                tjdx = -1
+                for tb, tend, tbody in find_blocks(fbody, "task_force"):
+                    tjdx += 1
+                    if tjdx == ti:
+                        return p, rel, ub + 1 + fb + 1 + tb, ub + 1 + fb + 1 + tend, raw
+                return None, "", -1, -1, ""
+    return None, "", -1, -1, ""
+
+
+def _ship_line(name, definition, exp=0.3):
+    """生成一行 ship 定义（HOI4 允许整支船写在一行）。"""
+    nm = (name or "新舰").replace('"', "")
+    df = definition or "destroyer"
+    try:
+        ex = float(exp) if exp not in (None, "") else 0.3
+    except Exception:
+        ex = 0.3
+    return '\t\t\tship = { name = "%s" definition = %s start_experience_factor = %s }\n' % (
+        nm, df, ("%g" % ex))
+
+
+def navy_add_ship(root, fi, ti, name=None, definition="destroyer", exp=0.3):
+    """往某个特遣队里加一艘船。"""
+    root = _map_pick(root)
+    try:
+        fi, ti = int(fi), int(ti)
+    except Exception:
+        return {"ok": False, "msg": "index 不合法"}
+    p, rel, st, en, raw = _navy_locate(root, fi, ti)
+    if not p:
+        return {"ok": False, "msg": "找不到第 %d 支舰队的第 %d 个特遣队" % (fi + 1, ti + 1)}
+    tgt, err = _units_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    dst = os.path.join(tgt, rel)
+    os.makedirs(os.path.dirname(dst) or tgt, exist_ok=True)
+    if not os.path.exists(dst):
+        try:
+            import shutil as _sh
+            _sh.copyfile(p, dst)
+        except Exception as e:
+            return {"ok": False, "msg": "复制来源失败：%s" % e}
+    raw2 = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw2)
+    # 在目标 task_force 的 } 前插入
+    p2, rel2, st2, en2, _r = _navy_locate(root, fi, ti)
+    if not p2:
+        return {"ok": False, "msg": "重新定位失败"}
+    ins = _ship_line(name, definition, exp)
+    new_text = _insert_before_close(raw2, en2, ins)
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "已在第 %d 个特遣队加 1 艘 %s" % (ti + 1, definition)}
+
+
+def navy_add_tf(root, fi, name=None, location=None):
+    """往某支舰队里加一个特遣队。"""
+    root = _map_pick(root)
+    try:
+        fi = int(fi)
+    except Exception:
+        return {"ok": False, "msg": "index 不合法"}
+    info = load_navy(root)
+    fleets = info["fleets"]
+    if fi < 0 or fi >= len(fleets):
+        return {"ok": False, "msg": "没有第 %d 支舰队" % (fi + 1)}
+    f = fleets[fi]
+    nm = name or ("新特遣队")
+    loc = int(location) if location else f["naval_base"]
+    p, rel, st, en, raw = _navy_locate(root, fi, None)
+    if not p:
+        return {"ok": False, "msg": "找不到第 %d 支舰队" % (fi + 1)}
+    tgt, err = _units_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    dst = os.path.join(tgt, rel)
+    os.makedirs(os.path.dirname(dst) or tgt, exist_ok=True)
+    if not os.path.exists(dst):
+        try:
+            import shutil as _sh
+            _sh.copyfile(p, dst)
+        except Exception as e:
+            return {"ok": False, "msg": "复制来源失败：%s" % e}
+    raw2 = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    p2, rel2, st2, en2, _r = _navy_locate(root, fi, None)
+    if not p2:
+        return {"ok": False, "msg": "重新定位失败"}
+    block = ('\t\t\ttask_force = {\n'
+             '\t\t\t\tname = "%s"\n'
+             '\t\t\t\tlocation = %d\n'
+             '\t\t\t}\n') % (nm.replace('"', ""), loc)
+    new_text = _insert_before_close(raw2, en2, block)
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "已在舰队「%s」加特遣队「%s」" % (f["name"], nm)}
+
+
+def navy_set_ship(root, fi, ti, si, fields):
+    """改一艘船的 name / definition / experience。"""
+    root = _map_pick(root)
+    try:
+        fi, ti, si = int(fi), int(ti), int(si)
+    except Exception:
+        return {"ok": False, "msg": "index 不合法"}
+    info = load_navy(root)
+    fleets = info["fleets"]
+    if fi < 0 or fi >= len(fleets):
+        return {"ok": False, "msg": "没有第 %d 支舰队" % (fi + 1)}
+    tfs = fleets[fi]["task_forces"]
+    if ti < 0 or ti >= len(tfs):
+        return {"ok": False, "msg": "没有第 %d 个特遣队" % (ti + 1)}
+    ships = tfs[ti]["ships"]
+    if si < 0 or si >= len(ships):
+        return {"ok": False, "msg": "没有第 %d 艘船" % (si + 1)}
+    cur = ships[si]
+    nm = fields.get("name", cur["name"])
+    df = fields.get("definition", cur["definition"])
+    ex = fields.get("exp")
+
+    p, rel, st, en, raw = _navy_locate(root, fi, ti)
+    if not p:
+        return {"ok": False, "msg": "定位失败"}
+    tgt, err = _units_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    dst = os.path.join(tgt, rel)
+    os.makedirs(os.path.dirname(dst) or tgt, exist_ok=True)
+    if not os.path.exists(dst):
+        try:
+            import shutil as _sh
+            _sh.copyfile(p, dst)
+        except Exception as e:
+            return {"ok": False, "msg": "复制来源失败：%s" % e}
+    raw2 = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    p2, rel2, st2, en2, _r = _navy_locate(root, fi, ti)
+    if not p2:
+        return {"ok": False, "msg": "重新定位失败"}
+    seg = raw2[st2:en2]
+    seg2 = seg
+    if nm and nm != cur["name"]:
+        seg2 = re.sub(r'name\s*=\s*"[^"]*"',
+                      lambda m: 'name = "%s"' % nm.replace('"', ""), seg2, count=1)
+    if df and df != cur["definition"]:
+        seg2 = re.sub(r'definition\s*=\s*[A-Za-z0-9_]+',
+                      lambda m: 'definition = %s' % df, seg2, count=1)
+    if ex not in (None, ""):
+        try:
+            exv = "%g" % float(ex)
+        except Exception:
+            return {"ok": False, "msg": "经验值必须是数字"}
+        if re.search(r'start_experience_factor\s*=\s*[\d.]+', seg2):
+            seg2 = re.sub(r'start_experience_factor\s*=\s*[\d.]+',
+                          lambda m: 'start_experience_factor = %s' % exv, seg2, count=1)
+        else:
+            seg2 = re.sub(r'(\bship\s*=\s*\{)',
+                          lambda m: m.group(1) + ' start_experience_factor = %s' % exv,
+                          seg2, count=1)
+    # 只在第 si 艘那一行动手：按 ship 出现次序定位
+    lines = seg2.splitlines(True)
+    cnt = -1
+    out = []
+    for ln in lines:
+        if re.search(r'\bship\s*=\s*\{', ln):
+            cnt += 1
+        out.append(ln)
+    if cnt < si:
+        return {"ok": False, "msg": "重新定位第 %d 艘失败" % (si + 1)}
+    # 用逐行替换实现（简单可靠）
+    idx2 = -1
+    res = []
+    for ln in seg.splitlines(True):
+        if re.search(r'\bship\s*=\s*\{', ln):
+            idx2 += 1
+            if idx2 == si:
+                newln = ln
+                if nm and nm != cur["name"]:
+                    newln = re.sub(r'name\s*=\s*"[^"]*"',
+                                   lambda m: 'name = "%s"' % nm.replace('"', ""), newln, count=1)
+                if df and df != cur["definition"]:
+                    newln = re.sub(r'definition\s*=\s*[A-Za-z0-9_]+',
+                                   lambda m: 'definition = %s' % df, newln, count=1)
+                if ex not in (None, ""):
+                    exv = "%g" % float(ex)
+                    if re.search(r'start_experience_factor\s*=\s*[\d.]+', newln):
+                        newln = re.sub(r'start_experience_factor\s*=\s*[\d.]+',
+                                       lambda m: 'start_experience_factor = %s' % exv, newln, count=1)
+                    else:
+                        newln = re.sub(r'(\bship\s*=\s*\{)',
+                                       lambda m: m.group(1) + ' start_experience_factor = %s' % exv,
+                                       newln, count=1)
+                res.append(newln)
+                continue
+        res.append(ln)
+    new_seg = "".join(res)
+    if new_seg == seg:
+        return {"ok": True, "msg": "没有改动"}
+    new_text = raw2[:st2] + new_seg + raw2[en2:]
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "已改第 %d 艘船：%s / %s" % (si + 1, nm, df)}
+
+
 def _navy_cut(root, rel, start, end, what):
     """按偏移从 history/units 文件里切掉一段（拒绝写父 mod）。"""
     tgt, err = _units_write_base(root)
@@ -12717,6 +12965,17 @@ class Handler(SimpleHTTPRequestHandler):
                                        body.get("root") or None))
         elif self.path == "/api/navy":
             self._send(navy_payload(body.get("root") or None))
+        elif self.path == "/api/navy_add_ship":
+            self._send(navy_add_ship(body.get("root") or None, body.get("fi"),
+                                     body.get("ti"), body.get("name"),
+                                     body.get("definition"), body.get("exp")))
+        elif self.path == "/api/navy_add_tf":
+            self._send(navy_add_tf(body.get("root") or None, body.get("fi"),
+                                   body.get("name"), body.get("location")))
+        elif self.path == "/api/navy_set_ship":
+            self._send(navy_set_ship(body.get("root") or None, body.get("fi"),
+                                     body.get("ti"), body.get("si"),
+                                     body.get("fields") or {}))
         elif self.path == "/api/navy_delete_fleet":
             self._send(navy_delete_fleet(body.get("root") or None, body.get("fi")))
         elif self.path == "/api/navy_delete_tf":
