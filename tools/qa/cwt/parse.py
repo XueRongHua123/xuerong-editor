@@ -123,10 +123,43 @@ def allowed_fields(block, rules=None):
     return r.get(block)
 
 
+def load_trigger_effect_names():
+    """提取所有 trigger / effect 的名字。
+
+    这两个不用块定义，是 `alias[trigger:if] = ...` / `alias[effect:add_x] = ...`，
+    所以要单独扫一遍。有了这张表，检查字段时就能放过 trigger/effect 关键字。
+    """
+    global _TRIG_CACHE
+    if '_TRIG_CACHE' in globals() and _TRIG_CACHE:
+        return _TRIG_CACHE
+    names = set()
+    if not os.path.isdir(RAW):
+        _TRIG_CACHE = names
+        return names
+    pat = re.compile(r'alias\[(trigger|effect):([A-Za-z_][A-Za-z0-9_]*)\]')
+    for root, _dirs, fs in os.walk(RAW):
+        for fn in sorted(fs):
+            if not fn.endswith('.cwt'):
+                continue
+            try:
+                text = io.open(os.path.join(root, fn), encoding='utf-8-sig',
+                               errors='replace').read()
+            except Exception:
+                continue
+            for m in pat.finditer(text):
+                names.add(m.group(2))
+    _TRIG_CACHE = names
+    return names
+
+
 if __name__ == '__main__':
     r = load_rules(verbose=True)
     print()
-    for k in ('oob', 'character', 'bookmark', 'country', 'division_template', 'decision'):
+    te = load_trigger_effect_names()
+    print('trigger/effect 名字: %d 个' % len(te))
+    print('   样例:', ', '.join(sorted(te)[:10]))
+    print()
+    for k in ('oob', 'character', 'bookmark', 'country', 'division_template', 'decision', 'idea'):
         f = r.get(k)
         if f:
             print('%-20s %3d 个字段' % (k, len(f)))

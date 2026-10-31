@@ -5293,6 +5293,13 @@ _SCHEMA_EXTRA_PREFIX = (
     "target_",            # target_ROOT_trigger 等
 )
 
+# 作用域关键字和常见的脚本化效果/触发器名。后者由 mod 自己定义
+# （scripted_effects / scripted_triggers），规则里查不到，只能按命名特征放过。
+_SCHEMA_SCOPE_WORDS = {
+    "ROOT", "FROM", "PREV", "THIS", "OWNER", "CONTROLLER",
+    "CAPITAL", "OVERLORD", "FACTION_LEADER", "ENEMY", "IF", "ELSE",
+}
+
 # 这些块里装的是 trigger / effect，不是字段，整块跳过不查
 _SCHEMA_SKIP_BLOCKS = {
     "allowed", "available", "visible", "trigger", "limit",
@@ -5303,7 +5310,48 @@ _SCHEMA_SKIP_BLOCKS = {
 }
 
 
+def _looks_like_scripted(name):
+    """像 mod 自定义脚本化效果/触发器的名字。
+
+    这类东西在 scripted_effects / scripted_triggers 里定义，规则文件里没有，
+    命名上通常是「大写 tag 前缀 + 小写描述」，比如 JAP_faction_demand_finalize。
+    """
+    if not name or len(name) < 3:
+        return False
+    head = name.split('_', 1)[0]
+    if head.isupper() and head.isalpha() and 3 <= len(head) <= 6:
+        return True            # 纯 tag 或 tag 前缀
+    # 小写开头但内部带 tag 的，比如 is_raj_or_raj_inheritor
+    parts = name.split('_')
+    for p2 in parts:
+        if p2.isupper() and p2.isalpha() and 3 <= len(p2) <= 6:
+            return True
+    # 以 _trigger / _effect 收尾的，多半是脚本化触发器
+    return name.endswith(('_trigger', '_triggers', '_effect', '_effects'))
+
+
 _CWT_RULES = [None]
+_CWT_TE = [None]
+
+
+def _cwt_te():
+    """trigger / effect 名字集合（从 .cwt 的 alias[trigger:xxx] 提取）。"""
+    if _CWT_TE[0] is not None:
+        return _CWT_TE[0]
+    names = set()
+    try:
+        import importlib.util as _ilu
+        here = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
+        p = os.path.join(here, "qa", "cwt", "parse.py")
+        if os.path.isfile(p):
+            spec = _ilu.spec_from_file_location("_cwt_parse_te", p)
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            names = mod.load_trigger_effect_names()
+    except Exception:
+        names = set()
+    _CWT_TE[0] = names
+    return names
 
 
 def _cwt_rules():
@@ -5427,6 +5475,7 @@ def _diag_schema_character(root):
     allowed = rules.get("character")
     if not allowed:
         return out
+    te_names = _cwt_te()
 
     cd = os.path.join(top, "common", "characters")
     if not os.path.isdir(cd):
@@ -5481,6 +5530,9 @@ def _diag_schema_character(root):
                     else:
                         ok = ((f in allowed) or (f in TYPE_BLOCKS)
                               or (f in _SCHEMA_EXTRA)
+                              or (f in te_names)
+                              or (f in _SCHEMA_SCOPE_WORDS)
+                              or _looks_like_scripted(f)
                               or f.startswith(_SCHEMA_EXTRA_PREFIX))
                     if not ok:
                         out.append(_finding(
@@ -5525,6 +5577,7 @@ def _diag_schema_decision(root):
     allowed = rules.get("decision")
     if not allowed:
         return out
+    te_names = _cwt_te()
 
     dd = os.path.join(top, "common", "decisions")
     if not os.path.isdir(dd):
@@ -5553,8 +5606,9 @@ def _diag_schema_decision(root):
                 while len(stack) > 1 and depth < len(stack):
                     stack.pop()
                 continue
-            # depth 2 = 决议体的字段；trigger/effect 块里不查
-            if depth == 2:
+            # 结构是「类别 depth1 → 决议 depth2 → 字段 depth3」，
+            # 查 depth 2 会把决议 id 当字段，所以查 depth 3。
+            if depth == 3:
                 parent = ""
                 for k2 in range(len(stack) - 1, -1, -1):
                     if stack[k2]:
@@ -5564,6 +5618,9 @@ def _diag_schema_decision(root):
                 if m and parent not in _SCHEMA_SKIP_BLOCKS:
                     f = m.group(1)
                     if (f not in allowed and f not in _SCHEMA_EXTRA
+                            and f not in te_names
+                            and f not in _SCHEMA_SCOPE_WORDS
+                            and not _looks_like_scripted(f)
                             and not f.startswith(_SCHEMA_EXTRA_PREFIX)):
                         out.append(_finding(
                             "schema.unknown_field", "warning",
@@ -5571,6 +5628,87 @@ def _diag_schema_decision(root):
                             % (fn, i, f),
                             rel, i, st,
                             "对照原版同类决议确认字段名"))
+            if opens:
+                nm = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*[=<>]', st)
+                stack.append(nm.group(1) if nm else "")
+                for _ in range(opens - 1):
+                    stack.append("")
+            depth += opens - closes
+            while len(stack) > 1 and depth < len(stack):
+                stack.pop()
+            if depth < 0:
+                depth = 0
+                stack = [""]
+    return out
+
+
+def _diag_schema_ideas(root):
+    """common/ideas 里国家精神的字段检查。
+
+    结构：`ideas = { country = { 精神id = { 字段 } } }`，
+    所以字段在 depth 3（ideas 0 → country 1 → 精神 2 → 字段 3）。
+    """
+    out = []
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return out
+    rules = _cwt_rules()
+    allowed = rules.get("idea")
+    if not allowed:
+        return out
+    te_names = _cwt_te()
+
+    idd = os.path.join(top, "common", "ideas")
+    if not os.path.isdir(idd):
+        return out
+
+    for fn in sorted(os.listdir(idd)):
+        if not fn.endswith(".txt"):
+            continue
+        p = os.path.join(idd, fn)
+        if not os.path.isfile(p):
+            continue
+        rel = "common/ideas/" + fn
+        try:
+            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+        except Exception:
+            continue
+        depth = 0
+        stack = [""]
+        for i, ln in enumerate(lines, 1):
+            st = ln.strip()
+            opens = ln.count("{")
+            closes = ln.count("}")
+            if not st or st.startswith("#"):
+                depth += opens - closes
+                while len(stack) > 1 and depth < len(stack):
+                    stack.pop()
+                continue
+            if depth == 3:
+                parent = ""
+                for k2 in range(len(stack) - 1, -1, -1):
+                    if stack[k2]:
+                        parent = stack[k2]
+                        break
+                m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*[=<>]', st)
+                if m and parent not in _SCHEMA_SKIP_BLOCKS:
+                    f = m.group(1)
+                    if (f not in allowed and f not in _SCHEMA_EXTRA
+                            and f not in te_names
+                            and f not in _SCHEMA_SCOPE_WORDS
+                            and not _looks_like_scripted(f)
+                            and not f.startswith(_SCHEMA_EXTRA_PREFIX)):
+                        out.append(_finding(
+                            "schema.unknown_field", "warning",
+                            "%s 第 %d 行的字段 %s 不在 idea 的规则定义里"
+                            % (fn, i, f),
+                            rel, i, st,
+                            "对照原版同类国家精神确认字段名"))
             if opens:
                 nm = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*[=<>]', st)
                 stack.append(nm.group(1) if nm else "")
@@ -5596,7 +5734,7 @@ def diagnose(root=None):
                _diag_character_unrecruited, _diag_localisation_missing,
                _diag_tag_def_missing, _diag_division_template_missing,
                _diag_schema_unknown_field, _diag_schema_character,
-               _diag_schema_decision):
+               _diag_schema_decision, _diag_schema_ideas):
         try:
             findings.extend(fn(root))
         except Exception:
