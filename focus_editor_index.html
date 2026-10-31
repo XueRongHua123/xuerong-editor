@@ -10409,6 +10409,53 @@ function makePannable(svg, body){
   else document.addEventListener('DOMContentLoaded', bind);
 })();
 
+// v1.23.6 面板索引条：编辑 tab 里十几个面板，加一条可点的目录
+(function(){
+  function build(){
+    const pane = document.getElementById('pane-edit');
+    if(!pane || pane.querySelector('#paneIndex')) return;
+    const boards = [...pane.querySelectorAll('h4')];
+    if(boards.length < 4) return;
+
+    const bar = document.createElement('div');
+    bar.id = 'paneIndex';
+    bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px;margin-bottom:8px;'
+      + 'padding:5px;background:var(--panel2,rgba(255,255,255,.03));'
+      + 'border:1px solid var(--line);border-radius:5px';
+
+    const items = [];
+    boards.forEach(function(h, i){
+      const box = h.parentElement;
+      if(!box || box === pane) return;
+      const title = (h.textContent || '').replace(/[−+]/g, '').trim();
+      if(!title) return;
+      if(!box.id) box.id = 'sec_' + i;
+      items.push({title: title, id: box.id});
+    });
+
+    items.forEach(function(it){
+      const b = document.createElement('button');
+      b.className = 'btn';
+      b.textContent = it.title;
+      b.style.cssText = 'font-size:10px;height:20px;padding:0 6px';
+      b.onclick = function(){
+        const el = pane.querySelector('#' + it.id);
+        if(!el) return;
+        el.scrollIntoView({behavior: 'smooth', block: 'start'});
+        // 闪一下，让用户看清跳到哪了
+        const old = el.style.outline;
+        el.style.outline = '2px solid var(--accent, #4a9eff)';
+        setTimeout(function(){ el.style.outline = old; }, 900);
+      };
+      bar.appendChild(b);
+    });
+
+    pane.insertBefore(bar, pane.firstChild);
+  }
+  if(document.readyState !== 'loading') setTimeout(build, 400);
+  else document.addEventListener('DOMContentLoaded', function(){ setTimeout(build, 400); });
+})();
+
 /* ---------- v0.82 选择与拖拽防护 ---------- */
 (function(){
   // 1) 图片一律不可拖拽（包括后加入 DOM 的）
