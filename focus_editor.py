@@ -5961,6 +5961,24 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
     country = (country or "").strip().upper()
     if country:
         p = os.path.join(d, country + ".txt")
+        # 这个文件名和原版同名，会被整体覆盖——原版 GER.txt 有 85KB 几百个人物，
+        # 直接写只剩我们新增的那一个，等于把整个国家的将领全删了。
+        # 所以先把原版那份复制过来，再往里面追加。
+        if not os.path.exists(p):
+            src = None
+            for b in reversed(mod_layers(tgt) or []):
+                if not b:
+                    continue
+                cand = os.path.join(b, "common", "characters", country + ".txt")
+                if os.path.isfile(cand):
+                    src = cand
+                    break
+            if src:
+                try:
+                    import shutil as _sh3
+                    _sh3.copyfile(src, p)
+                except Exception:
+                    pass
     else:
         p = os.path.join(d, "zz_editor_characters.txt")
 
