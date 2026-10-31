@@ -3888,6 +3888,33 @@ def write_note(mod_root, sub):
     return "%s 未被 replace_path 接管，改动写进当前 mod" % sub
 
 
+def map_generate(source="procedural", out_dir=None, width=1200, height=440,
+                 n_provinces=180, min_size=300, seed=11, src_path=None,
+                 sea_level=0.42):
+    """调用 qa/mapgen.py 生成完整 map/ 目录。"""
+    try:
+        import sys as _sys
+        _qa = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qa")
+        if _qa not in _sys.path:
+            _sys.path.insert(0, _qa)
+        import mapgen
+    except Exception as e:
+        return {"ok": False, "msg": "地图生成器不可用：%s" % e}
+    if not out_dir:
+        out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp",
+                               "_gen_%d" % int(__import__("time").time()))
+    try:
+        r = mapgen.generate(source, out_dir, int(width), int(height),
+                            int(n_provinces), int(min_size), int(seed),
+                            src_path, float(sea_level),
+                            template_map=os.path.join(GAME, "map") if GAME else None)
+        return r
+    except Exception as e:
+        import traceback
+        return {"ok": False, "msg": "生成失败：%s" % e,
+                "trace": traceback.format_exc()[-800:]}
+
+
 def adopt_dir(mod_root, sub, force=False):
     """在自己的 mod 里接管某个目录。
 
@@ -14426,6 +14453,15 @@ class Handler(SimpleHTTPRequestHandler):
                                        body.get("root") or None))
         elif self.path == "/api/navy":
             self._send(navy_payload(body.get("root") or None))
+        elif self.path == "/api/map_generate":
+            self._send(map_generate(body.get("source") or "procedural",
+                                    body.get("out"), body.get("width", 1200),
+                                    body.get("height", 440),
+                                    body.get("n_provinces", 180),
+                                    body.get("min_size", 300),
+                                    body.get("seed", 11),
+                                    body.get("src_path"),
+                                    body.get("sea_level", 0.42)))
         elif self.path == "/api/decisions":
             self._send(decisions_payload(body.get("root") or None))
         elif self.path == "/api/decision_set":

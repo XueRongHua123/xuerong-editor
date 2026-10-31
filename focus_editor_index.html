@@ -1637,6 +1637,32 @@
             </div>
             <div class="mp-sep"></div>
           </div>
+          <div id="mgPanel">
+            <h4>生成地图</h4>
+            <div class="mp-k" style="line-height:1.5;color:var(--t3)">从零生成一张完整的地图目录</div>
+            <div class="mp-acts" style="margin-top:4px">
+              <select id="mgSource" style="height:24px;flex:1;min-width:0;font-size:11px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px">
+                <option value="procedural">程序化（分形大陆）</option>
+                <option value="lineart">黑白线稿</option>
+                <option value="mask">海陆掩码</option>
+                <option value="image">任意图片（按色块）</option>
+              </select>
+            </div>
+            <input id="mgSrc" placeholder="源文件路径（程序化可空）" style="width:100%;box-sizing:border-box;height:22px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:0 6px;margin-top:4px">
+            <div class="mp-acts" style="margin-top:4px">
+              <input id="mgW" value="600" style="height:22px;width:52px" title="宽">
+              <input id="mgH" value="240" style="height:22px;width:52px" title="高">
+              <input id="mgN" value="60" style="height:22px;width:46px" title="省数">
+              <input id="mgSeed" value="7" style="height:22px;width:44px" title="随机种子">
+            </div>
+            <div class="mp-acts" style="margin-top:4px">
+              <input id="mgOut" placeholder="输出目录" style="height:22px;flex:1;min-width:0">
+              <button class="btn" id="mgGo">生成</button>
+            </div>
+            <div class="mp-k" id="mgMsg" style="min-height:16px;line-height:1.5"></div>
+            <div id="mgLog" style="max-height:140px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px;font-size:10px;font-family:Consolas,monospace;color:var(--t3)"></div>
+            <div class="mp-sep"></div>
+          </div>
           <div id="selBox">
           <h4>选中省份</h4>
           <div class="mp-row"><b class="mp-v" id="msId">—</b><span class="mp-k" id="msType"></span></div>
@@ -10310,6 +10336,51 @@ function makePannable(svg, body){
     const q = document.getElementById('decQ');
     if(q && !q.dataset.bound){ q.dataset.bound = '1';
       q.addEventListener('input', function(){ render(); }); }
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.22.0 地图生成
+(function(){
+  function msg(t, bad){
+    const el = document.getElementById('mgMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+  function log(lines){
+    const box = document.getElementById('mgLog');
+    if(!box) return;
+    box.innerHTML = (lines || []).map(function(x){ return '<div>' + x + '</div>'; }).join('');
+  }
+
+  async function go(){
+    const src = (document.getElementById('mgSource')||{}).value || 'procedural';
+    const srcPath = ((document.getElementById('mgSrc')||{}).value || '').trim();
+    const w = Number((document.getElementById('mgW')||{}).value || 600);
+    const h = Number((document.getElementById('mgH')||{}).value || 240);
+    const n = Number((document.getElementById('mgN')||{}).value || 60);
+    const seed = Number((document.getElementById('mgSeed')||{}).value || 7);
+    const out = ((document.getElementById('mgOut')||{}).value || '').trim();
+    if(src !== 'procedural' && !srcPath){ msg('这个来源要填文件路径', true); return; }
+    msg('生成中…（大尺寸可能要几十秒）');
+    log([]);
+    try{
+      const r = await (await fetch('/api/map_generate', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({source: src, out: out || null, width: w, height: h,
+                              n_provinces: n, seed: seed,
+                              src_path: srcPath || null})})).json();
+      msg(r.msg || '', !r.ok);
+      log(r.log || []);
+      if(r.ok) status(r.msg);
+    }catch(e){
+      msg('请求失败：' + e, true);
+    }
+  }
+
+  function bind(){
+    const b = document.getElementById('mgGo');
+    if(b && !b.dataset.bound){ b.dataset.bound = '1'; b.onclick = go; }
   }
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);
