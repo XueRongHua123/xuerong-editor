@@ -6094,6 +6094,32 @@ def character_set(root, cid, fields):
         if pat.search(new_seg):
             new_seg = pat.sub(lambda m: (m.group(1) or "") + "%s = %d" % (k, iv), new_seg, count=1)
             changed.append(k)
+
+    # 人物类型（陆军将军 / 元帅 / 国家领导人 / 特工）
+    # 类型就是块名，改类型等于改块名。技能字段在各类型里通用，不用搬。
+    ctype = (fields.get("type") or "").strip()
+    if ctype:
+        if ctype not in CHAR_TYPES:
+            return {"ok": False, "msg": "类型只能是 %s" % " / ".join(CHAR_TYPES)}
+        OLD = it.get("type") or ""
+        if OLD and OLD != ctype:
+            pat = re.compile(r'(?m)^([ \t]*)' + re.escape(OLD) + r'([ \t]*=\s*\{)')
+            if pat.search(new_seg):
+                new_seg = pat.sub(
+                    lambda m: (m.group(1) or "") + ctype + (m.group(2) or ""),
+                    new_seg, count=1)
+                changed.append("type:" + OLD + "→" + ctype)
+        elif not OLD:
+            # 原来没有类型块：把技能字段包进新类型块
+            pat = re.compile(r'(?m)^([ \t]*)skill\s*=\s*-?\d+')
+            m2 = pat.search(new_seg)
+            if m2:
+                indent = m2.group(1) or "\t\t"
+                new_seg = (new_seg[:m2.start()]
+                           + "%s%s = {\n" % (indent, ctype)
+                           + new_seg[m2.start():]
+                           + indent + "}\n")
+                changed.append("type:" + ctype)
     if new_seg == seg:
         return {"ok": True, "msg": "没有改动"}
     new_text = raw[:a] + new_seg + raw[b:]

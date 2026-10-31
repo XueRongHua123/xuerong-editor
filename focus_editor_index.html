@@ -1613,6 +1613,15 @@
               <input id="chSkill" placeholder="技能" style="height:22px;width:42px">
             </div>
             <div class="mp-acts" style="margin-top:3px">
+              <select id="chType" style="height:22px;flex:1;min-width:0;font-size:11px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px">
+                <option value="">（不改类型）</option>
+                <option value="corps_commander">陆军将军 corps_commander</option>
+                <option value="field_marshal">元帅 field_marshal</option>
+                <option value="country_leader">国家领导人 country_leader</option>
+                <option value="operative">特工 operative</option>
+              </select>
+            </div>
+            <div class="mp-acts" style="margin-top:3px">
               <input id="chAtk" placeholder="攻击" style="height:22px;width:42px">
               <input id="chDef" placeholder="防御" style="height:22px;width:42px">
               <input id="chPlan" placeholder="计划" style="height:22px;width:42px">
@@ -10268,6 +10277,8 @@ function makePannable(svg, body){
     if(nm) nm.value = CUR.name || '';
     const sk = CUR.skills || {};
     const set = function(k, v){ const e = document.getElementById(k); if(e) e.value = (v != null ? v : ''); };
+    const tp = document.getElementById('chType');
+    if(tp) tp.value = CUR.type || '';
     set('chSkill', sk.skill); set('chAtk', sk.attack_skill);
     set('chDef', sk.defense_skill); set('chPlan', sk.planning_skill);
     set('chLog', sk.logistics_skill);
@@ -10289,6 +10300,8 @@ function makePannable(svg, body){
     const fields = {};
     const nm = (document.getElementById('chName')||{}).value;
     if(nm && nm !== CUR.name) fields.name = nm;
+    const tpSel = document.getElementById('chType');
+    if(tpSel && tpSel.value && tpSel.value !== CUR.type) fields.type = tpSel.value;
     const pairs = [['chSkill', 'skill'], ['chAtk', 'attack_skill'], ['chDef', 'defense_skill'],
                    ['chPlan', 'planning_skill'], ['chLog', 'logistics_skill']];
     pairs.forEach(function(p){
