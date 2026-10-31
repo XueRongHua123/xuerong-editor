@@ -88,14 +88,27 @@ def write_rivers(labels, rivers, path, palette_from=None):
     img.save(path)
 
 
-def write_cities(labels, terrain_idx, path, palette_from=None):
+# cities.bmp 的语义（对比原版数据量推断）：
+#   15 = 无城市（占 9.6M 像素，和地形图的海同色）
+#   0 / 1 / 2 = 有城市，分别对应 cities.txt 里三组建筑的 color_index
+CITY_NONE = 15
+CITY_FOREIGN = 0
+
+
+def write_cities(labels, terrain_idx, path, palette_from=None, city_mask=None,
+                 city_index=CITY_FOREIGN):
     """写 cities.bmp。
 
-    实测原版 cities.bmp 的调色板和 terrain.bmp 完全一样，
-    内容也基本是地形图的副本。这里直接按地形索引填。
+    原版这张图不是「城市点」，而是「城市区域」：每个像素代表一块建筑，
+    索引值对应 map/cities.txt 里各 city_group 的 color_index。
+
+    city_mask 给了就用它标城市；没给就退回地形副本（旧行为）。
     """
     h, w = labels.shape
-    if terrain_idx is not None and terrain_idx.shape == labels.shape:
+    if city_mask is not None and city_mask.shape == labels.shape:
+        arr = np.full((h, w), CITY_NONE, dtype=np.uint8)
+        arr[(city_mask > 0) & (labels > 0)] = city_index
+    elif terrain_idx is not None and terrain_idx.shape == labels.shape:
         arr = terrain_idx.astype(np.uint8).copy()
     else:
         arr = np.full((h, w), TERRAIN_PLAINS, dtype=np.uint8)
@@ -108,9 +121,10 @@ def write_cities(labels, terrain_idx, path, palette_from=None):
         pal[TERRAIN_SEA*3:TERRAIN_SEA*3+3] = [8, 31, 130]
         pal[TERRAIN_HILLS*3:TERRAIN_HILLS*3+3] = [112, 74, 31]
         pal[TERRAIN_FOREST*3:TERRAIN_FOREST*3+3] = [0, 86, 6]
+        pal[CITY_NONE*3:CITY_NONE*3+3] = [8, 31, 130]
+        pal[CITY_FOREIGN*3:CITY_FOREIGN*3+3] = [86, 124, 27]
     img.putpalette(pal)
     img.save(path)
-
 
 def _load_palette(palette_from):
     if palette_from and os.path.isfile(palette_from):

@@ -26,7 +26,8 @@ def generate(source="procedural", out_dir=None, width=1200, height=440,
              n_provinces=180, min_size=300, seed=11, src_path=None,
              sea_level=0.42, template_map=HOI4_MAP, log=None,
              balance=True, min_province_px=800,
-             n_regions=None, n_supply=None, bbox=None, rivers_path=None):
+             n_regions=None, n_supply=None, bbox=None, rivers_path=None,
+             cities_path=None, city_radius=4):
     """生成完整 map/ 目录。
 
     source:
@@ -39,6 +40,7 @@ def generate(source="procedural", out_dir=None, width=1200, height=440,
     gnames = {}
     thint = None
     rmask = None
+    cmask = None
     def say(t):
         out.append(t)
         if log:
@@ -89,6 +91,15 @@ def generate(source="procedural", out_dir=None, width=1200, height=440,
                 say("  河道 %d 像素" % int(rmask.sum()))
             else:
                 say("  河流文件没解析出线段，跳过")
+        if cities_path and os.path.isfile(cities_path):
+            say("读城市点 %s…" % os.path.basename(cities_path))
+            hh2, ww2 = labels.shape
+            cmask = mgs.cities_from_geojson(cities_path, ww2, hh2, bb,
+                                            int(city_radius))
+            if cmask is not None:
+                say("  城市区域 %d 像素" % int((cmask > 0).sum()))
+            else:
+                say("  城市文件没解析出点，跳过")
     elif source == "terrain_map":
         if not src_path or not os.path.isfile(src_path):
             return {"ok": False, "msg": "地图图片不存在", "log": out}
@@ -150,7 +161,8 @@ def generate(source="procedural", out_dir=None, width=1200, height=440,
         _tarr[_land & (thint == 3)] = 16
         _tarr[_land & (thint == 4)] = 3
     mgw.write_cities(labels, _tarr, os.path.join(map_dir, "cities.bmp"),
-                     os.path.join(template_map, "cities.bmp") if template_map else None)
+                     os.path.join(template_map, "cities.bmp") if template_map else None,
+                     city_mask=cmask)
     mgw.write_blank_indexed(size, os.path.join(map_dir, "trees.bmp"))
     say("写 default.map / continent.txt…")
     mgw.write_default_map(os.path.join(map_dir, "default.map"), n)

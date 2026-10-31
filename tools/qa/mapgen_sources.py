@@ -171,6 +171,69 @@ def water_thickness(water, cap=24):
     return dist
 
 
+def cities_from_geojson(path, width, height, bbox=None, radius=4, density=0.85):
+    """把 GeoJSON 的城市点光栅化成城市区域掩码。
+
+    cities.bmp 不是点，是区域：每个像素代表一块建筑。
+    这里在每个城市点周围撒一个半径 radius 的圆，圆内按 density 随机填充。
+
+    返回 uint8 掩码：0 = 无城市，1 = 有城市（后面 write_cities 会映射到调色板索引）。
+    """
+    data = json.load(io.open(path, encoding="utf-8"))
+    feats = [f for f in (data.get("features") or []) if f.get("geometry")]
+    if not feats:
+        return None
+    bb = bbox or geojson_bbox(path)
+    if not bb:
+        return None
+    lon1, lat1, lon2, lat2 = bb
+    if lon2 <= lon1 or lat2 <= lat1:
+        return None
+
+    def to_xy(lon, lat):
+        x = (float(lon) - lon1) / (lon2 - lon1) * (width - 1)
+        y = (lat2 - float(lat)) / (lat2 - lat1) * (height - 1)
+        return (x, y)
+
+    out = np.zeros((height, width), dtype=np.uint8)
+    rng = np.random.default_rng(17)
+    n_pts = 0
+
+    def put_point(geom):
+        nonlocal n_pts
+        t = geom.get("type")
+        coords = geom.get("coordinates")
+        pts = []
+        if t == "Point":
+            pts = [coords]
+        elif t == "MultiPoint":
+            pts = list(coords or [])
+        for p in pts:
+            if not p or len(p) < 2:
+                continue
+            cx, cy = to_xy(p[0], p[1])
+            ix, iy = int(round(cx)), int(round(cy))
+            if ix < 0 or iy < 0 or ix >= width or iy >= height:
+                continue
+            r = max(1, int(radius))
+            for dy in range(-r, r + 1):
+                for dx in range(-r, r + 1):
+                    if dx * dx + dy * dy > r * r:
+                        continue
+                    if rng.random() > density:
+                        continue
+                    x, y = ix + dx, iy + dy
+                    if 0 <= x < width and 0 <= y < height:
+                        out[y, x] = 1
+            n_pts += 1
+
+    for f in feats:
+        put_point(f.get("geometry") or {})
+    if n_pts == 0:
+        return None
+    return out
+
+
 def rivers_from_geojson(path, width, height, bbox=None, thickness=1):
     """把 GeoJSON 的河流线光栅化成 bool 掩码。
 
