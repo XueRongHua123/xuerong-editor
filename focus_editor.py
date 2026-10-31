@@ -7883,19 +7883,36 @@ def map_edit_commit(bmp_path=None):
     for (gx, gy), rgb in grid.items():
         after[gy * w + gx] = rgb
     bmp_write_rect(bmp_path, x0, y0, w, h, after)
-    # 存撤销区块
+    # 存撤销区块。
+    # 包围盒备份的代价是 w*h*3 字节——一次改散布在图两头的几百个像素，
+    # 包围盒能覆盖整张 5632x2048 的图，单次 33MB。密度低于 35% 时改存点级
+    # （每点 7 字节），同样的改动只要几百字节。
     os.makedirs(MAP_UNDO_DIR, exist_ok=True)
     seq = int(time.time() * 1000)
-    fn = os.path.join(MAP_UNDO_DIR, "u%d_%d_%d_%d_%d.bin" % (seq, x0, y0, w, h))
-    with open(fn, "wb") as f:
-        for (r, g, b) in before:
-            f.write(bytes((r, g, b)))
-    MAP_EDIT["undo"].append({"file": fn, "bmp": bmp_path, "x": x0, "y": y0, "w": w, "h": h,
-                             "count": len(pend)})
+    area = w * h
+    use_points = area > 0 and len(pend) < area * 0.35
+    if use_points:
+        W_full = info["w"]
+        changes = []
+        for (px, py, rgb) in pend:
+            old_rgb = before[(py - y0) * w + (px - x0)]
+            changes.append((py * W_full + px, old_rgb))
+        fn = _save_point_undo(bmp_path, changes)
+        MAP_EDIT["undo"].append({"kind": "points", "file": fn, "bmp": bmp_path,
+                                 "count": len(pend)})
+    else:
+        fn = os.path.join(MAP_UNDO_DIR, "u%d_%d_%d_%d_%d.bin" % (seq, x0, y0, w, h))
+        with open(fn, "wb") as f:
+            for (r, g, b) in before:
+                f.write(bytes((r, g, b)))
+        MAP_EDIT["undo"].append({"file": fn, "bmp": bmp_path, "x": x0, "y": y0,
+                                 "w": w, "h": h, "count": len(pend)})
     MAP_EDIT["redo"] = []
     MAP_EDIT["pending"] = []
     MAP_EDIT["touched"] = set()
-    return {"ok": True, "pixels": len(pend), "rect": [x0, y0, w, h], "undo_depth": len(MAP_EDIT["undo"])}
+    return {"ok": True, "pixels": len(pend), "rect": [x0, y0, w, h],
+            "backup": "points" if use_points else "rect",
+            "undo_depth": len(MAP_EDIT["undo"])}
 
 
 def map_edit_undo():
