@@ -7500,13 +7500,47 @@ def _ship_line(name, definition, exp=0.3):
         nm, df, ("%g" % ex))
 
 
-def navy_add_ship(root, fi, ti, name=None, definition="destroyer", exp=0.3):
-    """往某个特遣队里加一艘船。"""
+def _navy_pick_tag(root, tag):
+    """按国家 tag 过滤舰队，返回 (全局索引列表, 错误)。
+
+    load_navy 是按文件名字母序把所有 mod 的舰队摊平的，
+    fi=0 可能是阿根廷的舰队，不是你想要的那个国家。
+    """
+    tag = (tag or "").strip().upper()
+    if not tag:
+        return None, ""
+    info = load_navy(root)
+    fleets = info.get("fleets") or []
+    idxs = []
+    for i, f in enumerate(fleets):
+        fn = os.path.basename((f.get("file") or "")).upper()
+        # 文件形如 GER_1936.txt / ARG_1936_naval_legacy.txt
+        if fn.startswith(tag + "_") or fn.startswith(tag + "."):
+            idxs.append(i)
+    if not idxs:
+        return None, "没有 %s 的舰队（该国的 history/units 里没有 fleet 定义）" % tag
+    return idxs, ""
+
+
+def navy_add_ship(root, fi, ti, name=None, definition="destroyer", exp=0.3, tag=None):
+    """往某个特遣队里加一艘船。
+
+    tag 给了就按国家过滤：fi 变成「该国的第几支舰队」，
+    避免默认加到按文件名字母序排在最前的那个国家（通常是 ARG）。
+    """
     root = _map_pick(root)
     try:
         fi, ti = int(fi), int(ti)
     except Exception:
         return {"ok": False, "msg": "index 不合法"}
+    if tag:
+        idxs, err = _navy_pick_tag(root, tag)
+        if not idxs:
+            return {"ok": False, "msg": err}
+        if fi < 0 or fi >= len(idxs):
+            return {"ok": False, "msg": "%s 只有 %d 支舰队，没有第 %d 支" % (
+                tag.upper(), len(idxs), fi + 1)}
+        fi = idxs[fi]
     p, rel, st, en, raw = _navy_locate(root, fi, ti)
     if not p:
         return {"ok": False, "msg": "找不到第 %d 支舰队的第 %d 个特遣队" % (fi + 1, ti + 1)}
@@ -7534,13 +7568,21 @@ def navy_add_ship(root, fi, ti, name=None, definition="destroyer", exp=0.3):
     return {"ok": True, "msg": "已在第 %d 个特遣队加 1 艘 %s" % (ti + 1, definition)}
 
 
-def navy_add_tf(root, fi, name=None, location=None):
-    """往某支舰队里加一个特遣队。"""
+def navy_add_tf(root, fi, name=None, location=None, tag=None):
+    """往某支舰队里加一个特遣队。tag 语义同 navy_add_ship。"""
     root = _map_pick(root)
     try:
         fi = int(fi)
     except Exception:
         return {"ok": False, "msg": "index 不合法"}
+    if tag:
+        idxs, err = _navy_pick_tag(root, tag)
+        if not idxs:
+            return {"ok": False, "msg": err}
+        if fi < 0 or fi >= len(idxs):
+            return {"ok": False, "msg": "%s 只有 %d 支舰队，没有第 %d 支" % (
+                tag.upper(), len(idxs), fi + 1)}
+        fi = idxs[fi]
     info = load_navy(root)
     fleets = info["fleets"]
     if fi < 0 or fi >= len(fleets):
@@ -15392,10 +15434,12 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path == "/api/navy_add_ship":
             self._send(navy_add_ship(body.get("root") or None, body.get("fi"),
                                      body.get("ti"), body.get("name"),
-                                     body.get("definition"), body.get("exp")))
+                                     body.get("definition"), body.get("exp"),
+                                     body.get("tag")))
         elif self.path == "/api/navy_add_tf":
             self._send(navy_add_tf(body.get("root") or None, body.get("fi"),
-                                   body.get("name"), body.get("location")))
+                                   body.get("name"), body.get("location"),
+                                   body.get("tag")))
         elif self.path == "/api/navy_set_ship":
             self._send(navy_set_ship(body.get("root") or None, body.get("fi"),
                                      body.get("ti"), body.get("si"),
