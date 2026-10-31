@@ -3944,11 +3944,18 @@ function drawTechTree(folder){
       depth[id] = d;
       return d;
     }
+    // 循环依赖（A→B→A）在两边的 depth 会算成同一个值，节点直接叠在一起看不清。
+    // 这里记录「同一年 + 同一深度」已经用了几个位置，多出来的横向错开。
     years.forEach((y, xi)=>{
       const arr = byYear[y].sort((a,b)=>dep(a.id, new Set()) - dep(b.id, new Set()) || a.id.localeCompare(b.id));
+      const used = {};
       arr.forEach(t=>{
         const d = dep(t.id, new Set());
-        pos[t.id] = {x: 140 + xi * 340, y: 70 + d * 100, t};
+        const k = String(d);
+        const slot = used[k] || 0;
+        used[k] = slot + 1;
+        // 第一个占正常位置，后面的往右挪 34px 并轻微下移，形成斜排
+        pos[t.id] = {x: 140 + xi * 340 + slot * 34, y: 70 + d * 100 + slot * 8, t};
         maxRow = Math.max(maxRow, d);
       });
     });
