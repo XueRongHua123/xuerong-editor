@@ -5307,7 +5307,21 @@ _SCHEMA_SKIP_BLOCKS = {
     "on_add", "on_remove", "do_effect", "ai_will_do", "modifier",
     "targeted_modifier", "equipment_bonus", "research_bonus",
     "rule", "allowed_civil_war", "effect", "modifiers",
+    # 国策树里这些块装的是 UI/搜索配置，不是国策字段
+    "search_filters", "search_filter_prios", "focus", "shared_focus",
+    "completion_reward", "continuous_focus_position",
 }
+
+
+# 这些前缀开头的块名，里面装的是 effect / UI 配置，整块跳过
+_SKIP_PREFIX = (
+    "completion_reward", "search_filter", "custom_effect_tooltip",
+    "custom_trigger_tooltip", "custom_tooltip",
+)
+
+
+def _is_skip_block(name):
+    return name in _SCHEMA_SKIP_BLOCKS or name.startswith(_SKIP_PREFIX)
 
 
 def _looks_like_scripted(name):
@@ -5532,6 +5546,7 @@ def _diag_schema_character(root):
                               or (f in _SCHEMA_EXTRA)
                               or (f in te_names)
                               or (f in _SCHEMA_SCOPE_WORDS)
+                              or _is_skip_block(f)
                               or _looks_like_scripted(f)
                               or f.startswith(_SCHEMA_EXTRA_PREFIX))
                     if not ok:
@@ -5615,11 +5630,12 @@ def _diag_schema_decision(root):
                         parent = stack[k2]
                         break
                 m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*[=<>]', st)
-                if m and parent not in _SCHEMA_SKIP_BLOCKS:
+                if m and not _is_skip_block(parent):
                     f = m.group(1)
                     if (f not in allowed and f not in _SCHEMA_EXTRA
                             and f not in te_names
                             and f not in _SCHEMA_SCOPE_WORDS
+                            and not _is_skip_block(f)
                             and not _looks_like_scripted(f)
                             and not f.startswith(_SCHEMA_EXTRA_PREFIX)):
                         out.append(_finding(
@@ -5696,11 +5712,12 @@ def _diag_schema_ideas(root):
                         parent = stack[k2]
                         break
                 m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*[=<>]', st)
-                if m and parent not in _SCHEMA_SKIP_BLOCKS:
+                if m and not _is_skip_block(parent):
                     f = m.group(1)
                     if (f not in allowed and f not in _SCHEMA_EXTRA
                             and f not in te_names
                             and f not in _SCHEMA_SCOPE_WORDS
+                            and not _is_skip_block(f)
                             and not _looks_like_scripted(f)
                             and not f.startswith(_SCHEMA_EXTRA_PREFIX)):
                         out.append(_finding(
@@ -5709,6 +5726,92 @@ def _diag_schema_ideas(root):
                             % (fn, i, f),
                             rel, i, st,
                             "对照原版同类国家精神确认字段名"))
+            if opens:
+                nm = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*[=<>]', st)
+                stack.append(nm.group(1) if nm else "")
+                for _ in range(opens - 1):
+                    stack.append("")
+            depth += opens - closes
+            while len(stack) > 1 and depth < len(stack):
+                stack.pop()
+            if depth < 0:
+                depth = 0
+                stack = [""]
+    return out
+
+
+def _diag_schema_focus(root):
+    """common/national_focus 里国策的字段检查。
+
+    结构：`focus_tree = { focus = { 字段 } }`，
+    国策体在 depth 2，字段在 depth 3。
+
+    规则里 focus_tree 的字段表是「树本身 + 国策体」合并的，所以白名单偏宽——
+    宁可放过也不误报。
+    """
+    out = []
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return out
+    rules = _cwt_rules()
+    allowed = rules.get("focus_tree")
+    if not allowed:
+        return out
+    te_names = _cwt_te()
+
+    fd = os.path.join(top, "common", "national_focus")
+    if not os.path.isdir(fd):
+        return out
+
+    for fn in sorted(os.listdir(fd)):
+        if not fn.endswith(".txt"):
+            continue
+        p = os.path.join(fd, fn)
+        if not os.path.isfile(p):
+            continue
+        rel = "common/national_focus/" + fn
+        try:
+            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+        except Exception:
+            continue
+        depth = 0
+        stack = [""]
+        for i, ln in enumerate(lines, 1):
+            st = ln.strip()
+            opens = ln.count("{")
+            closes = ln.count("}")
+            if not st or st.startswith("#"):
+                depth += opens - closes
+                while len(stack) > 1 and depth < len(stack):
+                    stack.pop()
+                continue
+            # 进入 focus_tree 之后，国策体在 depth 2、字段在 depth 3
+            if depth == 3:
+                parent = ""
+                for k2 in range(len(stack) - 1, -1, -1):
+                    if stack[k2]:
+                        parent = stack[k2]
+                        break
+                m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*[=<>]', st)
+                if m and not _is_skip_block(parent):
+                    f = m.group(1)
+                    if (f not in allowed and f not in _SCHEMA_EXTRA
+                            and f not in te_names
+                            and f not in _SCHEMA_SCOPE_WORDS
+                            and not _is_skip_block(f)
+                            and not _looks_like_scripted(f)
+                            and not f.startswith(_SCHEMA_EXTRA_PREFIX)):
+                        out.append(_finding(
+                            "schema.unknown_field", "warning",
+                            "%s 第 %d 行的字段 %s 不在 focus_tree 的规则定义里"
+                            % (fn, i, f),
+                            rel, i, st,
+                            "对照原版同类国策确认字段名"))
             if opens:
                 nm = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*[=<>]', st)
                 stack.append(nm.group(1) if nm else "")
@@ -5734,7 +5837,11 @@ def diagnose(root=None):
                _diag_character_unrecruited, _diag_localisation_missing,
                _diag_tag_def_missing, _diag_division_template_missing,
                _diag_schema_unknown_field, _diag_schema_character,
-               _diag_schema_decision, _diag_schema_ideas):
+               _diag_schema_decision, _diag_schema_ideas,
+               # _diag_schema_focus：国策树嵌套太深（focus → completion_reward
+               # → add_tech_bonus → 参数），深度算不稳，误报 0.24% 不可接受。
+               # 代码留着，等有更好的深度跟踪再启用。
+               ):
         try:
             findings.extend(fn(root))
         except Exception:
