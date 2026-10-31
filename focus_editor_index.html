@@ -1527,6 +1527,46 @@
             </div>
             <div class="mp-sep"></div>
           </div>
+          <div id="polPanel">
+            <h4>开局政治与外交</h4>
+            <div class="mp-acts">
+              <input id="polTag" placeholder="TAG" style="height:24px;width:56px">
+              <button class="btn" id="polLoad">载入</button>
+            </div>
+            <div class="mp-k" id="polMsg" style="min-height:16px;line-height:1.5"></div>
+            <div id="polBody" style="display:none">
+              <div class="mp-k" style="margin-top:4px">执政党</div>
+              <div class="mp-acts">
+                <select id="polParty" style="height:24px;flex:1;min-width:0;font-size:11px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px">
+                  <option value="democratic">democratic</option>
+                  <option value="fascism">fascism</option>
+                  <option value="communism">communism</option>
+                  <option value="neutrality">neutrality</option>
+                </select>
+                <select id="polElect" style="height:24px;width:60px;font-size:11px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px">
+                  <option value="yes">选举 yes</option>
+                  <option value="no">选举 no</option>
+                </select>
+                <button class="btn" id="polSave">保存</button>
+              </div>
+              <div class="mp-k" style="margin-top:6px">支持率（四党）</div>
+              <div class="mp-acts">
+                <input id="popDem" placeholder="民主" style="height:22px;width:46px" title="democratic">
+                <input id="popFas" placeholder="法西" style="height:22px;width:46px" title="fascism">
+                <input id="popCom" placeholder="共产" style="height:22px;width:46px" title="communism">
+                <input id="popNeu" placeholder="中立" style="height:22px;width:46px" title="neutrality">
+                <button class="btn" id="popSave">存</button>
+              </div>
+              <div class="mp-k" style="margin-top:6px">宣战</div>
+              <div id="warList" style="max-height:100px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
+              <div class="mp-acts" style="margin-top:3px">
+                <input id="warTarget" placeholder="目标 TAG" style="height:22px;width:70px">
+                <input id="warType" value="annex" style="height:22px;flex:1;min-width:0" title="战争目标类型">
+                <button class="btn" id="warAdd">加</button>
+              </div>
+            </div>
+            <div class="mp-sep"></div>
+          </div>
           <div id="selBox">
           <h4>选中省份</h4>
           <div class="mp-row"><b class="mp-v" id="msId">—</b><span class="mp-k" id="msType"></span></div>
@@ -9742,6 +9782,119 @@ function makePannable(svg, body){
 
   function bind(){
     [['airLoad', load], ['airAdd', add]].forEach(function(p){
+      const el = document.getElementById(p[0]);
+      if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
+    });
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.14 开局政治与外交
+(function(){
+  let PTAG = '';
+
+  function msg(t, bad){
+    const el = document.getElementById('polMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  function render(data){
+    const body = document.getElementById('polBody');
+    if(body) body.style.display = '';
+    const p = data.politics || {};
+    const party = document.getElementById('polParty');
+    if(party && p.ruling_party){
+      for(const o of party.options){ if(o.value === p.ruling_party){ party.value = p.ruling_party; break; } }
+    }
+    const el = document.getElementById('polElect');
+    if(el && p.elections_allowed) el.value = p.elections_allowed;
+    const pops = data.popularities || {};
+    const map = {popDem: 'democratic', popFas: 'fascism', popCom: 'communism', popNeu: 'neutrality'};
+    Object.keys(map).forEach(function(id){
+      const inp = document.getElementById(id);
+      if(inp) inp.value = (pops[map[id]] != null ? pops[map[id]] : '');
+    });
+    const box = document.getElementById('warList');
+    if(box){
+      const ws = data.wars || [];
+      box.innerHTML = ws.length ? ws.map(function(w, i){
+        return '<div style="display:flex;gap:4px;align-items:center;font-size:10px;'
+          + 'font-family:Consolas,monospace;padding:1px 0">'
+          + '<span style="flex:1">' + w.target + ' <span style="color:var(--t3)">' + w.type + '</span></span>'
+          + '<button class="btn war-del" data-i="' + i + '" style="height:15px;font-size:8px;padding:0 3px">删</button>'
+          + '</div>';
+      }).join('') : '<div style="font-size:11px;color:var(--t3);padding:2px">（无战争）</div>';
+      box.querySelectorAll('.war-del').forEach(function(b){
+        b.onclick = async function(){
+          if(!confirm('删掉这条宣战？')) return;
+          const r = await (await fetch('/api/war_delete', {method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({tag: PTAG, index: Number(b.dataset.i)})})).json();
+          msg(r.msg || '', !r.ok);
+          if(r.ok){ status(r.msg); await load(); }
+        };
+      });
+    }
+  }
+
+  async function load(){
+    const tag = ((document.getElementById('polTag')||{}).value || '').trim().toUpperCase();
+    if(!tag){ msg('填 tag', true); return; }
+    PTAG = tag;
+    msg('读取中…');
+    const r = await (await fetch('/api/politics', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({tag: tag})})).json();
+    if(!r.ok){ msg(r.msg || '失败', true); return; }
+    msg(r.msg || '');
+    render(r);
+  }
+
+  async function savePol(){
+    if(!PTAG) return;
+    const party = (document.getElementById('polParty')||{}).value;
+    const elect = (document.getElementById('polElect')||{}).value;
+    msg('写入中…');
+    const r = await (await fetch('/api/politics_save', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({tag: PTAG, fields:{ruling_party: party, elections_allowed: elect}})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); }
+  }
+
+  async function savePops(){
+    if(!PTAG) return;
+    const g = function(id){ const v = (document.getElementById(id)||{}).value; return v === '' ? null : Number(v); };
+    const pops = {};
+    const map = {popDem: 'democratic', popFas: 'fascism', popCom: 'communism', popNeu: 'neutrality'};
+    Object.keys(map).forEach(function(id){
+      const v = g(id);
+      if(v !== null && !isNaN(v)) pops[map[id]] = v;
+    });
+    if(!Object.keys(pops).length){ msg('一个支持率都没填', true); return; }
+    msg('写入中…');
+    const r = await (await fetch('/api/popularities_save', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({tag: PTAG, pops: pops})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await load(); }
+  }
+
+  async function addWar(){
+    if(!PTAG) return;
+    const tgt = ((document.getElementById('warTarget')||{}).value || '').trim().toUpperCase();
+    const type = ((document.getElementById('warType')||{}).value || 'annex').trim();
+    if(!tgt){ msg('填目标 TAG', true); return; }
+    msg('写入中…');
+    const r = await (await fetch('/api/war_add', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({tag: PTAG, target: tgt, type: type})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await load(); }
+  }
+
+  function bind(){
+    [['polLoad', load], ['polSave', savePol], ['popSave', savePops], ['warAdd', addWar]].forEach(function(p){
       const el = document.getElementById(p[0]);
       if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
     });

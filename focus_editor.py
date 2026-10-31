@@ -5210,6 +5210,283 @@ def load_navy(root=None):
             "msg": "%d 支舰队，%d 艘船" % (len(fleets), total_ships)}
 
 
+IDEOLOGIES = ("democratic", "fascism", "communism", "neutrality")
+
+
+def load_politics(root=None, tag=""):
+    """解析某国的开局政治与外交状态。
+
+    set_politics = { ruling_party / last_election / election_frequency / elections_allowed }
+    set_popularities = { democratic = 75  fascism = 10 … }
+    declare_war_on = { target = X  type = Y }
+    """
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    if not tag:
+        return {"ok": False, "msg": "没给 tag"}
+    p, rel = _country_hist_file(root, tag)
+    if not p:
+        return {"ok": False, "msg": "找不到 %s 的国家历史文件" % tag}
+    try:
+        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    except Exception as e:
+        return {"ok": False, "msg": "读取失败：%s" % e}
+    text = _strip_keep_len(raw)
+
+    pol = {"ruling_party": "", "last_election": "", "election_frequency": "",
+           "elections_allowed": "", "origin": ""}
+    pol_text = text.find("set_politics")
+    if pol_text >= 0:
+        pb = text.find("{", pol_text)
+        pe = brace_match(text, pb)
+        if pe > pb:
+            body = text[pb + 1:pe - 1]
+            pol["ruling_party"] = _first(body, r'(?m)^\s*ruling_party\s*=\s*([a-z_]+)')
+            pol["last_election"] = _first(body, r'(?m)^\s*last_election\s*=\s*"([^"]*)"')
+            pol["election_frequency"] = _first(body, r'(?m)^\s*election_frequency\s*=\s*(\d+)')
+            pol["elections_allowed"] = _first(body, r'(?m)^\s*elections_allowed\s*=\s*(yes|no)')
+            pol["origin"] = "文件里已有"
+
+    pops = {}
+    for a, b, body in find_blocks(text, "set_popularities"):
+        for ide in IDEOLOGIES:
+            v = _first(body, r'(?m)^\s*' + ide + r'\s*=\s*(\d+)')
+            if v:
+                pops[ide] = int(v)
+    wars = []
+    for a, b, body in find_blocks(text, "declare_war_on"):
+        wars.append({"target": _first(body, r'(?m)^\s*target\s*=\s*([A-Z0-9]+)'),
+                     "type": _first(body, r'(?m)^\s*type\s*=\s*([a-z_]+)')})
+    return {"ok": True, "tag": tag, "file": os.path.basename(p),
+            "politics": pol, "popularities": pops, "wars": wars,
+            "msg": "%s：%s，支持率 %d 项，战争 %d 场" % (
+                tag, pol["ruling_party"] or "(未定义)", len(pops), len(wars))}
+
+
+def _politics_write(root, tag):
+    """拿到可写的国家历史文件路径。"""
+    src, rel = _country_hist_file(root, tag)
+    if not src:
+        return None, None, "找不到 %s 的国家历史文件" % tag
+    tgt, err = _country_hist_write_base(root)
+    if not tgt:
+        return None, None, err
+    dst = os.path.join(tgt, rel)
+    os.makedirs(os.path.dirname(dst) or tgt, exist_ok=True)
+    if not os.path.exists(dst):
+        try:
+            import shutil as _sh
+            _sh.copyfile(src, dst)
+        except Exception as e:
+            return None, None, "复制来源失败：%s" % e
+    return dst, rel, ""
+
+
+def politics_save(root, tag, fields):
+    """改开局政治：执政党 / 选举 / 频率 / 是否允许选举。
+
+    fields 里给什么改什么，没给的保留原值。
+    """
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    cur = load_politics(root, tag)
+    if not cur.get("ok"):
+        return {"ok": False, "msg": cur.get("msg")}
+    pol = cur["politics"]
+    want = {
+        "ruling_party": (fields.get("ruling_party") or pol["ruling_party"]),
+        "last_election": (fields.get("last_election") or pol["last_election"]),
+        "election_frequency": (fields.get("election_frequency") or pol["election_frequency"]),
+        "elections_allowed": (fields.get("elections_allowed") or pol["elections_allowed"]),
+    }
+    if want["ruling_party"] and want["ruling_party"] not in IDEOLOGIES:
+        return {"ok": False, "msg": "执政党只能是 %s" % " / ".join(IDEOLOGIES)}
+    if want["elections_allowed"] and want["elections_allowed"] not in ("yes", "no"):
+        return {"ok": False, "msg": "elections_allowed 只能是 yes / no"}
+
+    dst, rel, err = _politics_write(root, tag)
+    if not dst:
+        return {"ok": False, "msg": err}
+    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw)
+    changed = []
+
+    def set_in(block_key, body, lo, hi):
+        out = body
+        for k, v in (("ruling_party", want["ruling_party"]),
+                     ("last_election", '"%s"' % want["last_election"] if want["last_election"] else ""),
+                     ("election_frequency", want["election_frequency"]),
+                     ("elections_allowed", want["elections_allowed"])):
+            if not v:
+                continue
+            pat = re.compile(r'(?m)^([ \t]*)' + k + r'\s*=\s*[^\s#\r\n]+')
+            if pat.search(out):
+                out2 = pat.sub(lambda m: (m.group(1) or "") + "%s = %s" % (k, v), out, count=1)
+                if out2 != out:
+                    changed.append(k)
+                    out = out2
+        return out
+
+    pk = text.find("set_politics")
+    if pk >= 0:
+        pb = text.find("{", pk)
+        pe = brace_match(text, pb)
+        if pe > pb:
+            body = raw[pb + 1:pe - 1]
+            nb = set_in("set_politics", body, pb + 1, pe - 1)
+            if nb == body:
+                return {"ok": True, "msg": "没有改动"}
+            new_text = raw[:pb + 1] + nb + raw[pe - 1:]
+            snapshot(dst)
+            io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+            return {"ok": True, "msg": "%s 已更新：%s" % (tag, ", ".join(changed) or "无变化")}
+    # 没有 set_politics：在 history 里新建
+    block = ('\n\tset_politics = {\n'
+             '\t\truling_party = %s\n'
+             '\t\tlast_election = "%s"\n'
+             '\t\telection_frequency = %s\n'
+             '\t\telections_allowed = %s\n'
+             '\t}\n') % (want["ruling_party"] or "neutrality",
+                          want["last_election"] or "1936.1.1",
+                          want["election_frequency"] or "48",
+                          want["elections_allowed"] or "no")
+    hi = text.find("history = {")
+    if hi >= 0:
+        br = text.find("{", hi)
+        pos = br + 1
+        new_text = raw[:pos] + block + raw[pos:]
+    else:
+        new_text = raw.rstrip() + "\nhistory = {" + block + "}\n"
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "%s 新建 set_politics 块" % tag}
+
+
+def popularities_save(root, tag, pops):
+    """改四党支持率（整组替换，和为 100 时提示）。"""
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    if not isinstance(pops, dict) or not pops:
+        return {"ok": False, "msg": "要传 {democratic: 60, ...}"}
+    clean = {}
+    for k, v in pops.items():
+        if k not in IDEOLOGIES:
+            return {"ok": False, "msg": "未知意识形态：%s" % k}
+        try:
+            iv = int(v)
+        except Exception:
+            return {"ok": False, "msg": "%s 的支持率必须是整数" % k}
+        if iv < 0 or iv > 100:
+            return {"ok": False, "msg": "%s 的支持率要在 0-100" % k}
+        clean[k] = iv
+    total = sum(clean.values())
+    dst, rel, err = _politics_write(root, tag)
+    if not dst:
+        return {"ok": False, "msg": err}
+    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw)
+    blocks = list(find_blocks(text, "set_popularities"))
+    body = "".join("\n\t\t%s = %d" % (k, v) for k, v in clean.items())
+    if blocks:
+        a, b, _old = blocks[0]
+        # a 是 { 的位置，b 是 } 的位置：替换整段块体 raw[a+1:b-1]
+        new_text = raw[:a + 1] + body + "\n\t" + raw[b - 1:]
+    else:
+        block = "\n\tset_popularities = {" + body + "\n\t}\n"
+        hi = text.find("history = {")
+        if hi >= 0:
+            br = text.find("{", hi)
+            pos = br + 1
+            new_text = raw[:pos] + block + raw[pos:]
+        else:
+            new_text = raw.rstrip() + "\nhistory = {" + block + "}\n"
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    tip = "（合计 %d）" % total
+    return {"ok": True, "msg": "%s 支持率已更新%s" % (tag, tip)}
+
+
+def war_add(root, tag, target, wargoal_type="annex"):
+    """给某国加一条 declare_war_on。"""
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    target = (target or "").upper()
+    if not tag or not target:
+        return {"ok": False, "msg": "tag 和 target 都要给"}
+    if tag == target:
+        return {"ok": False, "msg": "不能对自己宣战"}
+    cur = load_politics(root, tag)
+    if not cur.get("ok"):
+        return {"ok": False, "msg": cur.get("msg")}
+    if any(w["target"] == target for w in cur["wars"]):
+        return {"ok": True, "msg": "已经有对 %s 的战争了" % target}
+    dst, rel, err = _politics_write(root, tag)
+    if not dst:
+        return {"ok": False, "msg": err}
+    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    block = ('\n\tdeclare_war_on = {\n'
+             '\t\ttarget = %s\n'
+             '\t\ttype = %s\n'
+             '\t}\n') % (target, wargoal_type or "annex")
+    text = _strip_keep_len(raw)
+    hi = text.find("history = {")
+    if hi >= 0:
+        br = text.find("{", hi)
+        pos = br + 1
+        new_text = raw[:pos] + block + raw[pos:]
+    else:
+        new_text = raw.rstrip() + "\nhistory = {" + block + "}\n"
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "%s 对 %s 宣战（%s）" % (tag, target, wargoal_type)}
+
+
+def war_delete(root, tag, index):
+    """删掉第 index 条宣战。"""
+    root = _map_pick(root)
+    tag = (tag or "").upper()
+    try:
+        index = int(index)
+    except Exception:
+        return {"ok": False, "msg": "index 不合法"}
+    cur = load_politics(root, tag)
+    if not cur.get("ok"):
+        return {"ok": False, "msg": cur.get("msg")}
+    if index < 0 or index >= len(cur["wars"]):
+        return {"ok": False, "msg": "没有第 %d 条宣战" % (index + 1)}
+    dst, rel, err = _politics_write(root, tag)
+    if not dst:
+        return {"ok": False, "msg": err}
+    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw)
+    blocks = list(find_blocks(text, "declare_war_on"))
+    if index >= len(blocks):
+        return {"ok": False, "msg": "重新定位失败"}
+    a, b, body = blocks[index]
+    st = a
+    while st > 0 and raw[st - 1] in " \t":
+        st -= 1
+    if st > 0 and raw[st - 1] == "\n":
+        st -= 1
+    en = b
+    while en < len(raw) and raw[en] in "\r\n":
+        en += 1
+    tgt_tag = cur["wars"][index]["target"]
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
+    return {"ok": True, "msg": "已删除对 %s 的宣战" % tgt_tag}
+
+
+def politics_payload(root=None, tag=""):
+    info = load_politics(root, tag)
+    if not info.get("ok"):
+        return info
+    return {"ok": True, "tag": tag, "file": info["file"],
+            "politics": info["politics"], "popularities": info["popularities"],
+            "wars": info["wars"], "ideologies": list(IDEOLOGIES),
+            "msg": info["msg"]}
+
+
 def load_air_wings(root=None):
     """解析 history/units 里的 air_wings（开局空军联队）。
 
@@ -13175,6 +13452,20 @@ class Handler(SimpleHTTPRequestHandler):
                                        body.get("root") or None))
         elif self.path == "/api/navy":
             self._send(navy_payload(body.get("root") or None))
+        elif self.path == "/api/politics":
+            self._send(politics_payload(body.get("root") or None, body.get("tag") or ""))
+        elif self.path == "/api/politics_save":
+            self._send(politics_save(body.get("root") or None, body.get("tag"),
+                                     body.get("fields") or {}))
+        elif self.path == "/api/popularities_save":
+            self._send(popularities_save(body.get("root") or None, body.get("tag"),
+                                         body.get("pops") or {}))
+        elif self.path == "/api/war_add":
+            self._send(war_add(body.get("root") or None, body.get("tag"),
+                               body.get("target"), body.get("type")))
+        elif self.path == "/api/war_delete":
+            self._send(war_delete(body.get("root") or None, body.get("tag"),
+                                  body.get("index")))
         elif self.path == "/api/air_wings":
             self._send(air_wings_payload(body.get("root") or None))
         elif self.path == "/api/air_wing_add":
