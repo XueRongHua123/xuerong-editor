@@ -246,7 +246,6 @@ def from_terrain_map(path, width=None, height=None, n_provinces=None,
     # 深蓝（深海）
     deep = (b > 60) & (b > r * 1.5) & (b > g * 1.35)
     water = is_blue | deep
-    land = ~water
 
     # 河流要在去噪前提取：去噪的邻居投票会把 1-3 像素宽的细线当噪点抹掉。
     # 河流常和海洋连成一块（河口），按连通块面积分不出来，用细线检测。
@@ -254,6 +253,11 @@ def from_terrain_map(path, width=None, height=None, n_provinces=None,
         rivers = thin_water(water, max_width=3)
     except Exception:
         rivers = np.zeros((h, w), dtype=bool)
+
+    # 关键：先把河道从水里摘出来再判海陆。
+    # 否则 2 像素宽的河在邻居投票里 nb=2（两边陆、上下水），既不满足 >=3
+    # 也不满足 <=1，会原样留在水里，随后 labels 为 0，被 & (labels>0) 全部清掉。
+    land = ~(water & ~rivers)
 
     # 去掉陆地里零星的水点 / 去掉水里零星的陆点
     for _ in range(2):
