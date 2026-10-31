@@ -1656,6 +1656,15 @@
               <input id="mgSeed" value="7" style="height:22px;width:44px" title="随机种子">
             </div>
             <div class="mp-acts" style="margin-top:4px">
+              <label style="font-size:10px;display:flex;align-items:center;gap:3px">
+                <input type="checkbox" id="mgBal" checked>均衡省大小</label>
+              <input id="mgMinPx" value="800" style="height:22px;width:52px" title="省像素下限">
+            </div>
+            <div class="mp-acts" style="margin-top:4px">
+              <input id="mgRegions" placeholder="战略区数" style="height:22px;width:74px" title="留空自动">
+              <input id="mgSupply" placeholder="补给区数" style="height:22px;width:74px" title="留空自动">
+            </div>
+            <div class="mp-acts" style="margin-top:4px">
               <input id="mgOut" placeholder="输出目录" style="height:22px;flex:1;min-width:0">
               <button class="btn" id="mgGo">生成</button>
             </div>
@@ -10361,6 +10370,10 @@ function makePannable(svg, body){
     const n = Number((document.getElementById('mgN')||{}).value || 60);
     const seed = Number((document.getElementById('mgSeed')||{}).value || 7);
     const out = ((document.getElementById('mgOut')||{}).value || '').trim();
+    const bal = !!(document.getElementById('mgBal')||{}).checked;
+    const minPx = Number((document.getElementById('mgMinPx')||{}).value || 800);
+    const nr = (document.getElementById('mgRegions')||{}).value;
+    const ns = (document.getElementById('mgSupply')||{}).value;
     if(src !== 'procedural' && !srcPath){ msg('这个来源要填文件路径', true); return; }
     msg('生成中…（大尺寸可能要几十秒）');
     log([]);
@@ -10369,7 +10382,9 @@ function makePannable(svg, body){
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({source: src, out: out || null, width: w, height: h,
                               n_provinces: n, seed: seed,
-                              src_path: srcPath || null})})).json();
+                              src_path: srcPath || null,
+                              balance: bal, min_province_px: minPx,
+                              n_regions: nr || null, n_supply: ns || null})})).json();
       msg(r.msg || '', !r.ok);
       log(r.log || []);
       if(r.ok) status(r.msg);
