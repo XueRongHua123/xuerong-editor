@@ -945,6 +945,7 @@
       <div id="lintEntry" class="tabbtn">🩺 项目体检</div>
       <div id="scriptEntry" class="tabbtn">🔍 脚本检查</div>
       <div id="mapEntry" class="tabbtn">🗺 地图</div>
+      <div id="navEditEntry" class="tabbtn" style="padding-left:22px">✎ 开局数据与编辑</div>
       <div id="stateEntry" class="tabbtn">🗺 州 / 地块</div>
     </details>
     <details>
@@ -11325,6 +11326,15 @@ document.getElementById('scriptEntry').onclick = ()=>openScriptCheck(true);
 document.getElementById('densitySel').addEventListener('change', e=>applyDensity(e.target.value));
 initNarrowMore();
 document.getElementById('mapEntry').onclick = ()=>{ openMap(); mapBindEvents(); };
+// v1.23.7 左侧导航直达「编辑」面板：原来要先点地图、再点右侧的编辑 tab，三步
+document.getElementById('navEditEntry').onclick = ()=>{
+  openMap();
+  mapBindEvents();
+  setTimeout(()=>{
+    const b = document.querySelector('.side-tab[data-tab="edit"]');
+    if(b) b.click();
+  }, 120);
+};
 document.getElementById('mapClose').onclick = ()=>{ document.getElementById('mapModal').classList.remove('show'); };
 document.getElementById('mapSource').addEventListener('change', e=>mapSwitchSource(e.target.value));
 document.getElementById('mapFit').onclick = mapFit;
