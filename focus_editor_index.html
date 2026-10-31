@@ -1598,6 +1598,28 @@
             </div>
             <div class="mp-sep"></div>
           </div>
+          <div id="chPanel">
+            <h4>人物</h4>
+            <div class="mp-acts">
+              <button class="btn" id="chLoad">载入</button>
+              <input id="chQ" placeholder="过滤 id/名字" style="height:22px;flex:1;min-width:0">
+            </div>
+            <div class="mp-k" id="chMsg" style="min-height:16px;line-height:1.5"></div>
+            <div id="chList" style="max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
+            <div class="mp-k" style="margin-top:6px">编辑选中</div>
+            <div class="mp-acts">
+              <input id="chName" placeholder="名字" style="height:22px;flex:1;min-width:0">
+              <input id="chSkill" placeholder="技能" style="height:22px;width:42px">
+            </div>
+            <div class="mp-acts" style="margin-top:3px">
+              <input id="chAtk" placeholder="攻击" style="height:22px;width:42px">
+              <input id="chDef" placeholder="防御" style="height:22px;width:42px">
+              <input id="chPlan" placeholder="计划" style="height:22px;width:42px">
+              <input id="chLog" placeholder="后勤" style="height:22px;width:42px">
+              <button class="btn" id="chSave">保存</button>
+            </div>
+            <div class="mp-sep"></div>
+          </div>
           <div id="selBox">
           <h4>选中省份</h4>
           <div class="mp-row"><b class="mp-v" id="msId">—</b><span class="mp-k" id="msType"></span></div>
@@ -10073,6 +10095,109 @@ function makePannable(svg, body){
       const el = document.getElementById(p[0]);
       if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
     });
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.18 人物编辑
+(function(){
+  let ALL = [], CUR = null;
+
+  function msg(t, bad){
+    const el = document.getElementById('chMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  function render(){
+    const box = document.getElementById('chList');
+    if(!box) return;
+    const q = ((document.getElementById('chQ')||{}).value || '').trim().toLowerCase();
+    const list = q ? ALL.filter(function(x){
+      return x.id.toLowerCase().indexOf(q) >= 0
+        || (x.name || '').toLowerCase().indexOf(q) >= 0;
+    }) : ALL;
+    if(!list.length){ box.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:2px">没有匹配</div>'; return; }
+    box.innerHTML = list.slice(0, 200).map(function(x){
+      const sk = (x.skills || {}).skill;
+      return '<div class="ch-row" data-id="' + x.id + '" style="display:flex;gap:4px;'
+        + 'align-items:center;font-size:10px;font-family:Consolas,monospace;padding:1px 0;cursor:pointer">'
+        + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
+        + x.name + ' <span style="color:var(--t3)">' + (x.type || '') + '</span></span>'
+        + (sk != null ? '<span style="color:var(--t3);width:16px;text-align:right">' + sk + '</span>' : '')
+        + '<button class="btn ch-del" data-id="' + x.id + '" style="height:15px;font-size:8px;padding:0 3px">删</button>'
+        + '</div>';
+    }).join('');
+    box.querySelectorAll('.ch-row').forEach(function(row){
+      row.onclick = function(e){
+        if(e.target.classList && e.target.classList.contains('ch-del')) return;
+        pick(row.dataset.id);
+      };
+    });
+    box.querySelectorAll('.ch-del').forEach(function(b){
+      b.onclick = async function(e){
+        e.stopPropagation();
+        if(!confirm('删掉这个人物？')) return;
+        const r = await (await fetch('/api/character_delete', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({id: b.dataset.id})})).json();
+        msg(r.msg || '', !r.ok);
+        if(r.ok){ status(r.msg); await load(); }
+      };
+    });
+  }
+
+  function pick(id){
+    CUR = ALL.find(function(x){ return x.id === id; }) || null;
+    if(!CUR) return;
+    const nm = document.getElementById('chName');
+    if(nm) nm.value = CUR.name || '';
+    const sk = CUR.skills || {};
+    const set = function(k, v){ const e = document.getElementById(k); if(e) e.value = (v != null ? v : ''); };
+    set('chSkill', sk.skill); set('chAtk', sk.attack_skill);
+    set('chDef', sk.defense_skill); set('chPlan', sk.planning_skill);
+    set('chLog', sk.logistics_skill);
+    msg('已选中 ' + CUR.name + '（' + CUR.id + '）');
+  }
+
+  async function load(){
+    msg('读取中…');
+    const r = await (await fetch('/api/characters', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+    if(!r.ok){ msg(r.msg || '失败', true); return; }
+    ALL = r.items || [];
+    msg(r.msg || '');
+    render();
+  }
+
+  async function save(){
+    if(!CUR){ msg('先选一个人物', true); return; }
+    const fields = {};
+    const nm = (document.getElementById('chName')||{}).value;
+    if(nm && nm !== CUR.name) fields.name = nm;
+    const pairs = [['chSkill', 'skill'], ['chAtk', 'attack_skill'], ['chDef', 'defense_skill'],
+                   ['chPlan', 'planning_skill'], ['chLog', 'logistics_skill']];
+    pairs.forEach(function(p){
+      const e = document.getElementById(p[0]);
+      if(e && e.value !== '') fields[p[1]] = Number(e.value);
+    });
+    if(!Object.keys(fields).length){ msg('没有改动', true); return; }
+    msg('写入中…');
+    const r = await (await fetch('/api/character_set', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id: CUR.id, fields: fields})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await load(); }
+  }
+
+  function bind(){
+    [['chLoad', load], ['chSave', save]].forEach(function(p){
+      const el = document.getElementById(p[0]);
+      if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
+    });
+    const q = document.getElementById('chQ');
+    if(q && !q.dataset.bound){ q.dataset.bound = '1';
+      q.addEventListener('input', function(){ render(); }); }
   }
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);

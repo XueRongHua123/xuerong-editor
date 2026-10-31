@@ -5294,6 +5294,253 @@ def load_navy(root=None):
             "msg": "%d 支舰队，%d 艘船" % (len(fleets), total_ships)}
 
 
+CHAR_TYPES = ("field_marshal", "corps_commander", "country_leader", "operative",
+              "advisor", "scientist")
+
+
+def load_characters(root=None):
+    """解析 common/characters 里的人物。
+
+    结构：
+        characters = {
+            ID = {
+                name = "..."
+                portraits = { army = { large = GFX_xxx  small = "gfx/..." } }
+                field_marshal = { traits = {…} skill = 7 attack_skill = 6 … }
+            }
+        }
+    """
+    root = _map_pick(root)
+    files, _rep = _layer_files("common/characters", mod_layers(root))
+    items, seen = [], set()
+    for p in (files or []):
+        try:
+            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        except Exception:
+            continue
+        text = _strip_keep_len(raw)
+        rel = os.path.join("common", "characters", os.path.basename(p))
+        src = ""
+        try:
+            for b in (mod_layers(root) or []):
+                if os.path.abspath(p).startswith(os.path.abspath(b) + os.sep):
+                    src = os.path.basename(b.rstrip("\\/")) or b
+                    break
+        except Exception:
+            pass
+        for outer_a, outer_b, outer_body in find_blocks(text, "characters"):
+            for ca, cb, body in find_blocks(outer_body, "characters"):
+                pass
+            # 顶层是 ID = { … }，不是带 key 的块
+            for m in re.finditer(r'(?m)^[ \t]*([A-Za-z][A-Za-z0-9_\-\.]*)[ \t]*=\s*\{', outer_body):
+                cid = m.group(1)
+                if cid in CHAR_TYPES or cid in ("portraits", "traits", "characters"):
+                    continue
+                cb = outer_body.find("{", m.end() - 1)
+                ce = brace_match(outer_body, cb)
+                if ce <= cb:
+                    continue
+                body = outer_body[cb + 1:ce - 1]
+                nm = _first(body, r'(?m)^\s*name\s*=\s*"([^"]*)"')
+                if not nm:
+                    continue
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                ctype = ""
+                for t in CHAR_TYPES:
+                    if re.search(r'(?m)^[ \t]*' + t + r'[ \t]*=\s*\{', body):
+                        ctype = t
+                        break
+                big = _first(body, r'(?m)^\s*large\s*=\s*"?([^"\s#]+)"?')
+                small = _first(body, r'(?m)^\s*small\s*=\s*"([^"]*)"')
+                traits = []
+                tm = re.search(r'(?m)^[ \t]*traits[ \t]*=\s*\{', body)
+                if tm:
+                    tb = body.find("{", tm.end() - 1)
+                    te = brace_match(body, tb)
+                    if te > tb:
+                        for ln in body[tb + 1:te - 1].splitlines():
+                            ln = ln.strip()
+                            if ln and not ln.startswith("#"):
+                                traits.append(ln)
+                sk = {}
+                for k in ("skill", "attack_skill", "defense_skill", "planning_skill",
+                          "logistics_skill"):
+                    v = _first(body, r'(?m)^\s*' + k + r'\s*=\s*(-?\d+)')
+                    if v:
+                        sk[k] = int(v)
+                items.append({"id": cid, "name": nm, "type": ctype,
+                              "portrait_large": big, "portrait_small": small,
+                              "traits": traits, "skills": sk,
+                              "file": rel, "source": src,
+                              "start": outer_a + 1 + m.start(),
+                              "end": outer_a + 1 + ce})
+    return {"ok": True, "items": items, "count": len(items),
+            "msg": "共 %d 个人物" % len(items)}
+
+
+def _char_write_base(root):
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return None, "找不到可写的 mod 目录"
+    tgt, why = write_base(root, "common/characters")
+    if not tgt:
+        return None, "找不到可写目录"
+    if os.path.abspath(tgt) != os.path.abspath(top):
+        nm = os.path.basename(tgt.rstrip("\\/")) or tgt
+        return None, ("common/characters 被 %s 的 replace_path 独占，"
+                      "请先在「诊断 → 目录写入目标」里接管该目录" % nm)
+    return tgt, ""
+
+
+def character_set(root, cid, fields):
+    """改人物：名字 / 技能 / 特质。"""
+    root = _map_pick(root)
+    cid = (cid or "").strip()
+    if not cid:
+        return {"ok": False, "msg": "id 不能为空"}
+    info = load_characters(root)
+    it = next((x for x in info["items"] if x["id"] == cid), None)
+    if not it:
+        return {"ok": False, "msg": "没有这个人物：%s" % cid}
+    tgt, err = _char_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    p = os.path.join(tgt, it["file"])
+    os.makedirs(os.path.dirname(p) or tgt, exist_ok=True)
+    src = None
+    for q in (_layer_files("common/characters", mod_layers(root))[0] or []):
+        if os.path.basename(q) == os.path.basename(it["file"]):
+            src = q
+            break
+    if not os.path.exists(p) and src:
+        try:
+            import shutil as _sh
+            _sh.copyfile(src, p)
+        except Exception as e:
+            return {"ok": False, "msg": "复制来源失败：%s" % e}
+    raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw)
+    # 重新定位这个人物
+    a = b = -1
+    for oa, ob, oBody in find_blocks(text, "characters"):
+        for m in re.finditer(r'(?m)^[ \t]*([A-Za-z][A-Za-z0-9_\-\.]*)[ \t]*=\s*\{', oBody):
+            if m.group(1) != cid:
+                continue
+            cb = oBody.find("{", m.end() - 1)
+            ce = brace_match(oBody, cb)
+            if ce > cb:
+                a = oa + 1 + cb
+                b = oa + 1 + ce
+                break
+        if a >= 0:
+            break
+    if a < 0:
+        return {"ok": False, "msg": "重新定位失败"}
+    seg = raw[a:b]
+    new_seg = seg
+    changed = []
+    nm = fields.get("name")
+    if nm:
+        pat = re.compile(r'(?m)^([ \t]*)name\s*=\s*"[^"]*"')
+        if pat.search(new_seg):
+            new_seg = pat.sub(lambda m: (m.group(1) or "") + 'name = "%s"' % nm.replace('"', ""), new_seg, count=1)
+            changed.append("name")
+    for k in ("skill", "attack_skill", "defense_skill", "planning_skill", "logistics_skill"):
+        v = fields.get(k)
+        if v in (None, ""):
+            continue
+        try:
+            iv = int(v)
+        except Exception:
+            continue
+        pat = re.compile(r'(?m)^([ \t]*)' + k + r'\s*=\s*-?\d+')
+        if pat.search(new_seg):
+            new_seg = pat.sub(lambda m: (m.group(1) or "") + "%s = %d" % (k, iv), new_seg, count=1)
+            changed.append(k)
+    if new_seg == seg:
+        return {"ok": True, "msg": "没有改动"}
+    new_text = raw[:a] + new_seg + raw[b:]
+    snapshot(p)
+    io.open(p, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "%s 已更新：%s" % (it["name"], ", ".join(changed))}
+
+
+def character_delete(root, cid):
+    """删掉一个人物（整块）。"""
+    root = _map_pick(root)
+    cid = (cid or "").strip()
+    if not cid:
+        return {"ok": False, "msg": "id 不能为空"}
+    info = load_characters(root)
+    it = next((x for x in info["items"] if x["id"] == cid), None)
+    if not it:
+        return {"ok": False, "msg": "没有这个人物：%s" % cid}
+    tgt, err = _char_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    p = os.path.join(tgt, it["file"])
+    os.makedirs(os.path.dirname(p) or tgt, exist_ok=True)
+    src = None
+    for q in (_layer_files("common/characters", mod_layers(root))[0] or []):
+        if os.path.basename(q) == os.path.basename(it["file"]):
+            src = q
+            break
+    if not os.path.exists(p):
+        if not src:
+            return {"ok": False, "msg": "找不到来源文件"}
+        try:
+            import shutil as _sh
+            _sh.copyfile(src, p)
+        except Exception as e:
+            return {"ok": False, "msg": "复制来源失败：%s" % e}
+    raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw)
+    a = b = -1
+    for oa, ob, oBody in find_blocks(text, "characters"):
+        for m in re.finditer(r'(?m)^[ \t]*([A-Za-z][A-Za-z0-9_\-\.]*)[ \t]*=\s*\{', oBody):
+            if m.group(1) != cid:
+                continue
+            cb = oBody.find("{", m.end() - 1)
+            ce = brace_match(oBody, cb)
+            if ce > cb:
+                a = oa + 1 + cb
+                b = oa + 1 + ce
+                # 起点再往前推到 ID 那一行的行首
+                line_start = oBody.rfind("\n", 0, m.start()) + 1
+                a = oa + 1 + line_start
+                break
+        if a >= 0:
+            break
+    if a < 0:
+        return {"ok": False, "msg": "重新定位失败"}
+    st = a
+    while st > 0 and raw[st - 1] in " \t":
+        st -= 1
+    if st > 0 and raw[st - 1] == "\n":
+        st -= 1
+    en = b
+    while en < len(raw) and raw[en] in "\r\n":
+        en += 1
+    snapshot(p)
+    io.open(p, "wb").write(b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
+    return {"ok": True, "msg": "已删除人物「%s」" % it["name"]}
+
+
+def characters_payload(root=None):
+    info = load_characters(root)
+    if not info.get("ok"):
+        return info
+    return {"ok": True, "items": info["items"], "count": info["count"],
+            "types": list(CHAR_TYPES), "msg": info["msg"]}
+
+
 def load_bookmarks(root=None):
     """解析 common/bookmarks 里的所有剧本。
 
@@ -13950,6 +14197,13 @@ class Handler(SimpleHTTPRequestHandler):
                                        body.get("root") or None))
         elif self.path == "/api/navy":
             self._send(navy_payload(body.get("root") or None))
+        elif self.path == "/api/characters":
+            self._send(characters_payload(body.get("root") or None))
+        elif self.path == "/api/character_set":
+            self._send(character_set(body.get("root") or None, body.get("id"),
+                                     body.get("fields") or {}))
+        elif self.path == "/api/character_delete":
+            self._send(character_delete(body.get("root") or None, body.get("id")))
         elif self.path == "/api/bookmarks":
             self._send(bookmarks_payload(body.get("root") or None))
         elif self.path == "/api/bookmark_add":
