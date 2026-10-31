@@ -1620,6 +1620,23 @@
             </div>
             <div class="mp-sep"></div>
           </div>
+          <div id="decPanel">
+            <h4>决议</h4>
+            <div class="mp-acts">
+              <button class="btn" id="decLoad">载入</button>
+              <input id="decQ" placeholder="过滤 id/类别" style="height:22px;flex:1;min-width:0">
+            </div>
+            <div class="mp-k" id="decMsg" style="min-height:16px;line-height:1.5"></div>
+            <div id="decList" style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
+            <div class="mp-k" style="margin-top:6px">编辑选中</div>
+            <div class="mp-acts">
+              <input id="decCost" placeholder="cost" style="height:22px;width:52px">
+              <input id="decDays" placeholder="days_remove" style="height:22px;width:74px">
+              <input id="decPrio" placeholder="priority" style="height:22px;width:58px">
+              <button class="btn" id="decSave">保存</button>
+            </div>
+            <div class="mp-sep"></div>
+          </div>
           <div id="selBox">
           <h4>选中省份</h4>
           <div class="mp-row"><b class="mp-v" id="msId">—</b><span class="mp-k" id="msType"></span></div>
@@ -10196,6 +10213,101 @@ function makePannable(svg, body){
       if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
     });
     const q = document.getElementById('chQ');
+    if(q && !q.dataset.bound){ q.dataset.bound = '1';
+      q.addEventListener('input', function(){ render(); }); }
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.19 决议编辑
+(function(){
+  let ALL = [], CUR = null;
+
+  function msg(t, bad){
+    const el = document.getElementById('decMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  function render(){
+    const box = document.getElementById('decList');
+    if(!box) return;
+    const q = ((document.getElementById('decQ')||{}).value || '').trim().toLowerCase();
+    const list = q ? ALL.filter(function(x){
+      return x.id.toLowerCase().indexOf(q) >= 0 || (x.cat||'').toLowerCase().indexOf(q) >= 0;
+    }) : ALL;
+    if(!list.length){ box.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:2px">没有匹配</div>'; return; }
+    box.innerHTML = list.slice(0, 200).map(function(x){
+      const f = x.fields || {};
+      const tip = 'cost=' + (f.cost || '-') + ' days=' + (f.days_remove || '-');
+      return '<div class="dec-row" data-id="' + x.id + '" style="display:flex;gap:4px;'
+        + 'align-items:center;font-size:10px;font-family:Consolas,monospace;padding:1px 0;cursor:pointer"'
+        + ' title="' + tip + '">'
+        + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
+        + x.id + ' <span style="color:var(--t3)">' + x.cat + '</span></span>'
+        + '<button class="btn dec-del" data-id="' + x.id + '" style="height:15px;font-size:8px;padding:0 3px">删</button>'
+        + '</div>';
+    }).join('');
+    box.querySelectorAll('.dec-row').forEach(function(row){
+      row.onclick = function(e){
+        if(e.target.classList && e.target.classList.contains('dec-del')) return;
+        pick(row.dataset.id);
+      };
+    });
+    box.querySelectorAll('.dec-del').forEach(function(b){
+      b.onclick = async function(e){
+        e.stopPropagation();
+        if(!confirm('删掉这条决议？')) return;
+        const r = await (await fetch('/api/decision_delete', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({id: b.dataset.id})})).json();
+        msg(r.msg || '', !r.ok);
+        if(r.ok){ status(r.msg); await load(); }
+      };
+    });
+  }
+
+  function pick(id){
+    CUR = ALL.find(function(x){ return x.id === id; }) || null;
+    if(!CUR) return;
+    const f = CUR.fields || {};
+    const set = function(k, v){ const e = document.getElementById(k); if(e) e.value = (v != null ? v : ''); };
+    set('decCost', f.cost); set('decDays', f.days_remove); set('decPrio', f.priority);
+    msg('已选中 ' + CUR.id + '（' + CUR.cat + '）');
+  }
+
+  async function load(){
+    msg('读取中…');
+    const r = await (await fetch('/api/decisions', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+    if(!r.ok){ msg(r.msg || '失败', true); return; }
+    ALL = r.decisions || [];
+    msg(r.msg || '');
+    render();
+  }
+
+  async function save(){
+    if(!CUR){ msg('先选一条决议', true); return; }
+    const fields = {};
+    const v = function(id){ const e = document.getElementById(id); return e && e.value !== '' ? e.value : null; };
+    const c = v('decCost'); if(c !== null) fields.cost = c;
+    const d = v('decDays'); if(d !== null) fields.days_remove = d;
+    const p = v('decPrio'); if(p !== null) fields.priority = p;
+    if(!Object.keys(fields).length){ msg('没有改动', true); return; }
+    msg('写入中…');
+    const r = await (await fetch('/api/decision_set', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id: CUR.id, fields: fields})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await load(); }
+  }
+
+  function bind(){
+    [['decLoad', load], ['decSave', save]].forEach(function(p){
+      const el = document.getElementById(p[0]);
+      if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
+    });
+    const q = document.getElementById('decQ');
     if(q && !q.dataset.bound){ q.dataset.bound = '1';
       q.addEventListener('input', function(){ render(); }); }
   }

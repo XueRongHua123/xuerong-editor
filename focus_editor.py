@@ -5294,6 +5294,235 @@ def load_navy(root=None):
             "msg": "%d 支舰队，%d 艘船" % (len(fleets), total_ships)}
 
 
+# 决策块内的子块，不是独立决策
+DECISION_SKIP = ("ai_will_do", "modifier", "available", "visible", "complete_effect",
+                 "remove_effect", "cancel_effect", "timeout_effect", "target_trigger",
+                 "target_array", "targets", "custom_effect_tooltip", "highlight_states",
+                 "state_target", "news_event", "scripted_effect", "selectable_mission")
+
+DECISION_SCALARS = ("icon", "priority", "cost", "fire_only_once", "days_remove",
+                    "days_re_enable", "days_mission_timeout", "activation",
+                    "selectable_mission", "target_array", "target_trigger",
+                    "state_target", "is_good", "news_event", "modifier")
+
+
+def load_decisions(root=None):
+    """解析 common/decisions 的类别与决策。
+
+    结构：
+        category_key = {
+            decision_key = {
+                icon = GFX_xxx
+                priority = 1
+                cost = 50
+                fire_only_once = yes
+                available = { … }        ← 脚本块，不动
+                complete_effect = { … }  ← 脚本块，不动
+            }
+        }
+    """
+    root = _map_pick(root)
+    files, _rep = _layer_files("common/decisions", mod_layers(root))
+    cats, decisions = [], []
+    seen_cat = set()
+    for p in (files or []):
+        try:
+            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        except Exception:
+            continue
+        text = _strip_keep_len(raw)
+        rel = os.path.join("common", "decisions", os.path.basename(p))
+        src = ""
+        try:
+            for b in (mod_layers(root) or []):
+                if os.path.abspath(p).startswith(os.path.abspath(b) + os.sep):
+                    src = os.path.basename(b.rstrip("\\/")) or b
+                    break
+        except Exception:
+            pass
+        # 顶层类别：行首无缩进的 key = {
+        for m in re.finditer(r'(?m)^([A-Za-z][A-Za-z0-9_\-\.]*)[ \t]*=\s*\{', text):
+            cname = m.group(1)
+            if cname in ("decisions", "decision"):
+                continue
+            cb = text.find("{", m.end() - 1)
+            ce = brace_match(text, cb)
+            if ce <= cb:
+                continue
+            cbody = text[cb + 1:ce - 1]
+            cid = cname
+            if cid in seen_cat:
+                continue
+            seen_cat.add(cid)
+            dlist = []
+            for dm in re.finditer(r'(?m)^[ \t]*([A-Za-z][A-Za-z0-9_\-\.]*)[ \t]*=\s*\{', cbody):
+                dname = dm.group(1)
+                if dname in DECISION_SCALARS or dname in DECISION_SKIP:
+                    continue
+                db = cbody.find("{", dm.end() - 1)
+                de = brace_match(cbody, db)
+                if de <= db:
+                    continue
+                dbody = cbody[db + 1:de - 1]
+                # 决策块里应该有至少一个已知字段，否则可能是别的结构
+                scal = {}
+                for k in DECISION_SCALARS:
+                    if k in ("activation", "target_array", "target_trigger",
+                             "state_target", "news_event"):
+                        continue
+                    v = _first(dbody, r'(?m)^\s*' + k + r'\s*=\s*"?([^"\s#]+)"?')
+                    if v and v != "{":
+                        scal[k] = v
+                if not scal:
+                    continue
+                dline = cbody.rfind("\n", 0, dm.start()) + 1
+                dlist.append({"id": dname, "cat": cid, "fields": scal,
+                              "file": rel, "source": src,
+                              "start": cb + 1 + dline,
+                              "end": cb + 1 + de})
+            cats.append({"id": cid, "count": len(dlist), "file": rel})
+            decisions.extend(dlist)
+    return {"ok": True, "categories": cats, "decisions": decisions,
+            "cat_count": len(cats), "count": len(decisions),
+            "msg": "%d 个类别，%d 条决议" % (len(cats), len(decisions))}
+
+
+def _dec_write_base(root):
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return None, "找不到可写的 mod 目录"
+    tgt, why = write_base(root, "common/decisions")
+    if not tgt:
+        return None, "找不到可写目录"
+    if os.path.abspath(tgt) != os.path.abspath(top):
+        nm = os.path.basename(tgt.rstrip("\\/")) or tgt
+        return None, ("common/decisions 被 %s 的 replace_path 独占，"
+                      "请先在「诊断 → 目录写入目标」里接管该目录" % nm)
+    return tgt, ""
+
+
+def _dec_find(root, did, info=None):
+    """在文件里重新定位决策块，返回 (路径, start, end, record)。"""
+    info = info or load_decisions(root)
+    it = next((x for x in info["decisions"] if x["id"] == did), None)
+    if not it:
+        return None, -1, -1, None, "没有这条决议：%s" % did
+    tgt, err = _dec_write_base(root)
+    if not tgt:
+        return None, -1, -1, None, err
+    p = os.path.join(tgt, it["file"])
+    os.makedirs(os.path.dirname(p) or tgt, exist_ok=True)
+    src = None
+    for q in (_layer_files("common/decisions", mod_layers(root))[0] or []):
+        if os.path.basename(q) == os.path.basename(it["file"]):
+            src = q
+            break
+    if not os.path.exists(p) and src:
+        try:
+            import shutil as _sh
+            _sh.copyfile(src, p)
+        except Exception as e:
+            return None, -1, -1, None, "复制来源失败：%s" % e
+    raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw)
+    a = b = -1
+    for m in re.finditer(r'(?m)^([A-Za-z][A-Za-z0-9_\-\.]*)[ \t]*=\s*\{', text):
+        cname = m.group(1)
+        if cname in ("decisions", "decision"):
+            continue
+        cb = text.find("{", m.end() - 1)
+        ce = brace_match(text, cb)
+        if ce <= cb:
+            continue
+        cbody = text[cb + 1:ce - 1]
+        for dm in re.finditer(r'(?m)^[ \t]*([A-Za-z][A-Za-z0-9_\-\.]*)[ \t]*=\s*\{', cbody):
+            if dm.group(1) != did:
+                continue
+            db = cbody.find("{", dm.end() - 1)
+            de = brace_match(cbody, db)
+            if de > db:
+                a = cb + 1 + db
+                b = cb + 1 + de
+                break
+        if a >= 0:
+            break
+    if a < 0:
+        return None, -1, -1, None, "重新定位失败"
+    return p, a, b, it, ""
+
+
+def decision_set(root, did, fields):
+    """改决议的标量字段（icon / priority / cost / fire_only_once / days_remove 等）。"""
+    root = _map_pick(root)
+    did = (did or "").strip()
+    if not did:
+        return {"ok": False, "msg": "id 不能为空"}
+    p, a, b, it, err = _dec_find(root, did)
+    if not p:
+        return {"ok": False, "msg": err}
+    raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    seg = raw[a:b]
+    new_seg = seg
+    changed = []
+    for k, v in (fields or {}).items():
+        if k not in DECISION_SCALARS:
+            continue
+        if v in (None, ""):
+            continue
+        sv = str(v).strip()
+        pat = re.compile(r'(?m)^([ \t]*)' + k + r'\s*=\s*[^\s#\r\n]+')
+        if pat.search(new_seg):
+            quoted = k in ("icon", "activation", "news_event")
+            val = ('"%s"' % sv) if quoted else sv
+            new_seg = pat.sub(lambda m: (m.group(1) or "") + "%s = %s" % (k, val),
+                              new_seg, count=1)
+            changed.append(k)
+    if new_seg == seg:
+        return {"ok": True, "msg": "没有改动（字段不存在或未变）"}
+    new_text = raw[:a] + new_seg + raw[b:]
+    snapshot(p)
+    io.open(p, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "决议 %s 已更新：%s" % (did, ", ".join(changed))}
+
+
+def decision_delete(root, did):
+    """删掉一条决议（整块）。"""
+    root = _map_pick(root)
+    did = (did or "").strip()
+    if not did:
+        return {"ok": False, "msg": "id 不能为空"}
+    p, a, b, it, err = _dec_find(root, did)
+    if not p:
+        return {"ok": False, "msg": err}
+    raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    st = a
+    while st > 0 and raw[st - 1] in " \t":
+        st -= 1
+    if st > 0 and raw[st - 1] == "\n":
+        st -= 1
+    en = b
+    while en < len(raw) and raw[en] in "\r\n":
+        en += 1
+    snapshot(p)
+    io.open(p, "wb").write(b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
+    return {"ok": True, "msg": "已删除决议 %s" % did}
+
+
+def decisions_payload(root=None):
+    info = load_decisions(root)
+    if not info.get("ok"):
+        return info
+    return {"ok": True, "categories": info["categories"],
+            "decisions": info["decisions"], "count": info["count"],
+            "cat_count": info["cat_count"],
+            "scalars": list(DECISION_SCALARS), "msg": info["msg"]}
+
+
 CHAR_TYPES = ("field_marshal", "corps_commander", "country_leader", "operative",
               "advisor", "scientist")
 
@@ -14197,6 +14426,13 @@ class Handler(SimpleHTTPRequestHandler):
                                        body.get("root") or None))
         elif self.path == "/api/navy":
             self._send(navy_payload(body.get("root") or None))
+        elif self.path == "/api/decisions":
+            self._send(decisions_payload(body.get("root") or None))
+        elif self.path == "/api/decision_set":
+            self._send(decision_set(body.get("root") or None, body.get("id"),
+                                    body.get("fields") or {}))
+        elif self.path == "/api/decision_delete":
+            self._send(decision_delete(body.get("root") or None, body.get("id")))
         elif self.path == "/api/characters":
             self._send(characters_payload(body.get("root") or None))
         elif self.path == "/api/character_set":
