@@ -5490,6 +5490,129 @@ def _dec_find(root, did, info=None):
     return p, a, b, it, ""
 
 
+def decision_add(root, did, category, icon="GFX_decision_generic", cost=50,
+                 fire_only_once=True, effect="add_political_power = 50",
+                 category_new=None):
+    """新建一条决议。
+
+    最简结构：
+        CATEGORY = {
+            DID = {
+                icon = GFX_xxx
+                cost = 50
+                fire_only_once = yes
+                available = { always = yes }
+                complete_effect = { add_political_power = 50 }
+            }
+        }
+    effect 是要塞进 complete_effect 的脚本文本（一行或多行）。
+    """
+    root = _map_pick(root)
+    did = (did or "").strip()
+    category = (category_new or category or "").strip()
+    if not did:
+        return {"ok": False, "msg": "决议 id 不能为空"}
+    if not category:
+        return {"ok": False, "msg": "类别不能为空"}
+    if not re.match(r'^[A-Za-z][A-Za-z0-9_\-\.]*$', did):
+        return {"ok": False, "msg": "决议 id 只能用字母数字下划线，且以字母开头"}
+    if not re.match(r'^[A-Za-z][A-Za-z0-9_\-\.]*$', category):
+        return {"ok": False, "msg": "类别 id 格式不对"}
+    try:
+        cost = int(cost)
+    except Exception:
+        return {"ok": False, "msg": "cost 必须是整数"}
+    if cost < 0:
+        return {"ok": False, "msg": "cost 不能为负"}
+
+    info = load_decisions(root)
+    if any(x["id"] == did for x in info["decisions"]):
+        return {"ok": False, "msg": "已经有同 id 的决议：%s" % did}
+
+    tgt, err = _dec_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    d = os.path.join(tgt, "common", "decisions")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "zz_editor_decisions.txt")
+
+    eff_lines = [ln.rstrip() for ln in (effect or "").splitlines() if ln.strip()]
+    if not eff_lines:
+        eff_lines = ["add_political_power = 50"]
+
+    cat_exists = any(c["id"] == category for c in info["categories"])
+    if cat_exists:
+        # 已有类别：往那个文件里加
+        for c in info["categories"]:
+            if c["id"] == category:
+                p = os.path.join(tgt, c["file"])
+                os.makedirs(os.path.dirname(p) or tgt, exist_ok=True)
+                src = None
+                for q in (_layer_files("common/decisions", mod_layers(root))[0] or []):
+                    if os.path.basename(q) == os.path.basename(c["file"]):
+                        src = q
+                        break
+                if not os.path.exists(p) and src:
+                    try:
+                        import shutil as _sh
+                        _sh.copyfile(src, p)
+                    except Exception as e:
+                        return {"ok": False, "msg": "复制来源失败：%s" % e}
+                break
+
+    block = ['\t%s = {' % did,
+             '\t\ticon = %s' % icon,
+             '\t\tcost = %d' % cost,
+             '\t\tfire_only_once = %s' % ("yes" if fire_only_once else "no"),
+             '\t\tavailable = {',
+             '\t\t\talways = yes',
+             '\t\t}',
+             '\t\tcomplete_effect = {']
+    for ln in eff_lines:
+        block.append('\t\t\t%s' % ln)
+    block.append('\t\t}')
+    block.append('\t}')
+    block_txt = "\n".join(block) + "\n"
+
+    if os.path.exists(p):
+        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    else:
+        raw = ""
+
+    text = _strip_keep_len(raw) if raw else ""
+    if cat_exists and text:
+        # 找那个类别块，插到它的 } 前
+        cm = re.search(r'(?m)^[ \t]*' + re.escape(category) + r'[ \t]*=\s*\{', text)
+        if cm:
+            cb = text.find("{", cm.end() - 1)
+            ce = brace_match(text, cb)
+            if ce > cb:
+                pos = ce
+                while pos > 0 and raw[pos - 1] in " \t":
+                    pos -= 1
+                if pos > 0 and raw[pos - 1] == "}":
+                    pos -= 1
+                ls = raw.rfind("\n", 0, pos) + 1
+                new_text = raw[:ls] + block_txt + raw[ls:]
+            else:
+                new_text = raw.rstrip() + "\n" + block_txt
+        else:
+            new_text = raw.rstrip() + "\n" + block_txt
+    else:
+        # 新文件或新类别
+        cat_block = "%s = {\n%s}\n" % (category, block_txt)
+        if raw.strip():
+            new_text = raw.rstrip() + "\n\n" + cat_block
+        else:
+            new_text = cat_block
+
+    if os.path.exists(p):
+        snapshot(p)
+    io.open(p, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    where = "已有类别 %s" % category if cat_exists else "新建类别 %s" % category
+    return {"ok": True, "msg": "已新建决议 %s（%s，cost %d）" % (did, where, cost)}
+
+
 def decision_set(root, did, fields):
     """改决议的标量字段（icon / priority / cost / fire_only_once / days_remove 等）。"""
     root = _map_pick(root)
@@ -5660,6 +5783,102 @@ def _char_write_base(root):
         return None, ("common/characters 被 %s 的 replace_path 独占，"
                       "请先在「诊断 → 目录写入目标」里接管该目录" % nm)
     return tgt, ""
+
+
+def character_add(root, cid, name, ctype="corps_commander", skill=3,
+                  attack=3, defense=3, planning=3, logistics=3,
+                  portrait_large="", portrait_small=""):
+    """新建人物。
+
+    写进 common/characters/zz_editor_characters.txt（不覆盖别人已有的文件）。
+    """
+    root = _map_pick(root)
+    cid = (cid or "").strip()
+    name = (name or "").strip()
+    if not cid:
+        return {"ok": False, "msg": "id 不能为空"}
+    if not re.match(r'^[A-Za-z][A-Za-z0-9_\-\.]*$', cid):
+        return {"ok": False, "msg": "id 只能用字母数字下划线，且以字母开头"}
+    if not name:
+        return {"ok": False, "msg": "名字不能为空"}
+    if ctype not in CHAR_TYPES:
+        return {"ok": False, "msg": "类型只能是 %s" % " / ".join(CHAR_TYPES)}
+
+    info = load_characters(root)
+    if any(x["id"] == cid for x in info["items"]):
+        return {"ok": False, "msg": "已经有同 id 的人物：%s" % cid}
+
+    def num(v, lo, hi):
+        try:
+            iv = int(v)
+        except Exception:
+            return None
+        if iv < lo or iv > hi:
+            return None
+        return iv
+
+    sk = {
+        "skill": num(skill, 0, 10),
+        "attack_skill": num(attack, 0, 10),
+        "defense_skill": num(defense, 0, 10),
+        "planning_skill": num(planning, 0, 10),
+        "logistics_skill": num(logistics, 0, 10),
+    }
+    if any(v is None for v in sk.values()):
+        return {"ok": False, "msg": "技能值必须是 0-10 的整数"}
+
+    tgt, err = _char_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    d = os.path.join(tgt, "common", "characters")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "zz_editor_characters.txt")
+
+    body = ['\t%s = {' % cid,
+            '\t\tname = "%s"' % name.replace('"', "")]
+    if portrait_large or portrait_small:
+        body.append('\t\tportraits = {')
+        body.append('\t\t\tarmy = {')
+        if portrait_large:
+            body.append('\t\t\t\tlarge = %s' % portrait_large)
+        if portrait_small:
+            body.append('\t\t\t\tsmall = "%s"' % portrait_small)
+        body.append('\t\t\t}')
+        body.append('\t\t}')
+    body.append('\t\t%s = {' % ctype)
+    for k in ("skill", "attack_skill", "defense_skill", "planning_skill",
+              "logistics_skill"):
+        body.append('\t\t\t%s = %d' % (k, sk[k]))
+    body.append('\t\t}')
+    body.append('\t}')
+    block = "\n".join(body) + "\n"
+
+    if os.path.exists(p):
+        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    else:
+        raw = "characters = {\n}\n"
+    text = _strip_keep_len(raw)
+    cm = re.search(r'(?m)^[ \t]*characters[ \t]*=\s*\{', text)
+    if cm:
+        cb = text.find("{", cm.end() - 1)
+        ce = brace_match(text, cb)
+        if ce > cb:
+            pos = ce
+            while pos > 0 and raw[pos - 1] in " \t":
+                pos -= 1
+            if pos > 0 and raw[pos - 1] == "}":
+                pos -= 1
+            ls = raw.rfind("\n", 0, pos) + 1
+            new_text = raw[:ls] + block + raw[ls:]
+        else:
+            new_text = raw.rstrip() + "\n" + block
+    else:
+        new_text = raw.rstrip() + "\ncharacters = {\n" + block + "}\n"
+
+    if os.path.exists(p):
+        snapshot(p)
+    io.open(p, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "已新建人物「%s」（%s，%s）" % (name, cid, ctype)}
 
 
 def character_set(root, cid, fields):
@@ -14479,6 +14698,11 @@ class Handler(SimpleHTTPRequestHandler):
                                     body.get("city_radius", 4)))
         elif self.path == "/api/decisions":
             self._send(decisions_payload(body.get("root") or None))
+        elif self.path == "/api/decision_add":
+            self._send(decision_add(body.get("root") or None, body.get("id"),
+                                    body.get("category"), body.get("icon"),
+                                    body.get("cost", 50), body.get("fire_only_once", True),
+                                    body.get("effect"), body.get("category_new")))
         elif self.path == "/api/decision_set":
             self._send(decision_set(body.get("root") or None, body.get("id"),
                                     body.get("fields") or {}))
@@ -14486,6 +14710,14 @@ class Handler(SimpleHTTPRequestHandler):
             self._send(decision_delete(body.get("root") or None, body.get("id")))
         elif self.path == "/api/characters":
             self._send(characters_payload(body.get("root") or None))
+        elif self.path == "/api/character_add":
+            self._send(character_add(body.get("root") or None, body.get("id"),
+                                     body.get("name"), body.get("type"),
+                                     body.get("skill", 3), body.get("attack", 3),
+                                     body.get("defense", 3), body.get("planning", 3),
+                                     body.get("logistics", 3),
+                                     body.get("portrait_large"),
+                                     body.get("portrait_small")))
         elif self.path == "/api/character_set":
             self._send(character_set(body.get("root") or None, body.get("id"),
                                      body.get("fields") or {}))

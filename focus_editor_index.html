@@ -1619,6 +1619,21 @@
               <input id="chLog" placeholder="后勤" style="height:22px;width:42px">
               <button class="btn" id="chSave">保存</button>
             </div>
+            <div class="mp-k" style="margin-top:8px">新建人物</div>
+            <div class="mp-acts">
+              <input id="chNewId" placeholder="id（英文）" style="height:22px;flex:1;min-width:0">
+              <input id="chNewName" placeholder="名字" style="height:22px;flex:1;min-width:0">
+            </div>
+            <div class="mp-acts" style="margin-top:3px">
+              <select id="chNewType" style="height:22px;width:110px;font-size:11px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px">
+                <option value="corps_commander">corps_commander</option>
+                <option value="field_marshal">field_marshal</option>
+                <option value="country_leader">country_leader</option>
+                <option value="operative">operative</option>
+              </select>
+              <input id="chNewSkill" value="3" style="height:22px;width:36px" title="技能">
+              <button class="btn" id="chAddBtn">新建</button>
+            </div>
             <div class="mp-sep"></div>
           </div>
           <div id="decPanel">
@@ -1635,6 +1650,19 @@
               <input id="decDays" placeholder="days_remove" style="height:22px;width:74px">
               <input id="decPrio" placeholder="priority" style="height:22px;width:58px">
               <button class="btn" id="decSave">保存</button>
+            </div>
+            <div class="mp-k" style="margin-top:8px">新建决议</div>
+            <div class="mp-acts">
+              <input id="decNewId" placeholder="决议 id" style="height:22px;flex:1;min-width:0">
+              <input id="decNewCat" placeholder="类别 id" style="height:22px;flex:1;min-width:0">
+            </div>
+            <div class="mp-acts" style="margin-top:3px">
+              <input id="decNewIcon" value="GFX_decision_generic" style="height:22px;flex:1;min-width:0" title="图标">
+              <input id="decNewCost" value="50" style="height:22px;width:42px" title="cost">
+              <button class="btn" id="decAddBtn">新建</button>
+            </div>
+            <div class="mp-acts" style="margin-top:3px">
+              <input id="decNewEff" value="add_political_power = 50" style="height:22px;flex:1;min-width:0" title="完成效果脚本">
             </div>
             <div class="mp-sep"></div>
           </div>
@@ -10455,6 +10483,69 @@ function makePannable(svg, body){
   }
   if(document.readyState !== 'loading') setTimeout(build, 400);
   else document.addEventListener('DOMContentLoaded', function(){ setTimeout(build, 400); });
+})();
+
+// v1.23.8 人物与决议新建
+(function(){
+  function msgOf(id){
+    return function(t, bad){
+      const el = document.getElementById(id);
+      if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+    };
+  }
+
+  async function addChar(){
+    const msg = msgOf('chMsg');
+    const id = ((document.getElementById('chNewId')||{}).value || '').trim();
+    const name = ((document.getElementById('chNewName')||{}).value || '').trim();
+    const type = (document.getElementById('chNewType')||{}).value || 'corps_commander';
+    const skill = Number((document.getElementById('chNewSkill')||{}).value || 3);
+    if(!id){ msg('填 id', true); return; }
+    if(!name){ msg('填名字', true); return; }
+    msg('新建中…');
+    const r = await (await fetch('/api/character_add', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id: id, name: name, type: type, skill: skill,
+                            attack: skill, defense: skill, planning: skill,
+                            logistics: skill})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){
+      status(r.msg);
+      const load = document.getElementById('chLoad');
+      if(load) load.click();
+    }
+  }
+
+  async function addDec(){
+    const msg = msgOf('decMsg');
+    const id = ((document.getElementById('decNewId')||{}).value || '').trim();
+    const cat = ((document.getElementById('decNewCat')||{}).value || '').trim();
+    const icon = ((document.getElementById('decNewIcon')||{}).value || 'GFX_decision_generic').trim();
+    const cost = Number((document.getElementById('decNewCost')||{}).value || 50);
+    const eff = ((document.getElementById('decNewEff')||{}).value || 'add_political_power = 50').trim();
+    if(!id){ msg('填决议 id', true); return; }
+    if(!cat){ msg('填类别 id', true); return; }
+    msg('新建中…');
+    const r = await (await fetch('/api/decision_add', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id: id, category: cat, icon: icon, cost: cost,
+                            effect: eff})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){
+      status(r.msg);
+      const load = document.getElementById('decLoad');
+      if(load) load.click();
+    }
+  }
+
+  function bind(){
+    [['chAddBtn', addChar], ['decAddBtn', addDec]].forEach(function(p){
+      const el = document.getElementById(p[0]);
+      if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
+    });
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
 })();
 
 /* ---------- v0.82 选择与拖拽防护 ---------- */
