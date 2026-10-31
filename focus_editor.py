@@ -5280,6 +5280,111 @@ def _diag_division_template_missing(root):
     return out
 
 
+_CWT_RULES = [None]
+
+
+def _cwt_rules():
+    """惰性加载 .cwt 规则（来自 cwtools/cwtools-hoi4-config，MIT）。"""
+    if _CWT_RULES[0] is not None:
+        return _CWT_RULES[0]
+    rules = {}
+    try:
+        import importlib.util as _ilu
+        # PyInstaller 打包后资源在 sys._MEIPASS 下，源码运行时在脚本目录
+        here = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
+        p = os.path.join(here, "qa", "cwt", "parse.py")
+        if os.path.isfile(p):
+            spec = _ilu.spec_from_file_location("_cwt_parse", p)
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            rules = mod.load_rules()
+    except Exception:
+        rules = {}
+    _CWT_RULES[0] = rules
+    return rules
+
+
+def _diag_schema_unknown_field(root):
+    """检查文件里的字段名在 HOI4 的 schema 里存不存在。
+
+    规则来自 CWTools 的 HOI4 配置（MIT）。拼错字段名游戏不报错，那一段静默失效——
+    比如把 division_template 写成 division_templet，部队模板就引用不到。
+    """
+    out = []
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return out
+    rules = _cwt_rules()
+    if not rules:
+        return out
+
+    def scan(rel, block_name, schema_name):
+        """只查 `<block_name> = { ... }` 这一层的字段。
+
+        不查块名本身、不查动态 id（人物 id、装备名那些都是内容不是字段）。
+        """
+        allowed = rules.get(schema_name)
+        if not allowed:
+            return
+        p = os.path.join(top, rel.replace("/", os.sep))
+        if not os.path.isfile(p):
+            return
+        try:
+            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+        except Exception:
+            return
+        depth = 0
+        inside = False
+        base_depth = 0        # 进入目标块时的深度，子级字段就查这一层
+        for i2, ln in enumerate(lines, 1):
+            st = ln.strip()
+            opens = ln.count("{")
+            closes = ln.count("}")
+            if not st or st.startswith("#"):
+                depth += opens - closes
+                continue
+            if not inside:
+                m = re.match(r'^' + re.escape(block_name) + r'\s*=\s*\{\s*$', st)
+                depth += opens - closes
+                if m:
+                    inside = True
+                    base_depth = depth
+                continue
+            # 在目标块里，只看直接子级（深度等于进入时的深度）
+            if depth == base_depth:
+                m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*[=<>]', st)
+                if m:
+                    f = m.group(1)
+                    if f not in allowed:
+                        out.append(_finding(
+                            "schema.unknown_field", "warning",
+                            "%s 第 %d 行的字段 %s 不在 %s 的规则定义里"
+                            % (os.path.basename(rel), i2, f, schema_name),
+                            rel, i2, st,
+                            "对照原版同类文件确认字段名"))
+            depth += opens - closes
+            if depth < base_depth:
+                inside = False
+                depth = max(depth, 0)
+
+    # history/units：units 里的 division
+    ud = os.path.join(top, "history", "units")
+    if os.path.isdir(ud):
+        for fn in sorted(os.listdir(ud)):
+            if fn.endswith(".txt"):
+                scan("history/units/" + fn, "division", "oob")
+    # common/bookmarks：bookmark 块
+    scan("common/bookmarks/zz_editor_bookmarks.txt", "bookmark", "bookmark")
+
+    return out
+
+
+
 def diagnose(root=None):
     """扫描当前 mod，返回结构化诊断列表。"""
     root = _map_pick(root) if root else (ROOTS[-1] if ROOTS else None)
@@ -5289,7 +5394,8 @@ def diagnose(root=None):
     for fn in (_diag_oob_not_referenced, _diag_gfx_missing,
                _diag_recruit_last_line, _diag_decision_category,
                _diag_character_unrecruited, _diag_localisation_missing,
-               _diag_tag_def_missing, _diag_division_template_missing):
+               _diag_tag_def_missing, _diag_division_template_missing,
+               _diag_schema_unknown_field):
         try:
             findings.extend(fn(root))
         except Exception:
