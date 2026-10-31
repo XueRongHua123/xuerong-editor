@@ -26,7 +26,7 @@ def generate(source="procedural", out_dir=None, width=1200, height=440,
              n_provinces=180, min_size=300, seed=11, src_path=None,
              sea_level=0.42, template_map=HOI4_MAP, log=None,
              balance=True, min_province_px=800,
-             n_regions=None, n_supply=None, bbox=None):
+             n_regions=None, n_supply=None, bbox=None, rivers_path=None):
     """生成完整 map/ 目录。
 
     source:
@@ -72,12 +72,23 @@ def generate(source="procedural", out_dir=None, width=1200, height=440,
         bb = None
         if bbox and len(bbox) == 4:
             bb = tuple(float(x) for x in bbox)
+        if not bb:
+            # 先算行政区划的 bbox，后面河流要用同一个，否则河道和陆地对不上
+            bb = mgs.geojson_bbox(src_path)
         labels, land, gnames = mgs.from_geojson(
             src_path, max(200, int(width)), max(100, int(height)),
             bb, min_size, seed=seed)
         if labels is None:
             return {"ok": False, "msg": "GeoJSON 解析失败或为空", "log": out}
         say("  得到 %d 个省（真实行政区划）" % int(labels.max()))
+        if rivers_path and os.path.isfile(rivers_path):
+            say("读河流线 %s…" % os.path.basename(rivers_path))
+            hh, ww = labels.shape
+            rmask = mgs.rivers_from_geojson(rivers_path, ww, hh, bb)
+            if rmask is not None:
+                say("  河道 %d 像素" % int(rmask.sum()))
+            else:
+                say("  河流文件没解析出线段，跳过")
     elif source == "terrain_map":
         if not src_path or not os.path.isfile(src_path):
             return {"ok": False, "msg": "地图图片不存在", "log": out}
@@ -125,6 +136,8 @@ def generate(source="procedural", out_dir=None, width=1200, height=440,
     size = _detect_size(labels)
     _pal = os.path.join(template_map, "terrain.bmp") if template_map else None
     mgw.write_terrain(labels, thint, os.path.join(map_dir, "terrain.bmp"), _pal)
+    if rmask is not None:
+        rmask = rmask & (labels > 0)   # 河道不落在海里
     mgw.write_rivers(labels, rmask, os.path.join(map_dir, "rivers.bmp"),
                      os.path.join(template_map, "rivers.bmp") if template_map else None)
     _tarr = None

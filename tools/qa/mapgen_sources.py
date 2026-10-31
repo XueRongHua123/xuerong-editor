@@ -30,6 +30,27 @@ def _iter_rings(geom):
     return out
 
 
+def _iter_lines(geom):
+    """把 LineString / MultiLineString 统一成 [[(lon,lat),…], …]。"""
+    t = (geom or {}).get("type")
+    coords = (geom or {}).get("coordinates")
+    out = []
+    if t == "LineString":
+        out.append(coords or [])
+    elif t == "MultiLineString":
+        for ln in (coords or []):
+            out.append(ln or [])
+    elif t == "Polygon":
+        # 有人用细长多边形画河，也认
+        for ring in (coords or []):
+            out.append(ring or [])
+    elif t == "MultiPolygon":
+        for poly in (coords or []):
+            for ring in (poly or []):
+                out.append(ring or [])
+    return out
+
+
 def geojson_bbox(path):
     """扫一遍拿整体 bbox，返回 (minlon, minlat, maxlon, maxlat)。"""
     data = json.load(io.open(path, encoding="utf-8"))
@@ -37,14 +58,21 @@ def geojson_bbox(path):
     hi1 = hi2 = -1e9
     n = 0
     for f in (data.get("features") or []):
-        for ring, _outer in _iter_rings(f.get("geometry")):
-            for pt in ring:
-                if len(pt) < 2:
-                    continue
-                x, y = float(pt[0]), float(pt[1])
-                lo1 = min(lo1, x); hi1 = max(hi1, x)
-                lo2 = min(lo2, y); hi2 = max(hi2, y)
-                n += 1
+        geom = f.get("geometry") or {}
+        pts = []
+        # 多边形：环
+        for ring, _outer in _iter_rings(geom):
+            pts.extend(ring)
+        # 线：线段（河流文件只被 _iter_rings 认不出来）
+        for line in _iter_lines(geom):
+            pts.extend(line)
+        for pt in pts:
+            if len(pt) < 2:
+                continue
+            x, y = float(pt[0]), float(pt[1])
+            lo1 = min(lo1, x); hi1 = max(hi1, x)
+            lo2 = min(lo2, y); hi2 = max(hi2, y)
+            n += 1
     if n == 0:
         return None
     return (lo1, lo2, hi1, hi2)
@@ -141,6 +169,42 @@ def water_thickness(water, cap=24):
             break
         dist = new
     return dist
+
+
+def rivers_from_geojson(path, width, height, bbox=None, thickness=1):
+    """把 GeoJSON 的河流线光栅化成 bool 掩码。
+
+    bbox 必须和行政区划用同一套，否则河道和陆地对不上。
+    """
+    data = json.load(io.open(path, encoding="utf-8"))
+    feats = [f for f in (data.get("features") or []) if f.get("geometry")]
+    if not feats:
+        return None
+    bb = bbox or geojson_bbox(path)
+    if not bb:
+        return None
+    lon1, lat1, lon2, lat2 = bb
+    if lon2 <= lon1 or lat2 <= lat1:
+        return None
+
+    def to_xy(lon, lat):
+        x = (float(lon) - lon1) / (lon2 - lon1) * (width - 1)
+        y = (lat2 - float(lat)) / (lat2 - lat1) * (height - 1)
+        return (x, y)
+
+    img = Image.new("L", (width, height), 0)
+    dr = ImageDraw.Draw(img)
+    n_lines = 0
+    for f in feats:
+        for line in _iter_lines(f.get("geometry")):
+            pts = [to_xy(p[0], p[1]) for p in line if len(p) >= 2]
+            if len(pts) < 2:
+                continue
+            dr.line(pts, fill=255, width=max(1, int(thickness)))
+            n_lines += 1
+    if n_lines == 0:
+        return None
+    return np.array(img) > 127
 
 
 def thin_water(water, max_width=2):

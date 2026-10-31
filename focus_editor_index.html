@@ -1651,6 +1651,7 @@
               </select>
             </div>
             <input id="mgSrc" placeholder="源文件路径（程序化可空）" style="width:100%;box-sizing:border-box;height:22px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:0 6px;margin-top:4px">
+            <input id="mgRiv" placeholder="河流 geojson（可选）" style="width:100%;box-sizing:border-box;height:22px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:0 6px;margin-top:4px">
             <div class="mp-acts" style="margin-top:4px">
               <input id="mgW" value="600" style="height:22px;width:52px" title="宽">
               <input id="mgH" value="240" style="height:22px;width:52px" title="高">
@@ -10376,6 +10377,7 @@ function makePannable(svg, body){
     const minPx = Number((document.getElementById('mgMinPx')||{}).value || 800);
     const nr = (document.getElementById('mgRegions')||{}).value;
     const ns = (document.getElementById('mgSupply')||{}).value;
+    const rivPath = ((document.getElementById('mgRiv')||{}).value || '').trim();
     if(src !== 'procedural' && !srcPath){ msg('这个来源要填文件路径', true); return; }
     msg('生成中…（大尺寸可能要几十秒）');
     log([]);
@@ -10386,7 +10388,8 @@ function makePannable(svg, body){
                               n_provinces: n, seed: seed,
                               src_path: srcPath || null,
                               balance: bal, min_province_px: minPx,
-                              n_regions: nr || null, n_supply: ns || null})})).json();
+                              n_regions: nr || null, n_supply: ns || null,
+                              rivers_path: rivPath || null})})).json();
       msg(r.msg || '', !r.ok);
       log(r.log || []);
       if(r.ok) status(r.msg);
