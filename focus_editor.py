@@ -5385,6 +5385,77 @@ def _diag_schema_unknown_field(root):
 
 
 
+def _diag_schema_character(root):
+    """common/characters 里人物的字段名检查。
+
+    结构很干净：`characters = {` 下一层（depth 1）是人物 id，再下一层（depth 2）
+    才是字段。所以不用猜哪些标识符是 id，靠层级就能分开。
+    """
+    out = []
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return out
+    rules = _cwt_rules()
+    allowed = rules.get("character")
+    if not allowed:
+        return out
+
+    cd = os.path.join(top, "common", "characters")
+    if not os.path.isdir(cd):
+        return out
+
+    # 这些块名是人物体内的类型块，不是字段
+    TYPE_BLOCKS = {"corps_commander", "field_marshal", "navy_leader",
+                   "country_leader", "advisor", "scientist", "operative",
+                   "instance", "portraits"}
+
+    for fn in sorted(os.listdir(cd)):
+        if not fn.endswith(".txt"):
+            continue
+        rel = "common/characters/" + fn
+        p = os.path.join(cd, fn)
+        try:
+            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+        except Exception:
+            continue
+        in_chars = False
+        depth = 0
+        for i, ln in enumerate(lines, 1):
+            st = ln.strip()
+            if not st or st.startswith("#"):
+                depth += ln.count("{") - ln.count("}")
+                continue
+            if not in_chars:
+                if re.match(r'^characters\s*=\s*\{\s*$', st):
+                    in_chars = True
+                    depth = 1
+                    continue
+                depth += ln.count("{") - ln.count("}")
+                continue
+            # depth 1 = 人物 id，depth 2 = 字段
+            if depth == 2:
+                m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*[=<>]', st)
+                if m:
+                    f = m.group(1)
+                    if f not in allowed and f not in TYPE_BLOCKS:
+                        out.append(_finding(
+                            "schema.unknown_field", "warning",
+                            "%s 第 %d 行的字段 %s 不在 character 的规则定义里"
+                            % (fn, i, f),
+                            rel, i, st,
+                            "对照原版同类人物确认字段名"))
+            depth += ln.count("{") - ln.count("}")
+            if depth <= 0:
+                in_chars = False
+                depth = 0
+    return out
+
+
 def diagnose(root=None):
     """扫描当前 mod，返回结构化诊断列表。"""
     root = _map_pick(root) if root else (ROOTS[-1] if ROOTS else None)
@@ -5395,7 +5466,7 @@ def diagnose(root=None):
                _diag_recruit_last_line, _diag_decision_category,
                _diag_character_unrecruited, _diag_localisation_missing,
                _diag_tag_def_missing, _diag_division_template_missing,
-               _diag_schema_unknown_field):
+               _diag_schema_unknown_field, _diag_schema_character):
         try:
             findings.extend(fn(root))
         except Exception:
