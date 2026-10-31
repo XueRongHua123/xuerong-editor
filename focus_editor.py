@@ -6026,7 +6026,47 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
     if os.path.exists(p):
         snapshot(p)
     io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
-    return {"ok": True, "msg": "已新建人物「%s」（%s，%s）" % (name, cid, ctype)}
+
+    # 光在 common/characters 里定义还不够，HOI4 还要求国家历史里写一条
+    # recruit_character = <id>，否则人物不会出现在将领列表里。
+    rec_note = ""
+    if country:
+        try:
+            hist = None
+            for b in reversed(mod_layers(tgt) or []):
+                if not b:
+                    continue
+                hd = os.path.join(b, "history", "countries")
+                if not os.path.isdir(hd):
+                    continue
+                for fn in os.listdir(hd):
+                    if fn.upper().startswith(country + " ") and fn.endswith(".txt"):
+                        hist = os.path.join(hd, fn)
+                        break
+                if hist:
+                    break
+            if hist:
+                _hp, _hwhy = ensure_file_writable(tgt, "history/countries",
+                                                  os.path.basename(hist))
+                hp = _hp or hist
+                if hp and not is_under_game(hp):
+                    hraw = io.open(hp, encoding="utf-8-sig", errors="replace").read()
+                    if not re.search(r'(?m)^\s*recruit_character\s*=\s*' + re.escape(cid) + r'\b', hraw):
+                        htext = _strip_keep_len(hraw)
+                        # 优先接在已有 recruit_character 后面，没有就接在末尾
+                        mrec = list(re.finditer(r'(?m)^[ \t]*recruit_character[ \t]*=[ \t]*[A-Za-z0-9_]+[ \t]*\r?\n', htext))
+                        if mrec:
+                            pos = mrec[-1].end()
+                            new_h = hraw[:pos] + "recruit_character = %s\n" % cid + hraw[pos:]
+                        else:
+                            new_h = hraw.rstrip() + "\n\nrecruit_character = %s\n" % cid
+                        snapshot(hp)
+                        io.open(hp, "wb").write(_bom_for(hp) + new_h.encode("utf-8"))
+                        rec_note = "，并在 %s 里加了 recruit_character" % os.path.basename(hp)
+        except Exception as e:
+            rec_note = "（招募写入失败：%s）" % str(e)[:40]
+
+    return {"ok": True, "msg": "已新建人物「%s」（%s，%s）%s" % (name, cid, ctype, rec_note)}
 
 
 def character_set(root, cid, fields):
@@ -6185,8 +6225,42 @@ def character_delete(root, cid):
     while en < len(raw) and raw[en] in "\r\n":
         en += 1
     snapshot(p)
-    io.open(p, "wb").write(b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
-    return {"ok": True, "msg": "已删除人物「%s」" % it["name"]}
+    io.open(p, "wb").write(_bom_for(p) + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
+
+    # 同步清掉国家历史里的 recruit_character，否则游戏会引用一个不存在的人物
+    rec_note = ""
+    try:
+        for b in reversed(mod_layers(tgt) or []):
+            if not b:
+                continue
+            hd = os.path.join(b, "history", "countries")
+            if not os.path.isdir(hd):
+                continue
+            for fn in sorted(os.listdir(hd)):
+                if not fn.endswith(".txt"):
+                    continue
+                hp = os.path.join(hd, fn)
+                try:
+                    ht = io.open(hp, encoding="utf-8-sig", errors="replace").read()
+                except Exception:
+                    continue
+                if not re.search(r'(?m)^\s*recruit_character\s*=\s*' + re.escape(cid) + r'\b', ht):
+                    continue
+                _hp2, _ = ensure_file_writable(tgt, "history/countries", fn)
+                target = _hp2 or hp
+                if is_under_game(target):
+                    continue
+                ht2 = io.open(target, encoding="utf-8-sig", errors="replace").read()
+                pat = re.compile(r'(?m)^[ \t]*recruit_character[ \t]*=[ \t]*' + re.escape(cid) + r'[ \t]*\r?\n')
+                nh = pat.sub("", ht2)
+                if nh != ht2:
+                    snapshot(target)
+                    io.open(target, "wb").write(_bom_for(target) + nh.encode("utf-8"))
+                    rec_note = "，并清掉了 %s 里的 recruit_character" % fn
+    except Exception:
+        pass
+
+    return {"ok": True, "msg": "已删除人物「%s」%s" % (it["name"], rec_note)}
 
 
 def characters_payload(root=None):
