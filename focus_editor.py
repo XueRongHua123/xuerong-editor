@@ -3891,7 +3891,7 @@ def write_note(mod_root, sub):
 def map_generate(source="procedural", out_dir=None, width=1200, height=440,
                  n_provinces=180, min_size=300, seed=11, src_path=None,
                  sea_level=0.42, balance=True, min_province_px=800,
-                 n_regions=None, n_supply=None):
+                 n_regions=None, n_supply=None, bbox=None):
     """调用 qa/mapgen.py 生成完整 map/ 目录。"""
     try:
         import sys as _sys
@@ -3911,7 +3911,8 @@ def map_generate(source="procedural", out_dir=None, width=1200, height=440,
                             template_map=os.path.join(GAME, "map") if GAME else None,
                             balance=bool(balance),
                             min_province_px=int(min_province_px),
-                            n_regions=n_regions, n_supply=n_supply)
+                            n_regions=n_regions, n_supply=n_supply,
+                            bbox=bbox)
         return r
     except Exception as e:
         import traceback
@@ -14469,7 +14470,8 @@ class Handler(SimpleHTTPRequestHandler):
                                     body.get("balance", True),
                                     body.get("min_province_px", 800),
                                     body.get("n_regions"),
-                                    body.get("n_supply")))
+                                    body.get("n_supply"),
+                                    body.get("bbox")))
         elif self.path == "/api/decisions":
             self._send(decisions_payload(body.get("root") or None))
         elif self.path == "/api/decision_set":
