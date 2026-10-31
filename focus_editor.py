@@ -6145,8 +6145,64 @@ def _bookmark_write_base(root):
     return tgt, ""
 
 
-def bookmark_add(root, name, date, desc=None, picture=None, default_country=None):
-    """新建一个剧本。"""
+def _bookmark_date(date):
+    """把 1936.1.1 补成 1936.1.1.12。
+
+    HOI4 的剧本日期是「年.月.日.小时」，只写三段时游戏会把日当小时解析，
+    显示成「14月,1939」这种鬼东西。
+    """
+    parts = [p for p in (date or "").split(".") if p != ""]
+    if len(parts) == 3:
+        parts.append("12")
+    return ".".join(parts)
+
+
+def _bookmark_country_block(tag, ideology="neutrality"):
+    return ('\t\t"%s" = {\n'
+            '\t\t\thistory = "%s_DESC"\n'
+            '\t\t\tideology = %s\n'
+            '\t\t\tideas = {\n'
+            '\t\t\t}\n'
+            '\t\t\tfocuses = {\n'
+            '\t\t\t}\n'
+            '\t\t}\n') % (tag.upper(), tag.upper(), ideology)
+
+
+def _bookmark_loc(root, name, desc, countries):
+    """给剧本写本地化，否则界面上显示的是 NAME/DESC 这种 key。"""
+    tgt, err = _bookmark_write_base(root)
+    if not tgt:
+        return False
+    d = os.path.join(tgt, "localisation")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "zz_editor_bookmarks_l_english.yml")
+    lines = []
+    if not os.path.exists(p):
+        lines.append("l_english:")
+    else:
+        try:
+            old = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            if old.strip():
+                lines = [old.rstrip("\n")]
+        except Exception:
+            lines = ["l_english:"]
+    body = []
+    body.append(' %s:0 "%s"' % (name, name))
+    body.append(' %s:0 "%s"' % (desc, desc))
+    for c in countries:
+        body.append(' %s_DESC:0 "%s"' % (c.upper(), c.upper()))
+    txt = "\n".join(lines + body) + "\n"
+    io.open(p, "w", encoding="utf-8-sig", newline="").write(txt)
+    return True
+
+
+def bookmark_add(root, name, date, desc=None, picture=None, default_country=None,
+                 countries=None):
+    """新建一个剧本。
+
+    countries: 这个剧本里可选的国家列表，默认只放 default_country。
+    HOI4 的选国家界面只列剧本里写了 "TAG" = {} 的那些国家，不写就是空的。
+    """
     root = _map_pick(root)
     name = (name or "").strip()
     date = (date or "").strip()
@@ -6154,24 +6210,36 @@ def bookmark_add(root, name, date, desc=None, picture=None, default_country=None
         return {"ok": False, "msg": "name 不能为空"}
     if not re.match(r'^\d{4}\.\d{1,2}\.\d{1,2}(\.\d+)?$', date):
         return {"ok": False, "msg": "date 格式要像 1936.1.1 或 1936.1.1.12"}
+    date = _bookmark_date(date)
+    tag = (default_country or "GER").upper().strip()
+    clist = []
+    for c in (countries or [tag]):
+        c = (c or "").upper().strip()
+        if c and c not in clist:
+            clist.append(c)
+    if tag not in clist:
+        clist.insert(0, tag)
+
     tgt, err = _bookmark_write_base(root)
     if not tgt:
         return {"ok": False, "msg": err}
     d = os.path.join(tgt, "common", "bookmarks")
     os.makedirs(d, exist_ok=True)
     p = os.path.join(d, "zz_editor_bookmarks.txt")
-    block = ('\tbookmark = {\n'
-             '\t\tname = "%s"\n'
-             '\t\tdesc = "%s"\n'
-             '\t\tdate = %s\n'
-             '\t\tpicture = "%s"\n'
-             '\t\tdefault_country = "%s"\n'
-             '\t}\n') % (
-        name.replace('"', ""),
-        (desc or name).replace('"', ""),
-        date,
-        (picture or "GFX_select_date_1936"),
-        (default_country or "GER").upper())
+
+    block = ['\tbookmark = {',
+             '\t\tname = "%s"' % name.replace('"', ""),
+             '\t\tdesc = "%s"' % (desc or name).replace('"', ""),
+             '\t\tdate = %s' % date,
+             '\t\tpicture = "%s"' % (picture or "GFX_select_date_1936"),
+             '\t\tdefault_country = "%s"' % tag,
+             '\t\tdefault = yes',
+             '']
+    for c in clist:
+        block.append(_bookmark_country_block(c).rstrip("\n"))
+    block.append('\t}')
+    block_txt = "\n".join(block) + "\n"
+
     if os.path.exists(p):
         raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
     else:
@@ -6188,15 +6256,20 @@ def bookmark_add(root, name, date, desc=None, picture=None, default_country=None
             if pos > 0 and raw[pos - 1] == "}":
                 pos -= 1
             ls = raw.rfind("\n", 0, pos) + 1
-            new_text = raw[:ls] + block + raw[ls:]
+            new_text = raw[:ls] + block_txt + raw[ls:]
         else:
-            new_text = raw.rstrip() + "\n" + block
+            new_text = raw.rstrip() + "\n" + block_txt
     else:
-        new_text = raw.rstrip() + "\nbookmarks = {\n" + block + "}\n"
+        new_text = raw.rstrip() + "\nbookmarks = {\n" + block_txt + "}\n"
     if os.path.exists(p):
         snapshot(p)
     io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
-    return {"ok": True, "msg": "已新建剧本 %s（%s）" % (name, date)}
+    try:
+        _bookmark_loc(root, name, desc or name, clist)
+    except Exception:
+        pass
+    return {"ok": True,
+            "msg": "已新建剧本 %s（%s，%d 个国家可选）" % (name, date, len(clist))}
 
 
 def bookmark_set(root, index, fields):
