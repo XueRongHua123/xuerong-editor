@@ -4380,6 +4380,164 @@ def country_tech_toggle(root, tag, tech, on=True):
     return {"ok": True, "msg": "%s %s" % ("已加" if on else "已删", tech)}
 
 
+GFX_KINDS = {
+    "goal":  {"dir": "gfx/interface/goals",   "prefix": "GFX_goal_",   "label": "国策"},
+    "idea":  {"dir": "gfx/interface/ideas",   "prefix": "GFX_idea_",   "label": "想法"},
+    "tech":  {"dir": "gfx/interface/technologies", "prefix": "GFX_",    "label": "科技"},
+    "generic": {"dir": "gfx/interface",       "prefix": "GFX_",         "label": "通用"},
+}
+
+
+def gfx_list(root=None, kind="goal"):
+    """列出某类图标目录下已有的图片文件。"""
+    root = _map_pick(root)
+    k = GFX_KINDS.get(kind) or GFX_KINDS["goal"]
+    d = os.path.join(root, k["dir"].replace("/", os.sep)) if root else ""
+    items = []
+    if d and os.path.isdir(d):
+        for fn in sorted(os.listdir(d)):
+            low = fn.lower()
+            if low.endswith((".dds", ".tga", ".png", ".jpg", ".jpeg")):
+                p = os.path.join(d, fn)
+                items.append({"file": fn, "size": os.path.getsize(p),
+                              "sprite": k["prefix"] + os.path.splitext(fn)[0]})
+    return {"ok": True, "kind": kind, "dir": k["dir"], "items": items,
+            "count": len(items), "prefix": k["prefix"],
+            "msg": "%s：%d 张图（前缀 %s）" % (k["label"], len(items), k["prefix"])}
+
+
+def gfx_sprite_new(root, name, texturefile):
+    """往 interface 里写一条 spriteType 注册。"""
+    root = _map_pick(root)
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return {"ok": False, "msg": "找不到可写的 mod 目录"}
+    if not name or not texturefile:
+        return {"ok": False, "msg": "name 和 texturefile 都要给"}
+    d = os.path.join(top, "interface")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "zz_editor_icons.gfx")
+    block = ('\nspriteTypes = {\n'
+             '\tspriteType = {\n'
+             '\t\tname = "%s"\n'
+             '\t\ttexturefile = "%s"\n'
+             '\t}\n'
+             '}\n') % (name, texturefile.replace("\\", "/"))
+    if os.path.exists(p):
+        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        if ('"%s"' % name) in raw:
+            return {"ok": True, "msg": "%s 已经注册过了" % name}
+        new_text = raw.rstrip() + "\n" + block
+    else:
+        new_text = block.lstrip("\n")
+    if os.path.exists(p):
+        snapshot(p)
+    io.open(p, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "已注册 sprite %s → %s" % (name, texturefile),
+            "file": "interface/zz_editor_icons.gfx"}
+
+
+def gfx_import(root, src_path, kind="goal", name=None, sprite_name=None,
+               size=None, overwrite=False):
+    """把一张图导入成 HOI4 图标：转 DDS + 放到对应目录 + 注册 sprite。
+
+    src_path  可以是 png / jpg / dds / tga，统一转成 DDS 存进去
+    size      目标边长（正方形），不给就按 HOI4 惯例：goal 64、idea 64、tech 64
+    """
+    root = _map_pick(root)
+    k = GFX_KINDS.get(kind) or GFX_KINDS["goal"]
+    if not src_path or not os.path.isfile(src_path):
+        return {"ok": False, "msg": "源文件不存在：%s" % src_path}
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return {"ok": False, "msg": "找不到可写的 mod 目录"}
+
+    base = name or os.path.splitext(os.path.basename(src_path))[0]
+    base = re.sub(r'[^A-Za-z0-9_\-]', '_', base)
+    if not base:
+        return {"ok": False, "msg": "文件名里没有可用的字符"}
+
+    side = int(size) if size else 64
+    side = max(16, min(512, side))
+
+    try:
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None
+        im = Image.open(src_path).convert("RGBA")
+        # 保持比例缩放到正方形画布
+        im.thumbnail((side, side), Image.LANCZOS)
+        canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+        canvas.paste(im, ((side - im.width) // 2, (side - im.height) // 2), im)
+    except Exception as e:
+        return {"ok": False, "msg": "读图失败：%s" % e}
+
+    d = os.path.join(top, k["dir"].replace("/", os.sep))
+    os.makedirs(d, exist_ok=True)
+    dst = os.path.join(d, base + ".dds")
+    if os.path.exists(dst) and not overwrite:
+        return {"ok": False, "need_confirm": True,
+                "msg": "目标已存在：%s，要覆盖吗？" % os.path.join(k["dir"], base + ".dds")}
+    try:
+        if os.path.exists(dst):
+            snapshot(dst)
+        canvas.save(dst, format="DDS")
+    except Exception as e:
+        return {"ok": False, "msg": "写 DDS 失败：%s" % e}
+
+    texture = "%s/%s.dds" % (k["dir"], base)
+    sprite = sprite_name or (k["prefix"] + base)
+    r2 = gfx_sprite_new(top, sprite, texture)
+    if not r2.get("ok"):
+        return {"ok": False, "msg": "图已转好但注册失败：%s" % r2.get("msg")}
+
+    return {"ok": True, "sprite": sprite, "texture": texture,
+            "size": "%dx%d" % (side, side), "file": os.path.join(k["dir"], base + ".dds"),
+            "msg": "已导入 %s：%dx%d DDS + 注册 %s" % (base, side, side, sprite)}
+
+
+def gfx_registered(root=None, pattern=""):
+    """列出 interface 里已注册的 spriteType（可选按名字过滤）。"""
+    root = _map_pick(root)
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    files, _r = _layer_files("interface", mod_layers(root))
+    out, seen = [], set()
+    pat = (pattern or "").lower()
+    for p in (files or []):
+        if not p.lower().endswith(".gfx"):
+            continue
+        try:
+            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        except Exception:
+            continue
+        text = _strip_keep_len(raw)
+        for a, b, body in find_blocks(text, "spriteType"):
+            nm = _first(body, r'(?m)^\s*name\s*=\s*"([^"]*)"')
+            tf = _first(body, r'(?m)^\s*texturefile\s*=\s*"([^"]*)"')
+            if not nm or nm in seen:
+                continue
+            if pat and pat not in nm.lower() and pat not in (tf or "").lower():
+                continue
+            seen.add(nm)
+            out.append({"name": nm, "texture": tf, "file": os.path.basename(p)})
+    return {"ok": True, "items": out[:500], "count": len(out),
+            "msg": "已注册 %d 个 sprite（显示前 500）" % len(out)}
+
+
 def load_country_tags(root=None):
     """解析 common/country_tags 里的所有 tag。
 
@@ -12389,6 +12547,16 @@ class Handler(SimpleHTTPRequestHandler):
             self._send(tech_tree_graph(body.get("folder") or "",
                                        body.get("tag") or None,
                                        body.get("root") or None))
+        elif self.path == "/api/gfx_list":
+            self._send(gfx_list(body.get("root") or None, body.get("kind") or "goal"))
+        elif self.path == "/api/gfx_import":
+            self._send(gfx_import(body.get("root") or None, body.get("src"),
+                                  body.get("kind") or "goal", body.get("name"),
+                                  body.get("sprite"), body.get("size"),
+                                  bool(body.get("overwrite"))))
+        elif self.path == "/api/gfx_sprites":
+            self._send(gfx_registered(body.get("root") or None,
+                                      body.get("pattern") or ""))
         elif self.path == "/api/country_tags":
             self._send(country_tags_payload(body.get("root") or None))
         elif self.path == "/api/country_tag_add":

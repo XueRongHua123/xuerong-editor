@@ -1,45 +1,66 @@
-## 雪绒的钢铁雄心编辑器 v1.21.1
+## 雪绒的钢铁雄心编辑器 v1.21.10
 
-开局部队的**地图可视化**。
+图标导入，外加清理仓库。
 
-### 新增图层 units.png
+### 图标导入
 
-在省份图上按省画标记：
+**能做完整的转换**：PNG/JPG/DDS/TGA 读进来，缩放到指定边长（默认 64）、贴到正方形透明画布、
+存成 DDS、再自动注册 sprite。
 
-- 位置：省中心（来自 `centers.json`）
-- 半径随部队数增长：<5 / <20 / <50 / 更多
-- 颜色：红底白边，里面写部队数（100 以上显示 `99+`）
+```
+POST /api/gfx_list      {kind}                    列出某类图标目录下的图
+POST /api/gfx_import    {src, kind, name, size}   转换 + 注册
+POST /api/gfx_sprites   {pattern}                 列出已注册的 sprite
+```
 
-实测（原版 + 测试 mod 链）：**1304 个省有部队**。
+四种目标：
+
+| kind | 目录 | 前缀 |
+|---|---|---|
+| goal | `gfx/interface/goals` | `GFX_goal_` |
+| idea | `gfx/interface/ideas` | `GFX_idea_` |
+| tech | `gfx/interface/technologies` | `GFX_` |
+| generic | `gfx/interface` | `GFX_` |
+
+注册写进 `interface/zz_editor_icons.gfx`，重复注册会拒绝。
+
+**实测**：
+
+```
+源图 test_src.png 594 字节（200×200 纯色）
+导入 → 已导入 my_test_icon：64x64 DDS + 注册 GFX_goal_my_test_icon
+生成 my_test_icon.dds 16512 字节
+gfx 文件内容：
+  spriteTypes = {
+      spriteType = {
+          name = "GFX_goal_my_test_icon"
+          texturefile = "gfx/interface/goals/my_test_icon.dds"
+      }
+  }
+```
 
 ### 界面
 
-地图页图层列表多一个「开局部队」勾选框，勾上后叠在任意图层之上。
-
-### 省面板
-
-点省后显示该省的开局部队列表：
+「编辑」tab → 图标导入：
 
 ```
-开局部队
-  战术机联队              A-Target
-  战术机联队              A-Target
+源文件完整路径 [________________]
+[国策 goal ▾] [64]
+
+[文件名（留空用原名）] [导入]
+
+已注册 sprite
+[过滤] [查]
+  GFX_goal_my_test_icon
   …
 ```
 
-### 验证
+源路径要手填——浏览器读不到本地文件路径，这是本地工具，用户知道自己在哪。
 
-```
-hasImg=true  hasCb=true  imgVisible=block
-勾选后显示: block
-api: ok=true 模板 256、部队 5074、有部队的省 1304
-problems: []
-```
+### 清理仓库
 
-### 修了两个 bug
-
-1. `units.png` 生成时 `ImageDraw` 未定义 —— `map_build` 里只导入了 `Image`，补上
-2. 补丁插入位置把 `political_strict` 的 `except` 块挤掉了，导致语法错误，已补回
+`.gitignore` 补了 `_archive/`、`preview/`、`_exe*.txt`、`cache/`，
+并把之前误提交的 `backups/`、`preview/`、`_archive/`、`_exe*.txt` 从索引里摘掉。
 
 ### 回归
 

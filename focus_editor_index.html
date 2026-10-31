@@ -1458,6 +1458,32 @@
             </div>
             <div class="mp-sep"></div>
           </div>
+          <div id="gfxPanel">
+            <h4>图标导入</h4>
+            <div class="mp-k" style="line-height:1.5;color:var(--t3)">把 PNG/JPG 转成 DDS 并注册 sprite</div>
+            <input id="gfxSrc" placeholder="源文件完整路径" style="width:100%;box-sizing:border-box;height:24px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:0 6px;margin-top:4px">
+            <div class="mp-acts" style="margin-top:4px">
+              <select id="gfxKind" style="height:24px;flex:1;min-width:0;font-size:11px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px">
+                <option value="goal">国策 goal</option>
+                <option value="idea">想法 idea</option>
+                <option value="tech">科技 tech</option>
+                <option value="generic">通用</option>
+              </select>
+              <input id="gfxSize" value="64" style="height:24px;width:44px" title="边长">
+            </div>
+            <div class="mp-acts" style="margin-top:4px">
+              <input id="gfxName" placeholder="文件名（留空用原文件名）" style="height:24px;flex:1;min-width:0">
+              <button class="btn" id="gfxDo">导入</button>
+            </div>
+            <div class="mp-k" id="gfxMsg" style="min-height:16px;line-height:1.5"></div>
+            <div class="mp-k" style="margin-top:4px">已注册 sprite</div>
+            <div class="mp-acts">
+              <input id="gfxQ" placeholder="过滤" style="height:24px;flex:1;min-width:0">
+              <button class="btn" id="gfxListBtn">查</button>
+            </div>
+            <div id="gfxList" style="max-height:160px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px;margin-top:2px"></div>
+            <div class="mp-sep"></div>
+          </div>
           <div id="selBox">
           <h4>选中省份</h4>
           <div class="mp-row"><b class="mp-v" id="msId">—</b><span class="mp-k" id="msType"></span></div>
@@ -9425,6 +9451,61 @@ function makePannable(svg, body){
     const q = document.getElementById('ctagQ');
     if(q && !q.dataset.bound){ q.dataset.bound = '1';
       q.addEventListener('input', function(){ render(); }); }
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.10 图标导入
+(function(){
+  function msg(t, bad){
+    const el = document.getElementById('gfxMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  async function doImport(){
+    const src = ((document.getElementById('gfxSrc')||{}).value || '').trim();
+    const kind = (document.getElementById('gfxKind')||{}).value || 'goal';
+    const size = Number((document.getElementById('gfxSize')||{}).value || 64);
+    const name = ((document.getElementById('gfxName')||{}).value || '').trim();
+    if(!src){ msg('填源文件路径', true); return; }
+    msg('导入中…');
+    let r = await (await fetch('/api/gfx_import', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({src: src, kind: kind, size: size,
+                            name: name || null, overwrite: false})})).json();
+    if(!r.ok && r.need_confirm){
+      if(!confirm(r.msg + '\n\n覆盖？')){ msg('已取消', true); return; }
+      r = await (await fetch('/api/gfx_import', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({src: src, kind: kind, size: size,
+                              name: name || null, overwrite: true})})).json();
+    }
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); }
+  }
+
+  async function listSprites(){
+    const box = document.getElementById('gfxList');
+    const q = ((document.getElementById('gfxQ')||{}).value || '').trim();
+    msg('查询中…');
+    const r = await (await fetch('/api/gfx_sprites', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({pattern: q})})).json();
+    if(!r.ok){ msg(r.msg || '失败', true); return; }
+    msg(r.msg || '');
+    if(!box) return;
+    box.innerHTML = (r.items || []).map(function(x){
+      return '<div style="font-size:10px;font-family:Consolas,monospace;padding:1px 0;'
+        + 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (x.texture||'') + '">'
+        + x.name + '</div>';
+    }).join('') || '<div style="font-size:11px;color:var(--t3);padding:2px">没有匹配</div>';
+  }
+
+  function bind(){
+    [['gfxDo', doImport], ['gfxListBtn', listSprites]].forEach(function(p){
+      const el = document.getElementById(p[0]);
+      if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
+    });
   }
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);
