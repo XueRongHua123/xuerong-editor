@@ -5210,6 +5210,278 @@ def load_navy(root=None):
             "msg": "%d 支舰队，%d 艘船" % (len(fleets), total_ships)}
 
 
+def load_bookmarks(root=None):
+    """解析 common/bookmarks 里的所有剧本。
+
+    结构：
+        bookmarks = {
+            bookmark = {
+                name = "1973_START_NAME"
+                desc = "1973_START_DESC"
+                date = 2073.1.1.12
+                picture = "GFX_select_date_1939"
+                default_country = "GER"
+                "FRA" = { history = ... ideology = ... }
+            }
+        }
+    """
+    root = _map_pick(root)
+    files, _rep = _layer_files("common/bookmarks", mod_layers(root))
+    items = []
+    for p in (files or []):
+        try:
+            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        except Exception:
+            continue
+        text = _strip_keep_len(raw)
+        rel = os.path.join("common", "bookmarks", os.path.basename(p))
+        src = ""
+        try:
+            for b in (mod_layers(root) or []):
+                if os.path.abspath(p).startswith(os.path.abspath(b) + os.sep):
+                    src = os.path.basename(b.rstrip("\\/")) or b
+                    break
+        except Exception:
+            pass
+        for outer_a, outer_b, outer_body in find_blocks(text, "bookmarks"):
+            for ba, bb, body in find_blocks(outer_body, "bookmark"):
+                nm = _first(body, r'(?m)^\s*name\s*=\s*"([^"]*)"')
+                ds = _first(body, r'(?m)^\s*desc\s*=\s*"([^"]*)"')
+                dt = _first(body, r'(?m)^\s*date\s*=\s*([\d.]+)')
+                pic = _first(body, r'(?m)^\s*picture\s*=\s*"([^"]*)"')
+                dc = _first(body, r'(?m)^\s*default_country\s*=\s*"([A-Z0-9]+)"')
+                countries = re.findall(r'(?m)^[ \t]*"([A-Z0-9]{2,4})"[ \t]*=\s*\{', body)
+                items.append({"i": len(items), "name": nm, "desc": ds, "date": dt,
+                              "picture": pic, "default_country": dc,
+                              "countries": countries, "country_count": len(countries),
+                              "file": rel, "source": src,
+                              "start": outer_a + 1 + ba,
+                              "end": outer_a + 1 + bb})
+    return {"ok": True, "items": items, "count": len(items),
+            "msg": "共 %d 个剧本" % len(items)}
+
+
+def _bookmark_write_base(root):
+    """common/bookmarks 的写入层，拒写父 mod。"""
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return None, "找不到可写的 mod 目录"
+    tgt, why = write_base(root, "common/bookmarks")
+    if not tgt:
+        return None, "找不到可写目录"
+    if os.path.abspath(tgt) != os.path.abspath(top):
+        nm = os.path.basename(tgt.rstrip("\\/")) or tgt
+        return None, ("common/bookmarks 被 %s 的 replace_path 独占，"
+                      "请先在「诊断 → 目录写入目标」里接管该目录" % nm)
+    return tgt, ""
+
+
+def bookmark_add(root, name, date, desc=None, picture=None, default_country=None):
+    """新建一个剧本。"""
+    root = _map_pick(root)
+    name = (name or "").strip()
+    date = (date or "").strip()
+    if not name:
+        return {"ok": False, "msg": "name 不能为空"}
+    if not re.match(r'^\d{4}\.\d{1,2}\.\d{1,2}(\.\d+)?$', date):
+        return {"ok": False, "msg": "date 格式要像 1936.1.1 或 1936.1.1.12"}
+    tgt, err = _bookmark_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    d = os.path.join(tgt, "common", "bookmarks")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "zz_editor_bookmarks.txt")
+    block = ('\tbookmark = {\n'
+             '\t\tname = "%s"\n'
+             '\t\tdesc = "%s"\n'
+             '\t\tdate = %s\n'
+             '\t\tpicture = "%s"\n'
+             '\t\tdefault_country = "%s"\n'
+             '\t}\n') % (
+        name.replace('"', ""),
+        (desc or name).replace('"', ""),
+        date,
+        (picture or "GFX_select_date_1936"),
+        (default_country or "GER").upper())
+    if os.path.exists(p):
+        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    else:
+        raw = "bookmarks = {\n}\n"
+    text = _strip_keep_len(raw)
+    bm = re.search(r'(?m)^[ \t]*bookmarks[ \t]*=\s*\{', text)
+    if bm:
+        bb = text.find("{", bm.end() - 1)
+        be = brace_match(text, bb)
+        if be > bb:
+            pos = be
+            while pos > 0 and raw[pos - 1] in " \t":
+                pos -= 1
+            if pos > 0 and raw[pos - 1] == "}":
+                pos -= 1
+            ls = raw.rfind("\n", 0, pos) + 1
+            new_text = raw[:ls] + block + raw[ls:]
+        else:
+            new_text = raw.rstrip() + "\n" + block
+    else:
+        new_text = raw.rstrip() + "\nbookmarks = {\n" + block + "}\n"
+    if os.path.exists(p):
+        snapshot(p)
+    io.open(p, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "已新建剧本 %s（%s）" % (name, date)}
+
+
+def bookmark_set(root, index, fields):
+    """改某个剧本的 date / name / desc / picture / default_country。"""
+    root = _map_pick(root)
+    try:
+        index = int(index)
+    except Exception:
+        return {"ok": False, "msg": "index 不合法"}
+    info = load_bookmarks(root)
+    items = info["items"]
+    if index < 0 or index >= len(items):
+        return {"ok": False, "msg": "没有第 %d 个剧本" % (index + 1)}
+    it = items[index]
+    tgt, err = _bookmark_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    p = os.path.join(tgt, it["file"])
+    os.makedirs(os.path.dirname(p) or tgt, exist_ok=True)
+    # 父 mod 里的文件要先复制过来
+    src = None
+    for q in (_layer_files("common/bookmarks", mod_layers(root))[0] or []):
+        if os.path.basename(q) == os.path.basename(it["file"]):
+            src = q
+            break
+    if src and not os.path.exists(p):
+        try:
+            import shutil as _sh
+            _sh.copyfile(src, p)
+        except Exception as e:
+            return {"ok": False, "msg": "复制来源失败：%s" % e}
+    raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw)
+    # 全局索引 → 本文件内序号
+    local = 0
+    for j, x in enumerate(items):
+        if j == index:
+            break
+        if os.path.basename(x["file"]) == os.path.basename(it["file"]):
+            local += 1
+    cnt = -1
+    a = b = -1
+    for oa, ob, oBody in find_blocks(text, "bookmarks"):
+        for ba, bb, body in find_blocks(oBody, "bookmark"):
+            cnt += 1
+            if cnt == local:
+                a = oa + 1 + ba
+                b = oa + 1 + bb
+                break
+        if a >= 0:
+            break
+    if a < 0:
+        return {"ok": False, "msg": "重新定位失败（本文件内第 %d 个）" % (local + 1)}
+    seg = raw[a:b]
+    new_seg = seg
+    changed = []
+    for key, val in (("date", fields.get("date")),
+                     ("name", fields.get("name")),
+                     ("desc", fields.get("desc")),
+                     ("picture", fields.get("picture")),
+                     ("default_country", fields.get("default_country"))):
+        if not val:
+            continue
+        pat = re.compile(r'(?m)^([ \t]*)' + key + r'\s*=\s*[^\s#\r\n]+')
+        if pat.search(new_seg):
+            new_seg = pat.sub(lambda m: (m.group(1) or "") + '%s = %s' % (
+                key, ('"%s"' % val) if key in ("name", "desc", "picture", "default_country") else val),
+                new_seg, count=1)
+            changed.append(key)
+    if new_seg == seg:
+        return {"ok": True, "msg": "没有改动"}
+    new_text = raw[:a] + new_seg + raw[b:]
+    snapshot(p)
+    io.open(p, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "剧本「%s」已更新：%s" % (it["name"], ", ".join(changed))}
+
+
+def bookmark_delete(root, index):
+    """删掉第 index 个剧本。"""
+    root = _map_pick(root)
+    try:
+        index = int(index)
+    except Exception:
+        return {"ok": False, "msg": "index 不合法"}
+    info = load_bookmarks(root)
+    items = info["items"]
+    if index < 0 or index >= len(items):
+        return {"ok": False, "msg": "没有第 %d 个剧本" % (index + 1)}
+    it = items[index]
+    tgt, err = _bookmark_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    p = os.path.join(tgt, it["file"])
+    src = None
+    for q in (_layer_files("common/bookmarks", mod_layers(root))[0] or []):
+        if os.path.basename(q) == os.path.basename(it["file"]):
+            src = q
+            break
+    if not os.path.exists(p):
+        if not src:
+            return {"ok": False, "msg": "找不到来源文件"}
+        os.makedirs(os.path.dirname(p) or tgt, exist_ok=True)
+        try:
+            import shutil as _sh
+            _sh.copyfile(src, p)
+        except Exception as e:
+            return {"ok": False, "msg": "复制来源失败：%s" % e}
+    raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    text = _strip_keep_len(raw)
+    local = 0
+    for j, x in enumerate(items):
+        if j == index:
+            break
+        if os.path.basename(x["file"]) == os.path.basename(it["file"]):
+            local += 1
+    cnt = -1
+    a = b = -1
+    for oa, ob, oBody in find_blocks(text, "bookmarks"):
+        for ba, bb, body in find_blocks(oBody, "bookmark"):
+            cnt += 1
+            if cnt == local:
+                a = oa + 1 + ba
+                b = oa + 1 + bb
+                break
+        if a >= 0:
+            break
+    if a < 0:
+        return {"ok": False, "msg": "重新定位失败（本文件内第 %d 个）" % (local + 1)}
+    st = a
+    while st > 0 and raw[st - 1] in " \t":
+        st -= 1
+    if st > 0 and raw[st - 1] == "\n":
+        st -= 1
+    en = b
+    while en < len(raw) and raw[en] in "\r\n":
+        en += 1
+    snapshot(p)
+    io.open(p, "wb").write(b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
+    return {"ok": True, "msg": "已删除剧本「%s」" % it["name"]}
+
+
+def bookmarks_payload(root=None):
+    info = load_bookmarks(root)
+    if not info.get("ok"):
+        return info
+    return {"ok": True, "items": info["items"], "count": info["count"],
+            "msg": info["msg"]}
+
+
 def load_completed_focuses(root=None, tag=""):
     """读某国 history 里的 complete_national_focus / mark_focus_tree_completed。
 
@@ -13594,6 +13866,17 @@ class Handler(SimpleHTTPRequestHandler):
                                        body.get("root") or None))
         elif self.path == "/api/navy":
             self._send(navy_payload(body.get("root") or None))
+        elif self.path == "/api/bookmarks":
+            self._send(bookmarks_payload(body.get("root") or None))
+        elif self.path == "/api/bookmark_add":
+            self._send(bookmark_add(body.get("root") or None, body.get("name"),
+                                    body.get("date"), body.get("desc"),
+                                    body.get("picture"), body.get("default_country")))
+        elif self.path == "/api/bookmark_set":
+            self._send(bookmark_set(body.get("root") or None, body.get("index"),
+                                    body.get("fields") or {}))
+        elif self.path == "/api/bookmark_delete":
+            self._send(bookmark_delete(body.get("root") or None, body.get("index")))
         elif self.path == "/api/completed_focuses":
             self._send(completed_focuses_payload(body.get("root") or None,
                                                  body.get("tag") or ""))

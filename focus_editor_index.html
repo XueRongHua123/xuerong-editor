@@ -1581,6 +1581,23 @@
             </div>
             <div class="mp-sep"></div>
           </div>
+          <div id="bmPanel">
+            <h4>开局剧本（bookmark）</h4>
+            <div class="mp-acts"><button class="btn" id="bmLoad">载入剧本</button></div>
+            <div class="mp-k" id="bmMsg" style="min-height:16px;line-height:1.5"></div>
+            <div id="bmList" style="max-height:150px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
+            <div class="mp-k" style="margin-top:6px">新建剧本</div>
+            <div class="mp-acts">
+              <input id="bmName" placeholder="名称 key" style="height:22px;flex:1;min-width:0" title="本地化 key，如 MY_START_NAME">
+              <input id="bmDate" placeholder="1936.1.1" style="height:22px;width:76px">
+            </div>
+            <div class="mp-acts" style="margin-top:3px">
+              <input id="bmDesc" placeholder="描述 key（可空）" style="height:22px;flex:1;min-width:0">
+              <input id="bmCountry" placeholder="默认国" value="GER" style="height:22px;width:46px" maxlength="3">
+              <button class="btn" id="bmAdd">加</button>
+            </div>
+            <div class="mp-sep"></div>
+          </div>
           <div id="selBox">
           <h4>选中省份</h4>
           <div class="mp-row"><b class="mp-v" id="msId">—</b><span class="mp-k" id="msType"></span></div>
@@ -9978,6 +9995,77 @@ function makePannable(svg, body){
 
   function bind(){
     [['cfLoad', load], ['cfAdd', add]].forEach(function(p){
+      const el = document.getElementById(p[0]);
+      if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
+    });
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.16 开局剧本 bookmark
+(function(){
+  let BMS = [];
+
+  function msg(t, bad){
+    const el = document.getElementById('bmMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  function render(){
+    const box = document.getElementById('bmList');
+    if(!box) return;
+    if(!BMS.length){ box.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:2px">（无剧本）</div>'; return; }
+    box.innerHTML = BMS.map(function(x, i){
+      return '<div style="display:flex;gap:4px;align-items:center;font-size:10px;'
+        + 'font-family:Consolas,monospace;padding:1px 0">'
+        + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (x.file||'') + '">'
+        + (x.name || '(无名)') + '</span>'
+        + '<span style="color:var(--t3);width:74px;text-align:right">' + x.date + '</span>'
+        + '<span style="color:var(--t3);width:26px;text-align:right">' + x.country_count + '</span>'
+        + '<button class="btn bm-del" data-i="' + i + '" style="height:15px;font-size:8px;padding:0 3px">删</button>'
+        + '</div>';
+    }).join('');
+    box.querySelectorAll('.bm-del').forEach(function(b){
+      b.onclick = async function(){
+        if(!confirm('删掉这个剧本？')) return;
+        const r = await (await fetch('/api/bookmark_delete', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({index: Number(b.dataset.i)})})).json();
+        msg(r.msg || '', !r.ok);
+        if(r.ok){ status(r.msg); await load(); }
+      };
+    });
+  }
+
+  async function load(){
+    msg('读取中…');
+    const r = await (await fetch('/api/bookmarks', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+    if(!r.ok){ msg(r.msg || '失败', true); return; }
+    BMS = r.items || [];
+    msg(r.msg || '');
+    render();
+  }
+
+  async function add(){
+    const name = ((document.getElementById('bmName')||{}).value || '').trim();
+    const date = ((document.getElementById('bmDate')||{}).value || '').trim();
+    const desc = ((document.getElementById('bmDesc')||{}).value || '').trim();
+    const dc = ((document.getElementById('bmCountry')||{}).value || 'GER').trim().toUpperCase();
+    if(!name){ msg('填名称 key', true); return; }
+    if(!date){ msg('填日期，如 1936.1.1', true); return; }
+    msg('写入中…');
+    const r = await (await fetch('/api/bookmark_add', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name: name, date: date, desc: desc || null,
+                            default_country: dc})})).json();
+    msg(r.msg || '', !r.ok);
+    if(r.ok){ status(r.msg); await load(); }
+  }
+
+  function bind(){
+    [['bmLoad', load], ['bmAdd', add]].forEach(function(p){
       const el = document.getElementById(p[0]);
       if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
     });
