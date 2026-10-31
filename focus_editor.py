@@ -6168,29 +6168,61 @@ def _bookmark_country_block(tag, ideology="neutrality"):
             '\t\t}\n') % (tag.upper(), tag.upper(), ideology)
 
 
+def _game_language():
+    """读游戏的界面语言。HOI4 只加载和当前语言匹配的 localisation 文件，
+    中文语言下写 l_english 的 yml 完全不生效，界面上就是裸 key。"""
+    try:
+        p = os.path.join(os.path.expanduser("~"), "Documents",
+                         "Paradox Interactive", "Hearts of Iron IV", "settings.txt")
+        if os.path.exists(p):
+            txt = io.open(p, encoding="utf-8", errors="replace").read()
+            m = re.search(r'language\s*=\s*"?([a-z_]+)"?', txt)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    return "l_english"
+
+
 def _bookmark_loc(root, name, desc, countries):
-    """给剧本写本地化，否则界面上显示的是 NAME/DESC 这种 key。"""
+    """给剧本写本地化，否则界面上显示的是 NAME/DESC 这种 key。
+
+    name 和 desc 是同一个 key 时只写一条，避免 HOI4 报重复定义。
+    """
     tgt, err = _bookmark_write_base(root)
     if not tgt:
         return False
+    lang = _game_language()
     d = os.path.join(tgt, "localisation")
     os.makedirs(d, exist_ok=True)
-    p = os.path.join(d, "zz_editor_bookmarks_l_english.yml")
+    p = os.path.join(d, "zz_editor_bookmarks_%s.yml" % lang)
+
     lines = []
-    if not os.path.exists(p):
-        lines.append("l_english:")
-    else:
+    if os.path.exists(p):
         try:
             old = io.open(p, encoding="utf-8-sig", errors="replace").read()
             if old.strip():
                 lines = [old.rstrip("\n")]
         except Exception:
-            lines = ["l_english:"]
+            lines = []
+    if not lines:
+        lines = ["%s:" % lang]
+
+    # 已有内容里出现过的 key 不再重复写
+    joined = "\n".join(lines)
     body = []
-    body.append(' %s:0 "%s"' % (name, name))
-    body.append(' %s:0 "%s"' % (desc, desc))
+    def add(k, v):
+        if re.search(r'(?m)^\s*' + re.escape(k) + r'\s*:', joined):
+            return
+        body.append(' %s:0 "%s"' % (k, v))
+    add(name, name)
+    if desc and desc != name:
+        add(desc, desc)
     for c in countries:
-        body.append(' %s_DESC:0 "%s"' % (c.upper(), c.upper()))
+        add(c.upper() + "_DESC", c.upper())
+
+    if not body:
+        return True
     txt = "\n".join(lines + body) + "\n"
     io.open(p, "w", encoding="utf-8-sig", newline="").write(txt)
     return True
@@ -14994,7 +15026,8 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path == "/api/bookmark_add":
             self._send(bookmark_add(body.get("root") or None, body.get("name"),
                                     body.get("date"), body.get("desc"),
-                                    body.get("picture"), body.get("default_country")))
+                                    body.get("picture"), body.get("default_country"),
+                                    body.get("countries")))
         elif self.path == "/api/bookmark_set":
             self._send(bookmark_set(body.get("root") or None, body.get("index"),
                                     body.get("fields") or {}))
