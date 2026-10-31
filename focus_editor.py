@@ -256,6 +256,66 @@ LAST_FILE = None
 HIST_DIR = os.path.join(WORK, "history")
 os.makedirs(HIST_DIR, exist_ok=True)
 
+def ensure_file_writable(root, sub, basename):
+    """确保 mod 里某个文件可写，返回 (目标路径, 说明) 或 (None, 错误)。
+
+    两种情形：
+
+    1. 目录已经被某一层 replace_path 独占（比如 muvluvCN 占了 history/states）
+       → 那一层才是游戏真正读的地方，必须整目录接管，单文件复制没用。
+       返回第一个元素仍是想写的路径，第二个元素说明需要先接管。
+
+    2. 目录没有被独占（原版环境都是这种）
+       → 只把要改的那一个文件复制到自己的 mod，同名覆盖。
+       这样原版其余文件照常生效，不会因为 replace_path 把整个目录清空。
+    """
+    root = _map_pick(root)
+    sub = (sub or "").replace("\\", "/").strip("/")
+    basename = os.path.basename(basename or "")
+    if not sub or not basename:
+        return None, "参数不完整"
+
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return None, "找不到可写的 mod 目录"
+
+    owner = _replace_owner(root, sub)
+    if owner and os.path.abspath(owner) != os.path.abspath(top):
+        nm = os.path.basename(owner.rstrip("\\/")) or owner
+        return None, ("%s 被 %s 的 replace_path 独占，需要先在「诊断 → 目录写入目标」里"
+                      "接管该目录（独占后只读那一层，单文件复制不生效）" % (sub, nm))
+
+    rel = os.path.join(sub.replace("/", os.sep), basename)
+    dst = os.path.join(top, rel)
+    if os.path.exists(dst):
+        return dst, "已存在"
+
+    # 找源文件：从生效链里倒着找第一个有它的层
+    src = None
+    for b in reversed(mod_layers(root) or []):
+        if not b:
+            continue
+        cand = os.path.join(b, rel)
+        if os.path.isfile(cand):
+            src = cand
+            break
+    if not src:
+        return None, "叠加链里找不到 %s/%s" % (sub, basename)
+
+    os.makedirs(os.path.dirname(dst) or top, exist_ok=True)
+    try:
+        import shutil as _sh
+        _sh.copyfile(src, dst)
+    except Exception as e:
+        return None, "复制失败：%s" % e
+    return dst, "已从 %s 复制单个文件" % (os.path.basename(os.path.dirname(src)) or "父层")
+
+
 def _bom_for(path):
     """新建文件一律不加 BOM。
 
@@ -1530,18 +1590,23 @@ def state_save(sid, fields):
     rel = s.get("file") or ""
     if not rel:
         return {"ok": False, "msg": "这个州没有来源文件"}
-    if is_under_game(root):
-        return {"ok": False, "msg": "原版目录只读：请先复制到自己的模组再修改"}
-    # history/states 常被某一层用 replace_path 独占，写在别处不会生效。
-    # write_base 会算出该目录真正的写入层：被接管就写接管层，否则写链顶。
-    try:
+    # 州文件在只读层时，只把「这一个州文件」复制到自己的 mod，不加 replace_path。
+    # 这样原版其余 820 个州照常生效——整目录接管会复制 821 个文件，
+    # 而且一旦 replace_path 生效，漏掉任何一个州它就从游戏里消失了。
+    _single, _why2 = ensure_file_writable(ROOTS[-1] if ROOTS else root,
+                                          "history/states", os.path.basename(rel))
+    if _single:
+        root = os.path.dirname(_single)
+        rel = os.path.basename(_single)
+        _write_layer_hint["states"] = _why2
+    else:
+        # 目录被别的 mod 独占，或者链里找不到源文件——这时只能要求先接管
         _target, _why = write_base(ROOTS[-1] if ROOTS else root, "history/states")
         if _target and os.path.abspath(_target) != os.path.abspath(root):
             _src = os.path.join(root, rel)
             root = _target
             _dst = os.path.join(root, rel)
             os.makedirs(os.path.dirname(_dst) or root, exist_ok=True)
-            # 目标层还没有这个文件时，从原位置复制一份，保留未改动的字段
             if not os.path.exists(_dst) and os.path.exists(_src):
                 try:
                     import shutil as _sh
@@ -1549,8 +1614,18 @@ def state_save(sid, fields):
                 except Exception:
                     pass
             _write_layer_hint["states"] = _why
-    except Exception:
-        pass
+        else:
+            return {"ok": False, "msg": _why2 or "写不进去"}
+
+    # 目标层还没有这个文件时，从原位置复制一份，保留未改动的字段
+    if not os.path.exists(os.path.join(root, rel)):
+        _src = os.path.join(s.get("root") or "", s.get("file") or "")
+        if os.path.exists(_src):
+            try:
+                import shutil as _sh2
+                _sh2.copyfile(_src, os.path.join(root, rel))
+            except Exception:
+                pass
     p = os.path.join(root, rel)
     if not os.path.exists(p):
         return {"ok": False, "msg": "州文件不存在：" + rel}
