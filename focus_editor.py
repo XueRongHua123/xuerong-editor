@@ -7922,7 +7922,7 @@ def template_delete(name, root=None):
     return {"ok": True, "msg": "已删除模板「%s」" % name}
 
 
-def template_add(name, unit, x=0, y=0, root=None):
+def template_add(name, unit, x=0, y=0, root=None, tag=None):
     """新建一个只有一格编制的 division_template。"""
     root = _map_pick(root)
     if not name:
@@ -7932,7 +7932,13 @@ def template_add(name, unit, x=0, y=0, root=None):
         return {"ok": False, "msg": err}
     d = os.path.join(tgt, "history", "units")
     os.makedirs(d, exist_ok=True)
-    p = os.path.join(d, "zz_units.txt")
+    tag = (tag or "").strip().upper()
+    if tag:
+        # 文件名的国家前缀是 HOI4 判断模板归属的依据，
+        # 写成 zz_units.txt 的话游戏不知道这个模板属于谁，部队引用不到。
+        p = os.path.join(d, "%s_1936_zz.txt" % tag)
+    else:
+        p = os.path.join(d, "zz_units.txt")
     block = _tpl_render(name, [{"unit": unit or "infantry", "x": x, "y": y}], [], False)
     if os.path.exists(p):
         raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
@@ -7994,8 +8000,17 @@ def unit_add(location, template, name=None, exp=None, eq=None, root=None, tag=No
         p = os.path.join(d, "zz_units.txt")
 
     lines = ["\tdivision = {\n"]
+    # 原版用的是 division_name = { is_name_ordered = yes / 或者具体 name }，
+    # 直接写 name = "xxx" 游戏不认这个字段。
     if name:
-        lines.append('\t\tname = "%s"\n' % name)
+        lines.append('\t\tdivision_name = {\n')
+        lines.append('\t\t\tname = "%s"\n' % name.replace('"', ""))
+        lines.append('\t\t}\n')
+    else:
+        lines.append('\t\tdivision_name = {\n')
+        lines.append('\t\t\tis_name_ordered = yes\n')
+        lines.append('\t\t\tname_order = 1\n')
+        lines.append('\t\t}\n')
     lines.append("\t\tlocation = %d\n" % location)
     lines.append('\t\tdivision_template = "%s"\n' % template)
     lines.append("\t\tstart_experience_factor = %s\n" % (exp if exp not in (None, "") else "0.3"))
@@ -15517,7 +15532,7 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path == "/api/template_add":
             self._send(template_add(body.get("name"), body.get("unit"),
                                     body.get("x", 0), body.get("y", 0),
-                                    body.get("root") or None))
+                                    body.get("root") or None, body.get("tag")))
         elif self.path == "/api/units":
             self._send(units_payload(body.get("root") or None))
         elif self.path == "/api/unit_add":
