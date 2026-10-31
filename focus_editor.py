@@ -5913,7 +5913,7 @@ def _char_write_base(root):
 
 def character_add(root, cid, name, ctype="corps_commander", skill=3,
                   attack=3, defense=3, planning=3, logistics=3,
-                  portrait_large="", portrait_small=""):
+                  portrait_large="", portrait_small="", country=None):
     """新建人物。
 
     写进 common/characters/zz_editor_characters.txt（不覆盖别人已有的文件）。
@@ -5958,7 +5958,11 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
         return {"ok": False, "msg": err}
     d = os.path.join(tgt, "common", "characters")
     os.makedirs(d, exist_ok=True)
-    p = os.path.join(d, "zz_editor_characters.txt")
+    country = (country or "").strip().upper()
+    if country:
+        p = os.path.join(d, country + ".txt")
+    else:
+        p = os.path.join(d, "zz_editor_characters.txt")
 
     body = ['\t%s = {' % cid,
             '\t\tname = "%s"' % name.replace('"', "")]
@@ -7107,7 +7111,7 @@ def air_wing_add(root, province, name, eq_type, owner, amount=10, tag=None):
     os.makedirs(d, exist_ok=True)
 
     # 找现有的同 owner 文件里的 air_wings；没有就用 zz_air_wings.txt
-    dst = os.path.join(d, "zz_air_wings.txt")
+    dst = os.path.join(d, "%s_1936_zz_air.txt" % owner)
     block = ('\t%d = {\n'
              '\t\tname = "%s"\n'
              '\t\t%s = {\n'
@@ -7682,7 +7686,7 @@ def _units_write_file(root, src_rel):
     return p
 
 
-def unit_add(location, template, name=None, exp=None, eq=None, root=None):
+def unit_add(location, template, name=None, exp=None, eq=None, root=None, tag=None):
     """在某省加一支开局部队。"""
     root = _map_pick(root)
     try:
@@ -7696,13 +7700,17 @@ def unit_add(location, template, name=None, exp=None, eq=None, root=None):
     if template not in tpl_names:
         return {"ok": False, "msg": "没有这个师团模板：%s" % template}
 
-    # 写到当前 mod 的 history/units/zz_units.txt（拒写父 mod）
+    # 写到当前 mod 的 history/units（拒写父 mod）
     tgt, _err = _units_write_base(root)
     if not tgt:
         return {"ok": False, "msg": _err}
     d = os.path.join(tgt, "history", "units")
     os.makedirs(d, exist_ok=True)
-    p = os.path.join(d, "zz_units.txt")
+    tag = (tag or "").strip().upper()
+    if tag:
+        p = os.path.join(d, "%s_1936_zz.txt" % tag)
+    else:
+        p = os.path.join(d, "zz_units.txt")
 
     lines = ["\tdivision = {\n"]
     if name:
@@ -15090,7 +15098,8 @@ class Handler(SimpleHTTPRequestHandler):
                                      body.get("defense", 3), body.get("planning", 3),
                                      body.get("logistics", 3),
                                      body.get("portrait_large"),
-                                     body.get("portrait_small")))
+                                     body.get("portrait_small"),
+                                     body.get("country")))
         elif self.path == "/api/character_set":
             self._send(character_set(body.get("root") or None, body.get("id"),
                                      body.get("fields") or {}))
@@ -15224,7 +15233,7 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path == "/api/unit_add":
             self._send(unit_add(body.get("location"), body.get("template"),
                                 body.get("name"), body.get("exp"), body.get("eq"),
-                                body.get("root") or None))
+                                body.get("root") or None, body.get("tag")))
         elif self.path == "/api/unit_delete":
             self._send(unit_delete(body.get("location"), body.get("index"),
                                    body.get("root") or None))
