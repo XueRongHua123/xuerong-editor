@@ -5134,6 +5134,174 @@ def country_techs_payload(root=None, tag=""):
             "msg": info["msg"]}
 
 
+def load_navy(root=None):
+    """解析 history/units 里的舰队编制。
+
+    结构（三层）：
+        units = {
+            fleet = {
+                name = "第一舰队"
+                naval_base = 12736
+                task_force = {
+                    name = "第一炮击分队"
+                    location = 12736
+                    ship = { name = "..." definition = carrier ... }
+                }
+            }
+        }
+    """
+    root = _map_pick(root)
+    _base, files = _units_files(root)
+    fleets = []
+    for p in (files or []):
+        fn = os.path.basename(p)
+        rel = os.path.join("history", "units", fn)
+        try:
+            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        except Exception:
+            continue
+        text = _strip_keep_len(raw)
+        src = ""
+        try:
+            for b in (mod_layers(root) or []):
+                if os.path.abspath(p).startswith(os.path.abspath(b) + os.sep):
+                    src = os.path.basename(b.rstrip("\\/")) or b
+                    break
+        except Exception:
+            pass
+        for um in re.finditer(r'(?m)^[ \t]*units[ \t]*=\s*\{', text):
+            ub = text.find("{", um.end() - 1)
+            ue = brace_match(text, ub)
+            if ue <= ub:
+                continue
+            ubody = text[ub + 1:ue - 1]
+            # find_blocks 返回 (start, end, body)：start 是 { 的位置，end 是 } 的位置
+            for fb, fend, fbody in find_blocks(ubody, "fleet"):
+                _line = ubody.rfind("\n", 0, fb) + 1
+                fo = ub + 1 + _line
+                fo_end = ub + 1 + fend + 1
+                fname = _first(fbody, r'(?m)^\s*name\s*=\s*"([^"]*)"')
+                nbase = _first(fbody, r'(?m)^\s*naval_base\s*=\s*(\d+)')
+                tfs = []
+                for tstart, tend, tbody in find_blocks(fbody, "task_force"):
+                    tname = _first(tbody, r'(?m)^\s*name\s*=\s*"([^"]*)"')
+                    tloc = _first(tbody, r'(?m)^\s*location\s*=\s*(\d+)')
+                    ships = []
+                    # ship 是单行：ship = { name = "X" definition = Y ... }
+                    for sm in re.finditer(r'(?m)^[ \t]*ship\s*=\s*\{[^\n]*', tbody):
+                        line = sm.group(0)
+                        nm = re.search(r'name\s*=\s*"([^"]*)"', line)
+                        df = re.search(r'definition\s*=\s*([A-Za-z0-9_]+)', line)
+                        ships.append({"name": nm.group(1) if nm else "",
+                                      "definition": df.group(1) if df else ""})
+                    _tline = fbody.rfind("\n", 0, tstart) + 1
+                    tfs.append({"name": tname, "location": int(tloc or 0),
+                                "ships": ships, "ship_count": len(ships),
+                                "start": ub + 1 + fb + 1 + _tline,
+                                "end": ub + 1 + fb + 1 + tend + 1})
+                fleets.append({"name": fname, "naval_base": int(nbase or 0),
+                               "file": rel, "source": src,
+                               "task_forces": tfs, "tf_count": len(tfs),
+                               "ship_total": sum(x["ship_count"] for x in tfs),
+                               "start": fo, "end": fo_end})
+    total_ships = sum(x["ship_total"] for x in fleets)
+    return {"ok": True, "fleets": fleets, "fleet_count": len(fleets),
+            "ship_total": total_ships,
+            "msg": "%d 支舰队，%d 艘船" % (len(fleets), total_ships)}
+
+
+def navy_delete_fleet(root, fi):
+    """删掉第 fi 支舰队（整块）。"""
+    root = _map_pick(root)
+    try:
+        fi = int(fi)
+    except Exception:
+        return {"ok": False, "msg": "index 不合法"}
+    info = load_navy(root)
+    fleets = info["fleets"]
+    if fi < 0 or fi >= len(fleets):
+        return {"ok": False, "msg": "没有第 %d 支舰队" % (fi + 1)}
+    f = fleets[fi]
+    return _navy_cut(root, f["file"], f["start"], f["end"],
+                     "舰队「%s」" % f["name"])
+
+
+def navy_delete_taskforce(root, fi, ti):
+    """删掉某支舰队里的第 ti 个特遣队。"""
+    root = _map_pick(root)
+    try:
+        fi, ti = int(fi), int(ti)
+    except Exception:
+        return {"ok": False, "msg": "index 不合法"}
+    info = load_navy(root)
+    fleets = info["fleets"]
+    if fi < 0 or fi >= len(fleets):
+        return {"ok": False, "msg": "没有第 %d 支舰队" % (fi + 1)}
+    tfs = fleets[fi]["task_forces"]
+    if ti < 0 or ti >= len(tfs):
+        return {"ok": False, "msg": "没有第 %d 个特遣队" % (ti + 1)}
+    t = tfs[ti]
+    return _navy_cut(root, fleets[fi]["file"], t["start"], t["end"],
+                     "特遣队「%s」" % t["name"])
+
+
+def _navy_cut(root, rel, start, end, what):
+    """按偏移从 history/units 文件里切掉一段（拒绝写父 mod）。"""
+    tgt, err = _units_write_base(root)
+    if not tgt:
+        return {"ok": False, "msg": err}
+    src = None
+    for p in (_units_files(root)[1] or []):
+        if os.path.basename(p) == os.path.basename(rel):
+            src = p
+            break
+    if not src:
+        return {"ok": False, "msg": "找不到来源文件"}
+    dst = os.path.join(tgt, rel)
+    os.makedirs(os.path.dirname(dst) or tgt, exist_ok=True)
+    if not os.path.exists(dst):
+        try:
+            import shutil as _sh
+            _sh.copyfile(src, dst)
+        except Exception as e:
+            return {"ok": False, "msg": "复制来源失败：%s" % e}
+    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    n = len(raw)
+    if not (0 <= start < n and 0 <= end <= n and start < end):
+        return {"ok": False, "msg": "偏移不合法（%s-%s / 文件 %d 字节）" % (start, end, n)}
+    st = min(start, n - 1)
+    while st > 0 and raw[st - 1] in " \t":
+        st -= 1
+    if st > 0 and raw[st - 1] == "\n":
+        st -= 1
+    en = max(end, 1)
+    en = min(en, n)
+    while en < n and raw[en] in "\r\n":
+        en += 1
+    if st >= en:
+        return {"ok": False, "msg": "偏移不合法（切完为空）"}
+    new_text = raw[:st] + "\n" + raw[en:]
+    snapshot(dst)
+    io.open(dst, "wb").write(b"\xef\xbb\xbf" + new_text.encode("utf-8"))
+    return {"ok": True, "msg": "已删除 %s" % what}
+
+
+def navy_payload(root=None):
+    info = load_navy(root)
+    if not info.get("ok"):
+        return info
+    return {"ok": True, "fleets": [{
+        "name": f["name"], "naval_base": f["naval_base"],
+        "ship_total": f["ship_total"], "tf_count": f["tf_count"],
+        "file": f["file"],
+        "task_forces": [{"name": t["name"], "location": t["location"],
+                         "ship_count": t["ship_count"],
+                         "ships": t["ships"][:20]} for t in f["task_forces"]],
+    } for f in info["fleets"]],
+        "fleet_count": info["fleet_count"], "ship_total": info["ship_total"],
+        "msg": info["msg"]}
+
+
 def _tpl_locate(root, name):
     """找到某个 division_template 定义在哪个文件、哪个偏移。
 
@@ -12547,6 +12715,13 @@ class Handler(SimpleHTTPRequestHandler):
             self._send(tech_tree_graph(body.get("folder") or "",
                                        body.get("tag") or None,
                                        body.get("root") or None))
+        elif self.path == "/api/navy":
+            self._send(navy_payload(body.get("root") or None))
+        elif self.path == "/api/navy_delete_fleet":
+            self._send(navy_delete_fleet(body.get("root") or None, body.get("fi")))
+        elif self.path == "/api/navy_delete_tf":
+            self._send(navy_delete_taskforce(body.get("root") or None,
+                                             body.get("fi"), body.get("ti")))
         elif self.path == "/api/gfx_list":
             self._send(gfx_list(body.get("root") or None, body.get("kind") or "goal"))
         elif self.path == "/api/gfx_import":

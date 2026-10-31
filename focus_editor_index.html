@@ -1484,6 +1484,13 @@
             <div id="gfxList" style="max-height:160px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px;margin-top:2px"></div>
             <div class="mp-sep"></div>
           </div>
+          <div id="navyPanel">
+            <h4>开局舰队</h4>
+            <div class="mp-acts"><button class="btn" id="navyLoad">载入舰队</button></div>
+            <div class="mp-k" id="navyMsg" style="min-height:16px;line-height:1.5"></div>
+            <div id="navyList" style="max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px"></div>
+            <div class="mp-sep"></div>
+          </div>
           <div id="selBox">
           <h4>选中省份</h4>
           <div class="mp-row"><b class="mp-v" id="msId">—</b><span class="mp-k" id="msType"></span></div>
@@ -9506,6 +9513,79 @@ function makePannable(svg, body){
       const el = document.getElementById(p[0]);
       if(el && !el.dataset.bound){ el.dataset.bound = '1'; el.onclick = p[1]; }
     });
+  }
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
+
+// v1.21.11 开局舰队
+(function(){
+  let FLEETS = [];
+
+  function msg(t, bad){
+    const el = document.getElementById('navyMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+
+  function render(){
+    const box = document.getElementById('navyList');
+    if(!box) return;
+    if(!FLEETS.length){ box.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:2px">（无舰队）</div>'; return; }
+    box.innerHTML = FLEETS.map(function(f, fi){
+      const tfs = (f.task_forces || []).map(function(t, ti){
+        return '<div style="display:flex;gap:4px;align-items:center;padding-left:10px;font-size:10px;'
+          + 'font-family:Consolas,monospace;color:var(--t3)">'
+          + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
+          + '　' + t.name + '（' + t.ship_count + ' 艘）</span>'
+          + '<button class="btn nv-deltf" data-fi="' + fi + '" data-ti="' + ti + '" style="height:15px;font-size:8px;padding:0 3px">删</button>'
+          + '</div>';
+      }).join('');
+      return '<details style="margin-bottom:2px">'
+        + '<summary style="font-size:10.5px;font-family:Consolas,monospace;cursor:pointer;padding:1px 2px">'
+        + f.name + ' <span style="color:var(--t3)">基地 ' + f.naval_base + '｜' + f.tf_count + ' 队｜' + f.ship_total + ' 艘</span>'
+        + '</summary>'
+        + '<div style="display:flex;justify-content:flex-end">'
+        + '<button class="btn nv-delf" data-fi="' + fi + '" style="height:15px;font-size:8px;padding:0 4px">删整支</button>'
+        + '</div>'
+        + tfs + '</details>';
+    }).join('');
+    box.querySelectorAll('.nv-delf').forEach(function(b){
+      b.onclick = async function(e){
+        e.preventDefault();
+        if(!confirm('删掉整支舰队？')) return;
+        const r = await (await fetch('/api/navy_delete_fleet', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({fi: Number(b.dataset.fi)})})).json();
+        msg(r.msg || '', !r.ok);
+        if(r.ok){ status(r.msg); await load(); }
+      };
+    });
+    box.querySelectorAll('.nv-deltf').forEach(function(b){
+      b.onclick = async function(e){
+        e.preventDefault();
+        if(!confirm('删掉这个特遣队？')) return;
+        const r = await (await fetch('/api/navy_delete_tf', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({fi: Number(b.dataset.fi), ti: Number(b.dataset.ti)})})).json();
+        msg(r.msg || '', !r.ok);
+        if(r.ok){ status(r.msg); await load(); }
+      };
+    });
+  }
+
+  async function load(){
+    msg('读取中…');
+    const r = await (await fetch('/api/navy', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+    if(!r.ok){ msg(r.msg || '失败', true); return; }
+    FLEETS = r.fleets || [];
+    msg(r.msg || '');
+    render();
+  }
+
+  function bind(){
+    const b = document.getElementById('navyLoad');
+    if(b && !b.dataset.bound){ b.dataset.bound = '1'; b.onclick = load; }
   }
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);
