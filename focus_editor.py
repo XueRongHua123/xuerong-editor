@@ -5280,6 +5280,29 @@ def _diag_division_template_missing(root):
     return out
 
 
+# CWTools 规则里没覆盖、但游戏确实认的字段。
+# 出现这些不报——规则是别人维护的，不全会漏。
+_SCHEMA_EXTRA = {
+    "legacy_id", "id", "targeted_modifier", "equipment_bonus",
+    "allowed_civil_war", "research_bonus", "rule",
+}
+
+# 这些前缀开头的字段一律放过（规则文件没列全，但游戏确实认）
+_SCHEMA_EXTRA_PREFIX = (
+    "war_with",           # war_with_on_remove 等一组
+    "target_",            # target_ROOT_trigger 等
+)
+
+# 这些块里装的是 trigger / effect，不是字段，整块跳过不查
+_SCHEMA_SKIP_BLOCKS = {
+    "allowed", "available", "visible", "trigger", "limit",
+    "complete_effect", "remove_effect", "cancel_trigger", "update_effect",
+    "on_add", "on_remove", "do_effect", "ai_will_do", "modifier",
+    "targeted_modifier", "equipment_bonus", "research_bonus",
+    "rule", "allowed_civil_war", "effect", "modifiers",
+}
+
+
 _CWT_RULES = [None]
 
 
@@ -5410,6 +5433,8 @@ def _diag_schema_character(root):
         return out
 
     # 这些块名是人物体内的类型块，不是字段
+    PORTRAIT_FIELDS = {"army", "navy", "civilian", "large", "small",
+                       "female", "undefined", "male"}
     TYPE_BLOCKS = {"corps_commander", "field_marshal", "navy_leader",
                    "country_leader", "advisor", "scientist", "operative",
                    "instance", "portraits"}
@@ -5425,6 +5450,7 @@ def _diag_schema_character(root):
             continue
         in_chars = False
         depth = 0
+        stack = [""]
         for i, ln in enumerate(lines, 1):
             st = ln.strip()
             if not st or st.startswith("#"):
@@ -5437,22 +5463,125 @@ def _diag_schema_character(root):
                     continue
                 depth += ln.count("{") - ln.count("}")
                 continue
-            # depth 1 = 人物 id，depth 2 = 字段
-            if depth == 2:
+            # depth 1 = 人物 id，2 = 人物体字段，3 = 类型块里的字段
+            if 2 <= depth <= 3:
+                # 找出当前在哪个块里，portraits 的字段是另一套
+                parent = ""
+                for k2 in range(len(stack) - 1, -1, -1):
+                    if stack[k2]:
+                        parent = stack[k2]
+                        break
                 m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*[=<>]', st)
                 if m:
                     f = m.group(1)
-                    if f not in allowed and f not in TYPE_BLOCKS:
+                    if parent == "portraits":
+                        ok = f in PORTRAIT_FIELDS
+                    elif parent in _SCHEMA_SKIP_BLOCKS:
+                        ok = True          # trigger / effect 块里不查
+                    else:
+                        ok = ((f in allowed) or (f in TYPE_BLOCKS)
+                              or (f in _SCHEMA_EXTRA)
+                              or f.startswith(_SCHEMA_EXTRA_PREFIX))
+                    if not ok:
                         out.append(_finding(
                             "schema.unknown_field", "warning",
-                            "%s 第 %d 行的字段 %s 不在 character 的规则定义里"
-                            % (fn, i, f),
+                            "%s 第 %d 行的字段 %s 不在 %s 的规则定义里"
+                            % (fn, i, f, "portraits" if parent == "portraits" else "character"),
                             rel, i, st,
                             "对照原版同类人物确认字段名"))
-            depth += ln.count("{") - ln.count("}")
+            # 维护块栈
+            opens = ln.count("{")
+            closes = ln.count("}")
+            if opens:
+                nm = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*[=<>]', st)
+                stack.append(nm.group(1) if nm else "")
+                for _ in range(opens - 1):
+                    stack.append("")
+            depth += opens - closes
+            while len(stack) > 1 and depth < len(stack):
+                stack.pop()
             if depth <= 0:
                 in_chars = False
                 depth = 0
+                stack = [""]
+    return out
+
+
+def _diag_schema_decision(root):
+    """common/decisions 里决议的字段名检查。
+
+    结构：`类别名 = { 决议id = { 字段 } }`，类别 id 在 depth 1，字段在 depth 2。
+    """
+    out = []
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return out
+    rules = _cwt_rules()
+    allowed = rules.get("decision")
+    if not allowed:
+        return out
+
+    dd = os.path.join(top, "common", "decisions")
+    if not os.path.isdir(dd):
+        return out
+    cat_dir = os.path.join(dd, "categories")
+
+    for fn in sorted(os.listdir(dd)):
+        if not fn.endswith(".txt"):
+            continue
+        p = os.path.join(dd, fn)
+        if not os.path.isfile(p):
+            continue
+        rel = "common/decisions/" + fn
+        try:
+            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+        except Exception:
+            continue
+        depth = 0
+        stack = [""]
+        for i, ln in enumerate(lines, 1):
+            st = ln.strip()
+            opens = ln.count("{")
+            closes = ln.count("}")
+            if not st or st.startswith("#"):
+                depth += opens - closes
+                while len(stack) > 1 and depth < len(stack):
+                    stack.pop()
+                continue
+            # depth 2 = 决议体的字段；trigger/effect 块里不查
+            if depth == 2:
+                parent = ""
+                for k2 in range(len(stack) - 1, -1, -1):
+                    if stack[k2]:
+                        parent = stack[k2]
+                        break
+                m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*[=<>]', st)
+                if m and parent not in _SCHEMA_SKIP_BLOCKS:
+                    f = m.group(1)
+                    if (f not in allowed and f not in _SCHEMA_EXTRA
+                            and not f.startswith(_SCHEMA_EXTRA_PREFIX)):
+                        out.append(_finding(
+                            "schema.unknown_field", "warning",
+                            "%s 第 %d 行的字段 %s 不在 decision 的规则定义里"
+                            % (fn, i, f),
+                            rel, i, st,
+                            "对照原版同类决议确认字段名"))
+            if opens:
+                nm = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*[=<>]', st)
+                stack.append(nm.group(1) if nm else "")
+                for _ in range(opens - 1):
+                    stack.append("")
+            depth += opens - closes
+            while len(stack) > 1 and depth < len(stack):
+                stack.pop()
+            if depth < 0:
+                depth = 0
+                stack = [""]
     return out
 
 
@@ -5466,7 +5595,8 @@ def diagnose(root=None):
                _diag_recruit_last_line, _diag_decision_category,
                _diag_character_unrecruited, _diag_localisation_missing,
                _diag_tag_def_missing, _diag_division_template_missing,
-               _diag_schema_unknown_field, _diag_schema_character):
+               _diag_schema_unknown_field, _diag_schema_character,
+               _diag_schema_decision):
         try:
             findings.extend(fn(root))
         except Exception:
