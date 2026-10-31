@@ -126,6 +126,35 @@ def from_geojson(path, width=1400, height=520, bbox=None, min_size=200,
 
 # ============ 真实地图 / 卫星图 ============
 
+def water_thickness(water, cap=24):
+    """每个水像素到最近非水像素的曼哈顿距离（迭代 BFS 近似）。
+
+    海很宽，距离值大；河只有 1-3 像素宽，距离值 ≤ 2。
+    """
+    dist = np.where(water, cap, 0).astype(np.int32)
+    for _ in range(cap):
+        nb = np.minimum.reduce([
+            np.roll(dist, 1, 0), np.roll(dist, -1, 0),
+            np.roll(dist, 1, 1), np.roll(dist, -1, 1)]) + 1
+        new = np.where(water, np.minimum(dist, nb), 0)
+        if (new == dist).all():
+            break
+        dist = new
+    return dist
+
+
+def thin_water(water, max_width=2):
+    """宽度 <= max_width 的水 = 河流。
+
+    河流常和海洋连成一块（河口），形态学分离不了——膨胀会把紧贴的河吞掉。
+    改用距离变换：细线的距离值小，大片水的距离值大。
+    """
+    if not water.any():
+        return np.zeros_like(water)
+    dist = water_thickness(water)
+    return water & (dist <= max_width)
+
+
 def from_terrain_map(path, width=None, height=None, n_provinces=None,
                      min_size=300, seed=9, water_blue=0.12):
     """从真实地图/卫星图生成。
@@ -155,11 +184,19 @@ def from_terrain_map(path, width=None, height=None, n_provinces=None,
     water = is_blue | deep
     land = ~water
 
+    # 河流要在去噪前提取：去噪的邻居投票会把 1-3 像素宽的细线当噪点抹掉。
+    # 河流常和海洋连成一块（河口），按连通块面积分不出来，用细线检测。
+    try:
+        rivers = thin_water(water, max_width=3)
+    except Exception:
+        rivers = np.zeros((h, w), dtype=bool)
+
     # 去掉陆地里零星的水点 / 去掉水里零星的陆点
     for _ in range(2):
         nb = (np.roll(land, 1, 0).astype(np.int8) + np.roll(land, -1, 0).astype(np.int8)
               + np.roll(land, 1, 1).astype(np.int8) + np.roll(land, -1, 1).astype(np.int8))
         land = np.where(nb >= 3, True, np.where(nb <= 1, False, land))
+    water_final = ~land
 
     if n_provinces is None:
         n_provinces = max(1, int(land.sum() / 6000))
@@ -200,4 +237,8 @@ def from_terrain_map(path, width=None, height=None, n_provinces=None,
     terrain[dark_brown] = 2
 
     labels = core.filter_small(labels, min_size)
-    return labels, labels > 0, terrain
+
+    # 河流只留落在陆地上的部分
+    rivers = rivers & (labels > 0)
+
+    return labels, labels > 0, terrain, rivers

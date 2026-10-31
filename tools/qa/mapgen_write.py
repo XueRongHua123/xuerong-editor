@@ -54,6 +54,73 @@ TERRAIN_SEA = 15       # (8,31,130)  深蓝
 TERRAIN_SNOW = 16      # (255,255,255) 白
 
 
+# rivers.bmp 的常用索引（实测自 HoI4 1.19）
+RIVER_LAND = 254      # (122,122,122) 陆地
+RIVER_SEA = 255       # (255,255,255) 海
+RIVER_MAIN = 3        # (0,225,255)   主流（青）
+RIVER_TRIB = 6        # (0,100,255)   支流（蓝）
+RIVER_SMALL = 4       # (0,200,255)   小溪
+RIVER_DEEP = 11       # (0,0,100)     深河
+
+
+def write_rivers(labels, rivers, path, palette_from=None):
+    """写 rivers.bmp。
+
+    labels  省图（0 = 海）
+    rivers  bool 数组，True = 河（可为 None 表示无河）
+    """
+    h, w = labels.shape
+    arr = np.full((h, w), RIVER_LAND, dtype=np.uint8)
+    arr[labels == 0] = RIVER_SEA
+    if rivers is not None and rivers.shape == labels.shape:
+        arr[rivers] = RIVER_MAIN
+    img = Image.fromarray(arr, "L").convert("P")
+    pal = _load_palette(palette_from)
+    if not pal:
+        pal = [0] * (256 * 3)
+        pal[RIVER_LAND*3:RIVER_LAND*3+3] = [122, 122, 122]
+        pal[RIVER_SEA*3:RIVER_SEA*3+3] = [255, 255, 255]
+        pal[RIVER_MAIN*3:RIVER_MAIN*3+3] = [0, 225, 255]
+        pal[RIVER_TRIB*3:RIVER_TRIB*3+3] = [0, 100, 255]
+        pal[RIVER_SMALL*3:RIVER_SMALL*3+3] = [0, 200, 255]
+        pal[RIVER_DEEP*3:RIVER_DEEP*3+3] = [0, 0, 100]
+    img.putpalette(pal)
+    img.save(path)
+
+
+def write_cities(labels, terrain_idx, path, palette_from=None):
+    """写 cities.bmp。
+
+    实测原版 cities.bmp 的调色板和 terrain.bmp 完全一样，
+    内容也基本是地形图的副本。这里直接按地形索引填。
+    """
+    h, w = labels.shape
+    if terrain_idx is not None and terrain_idx.shape == labels.shape:
+        arr = terrain_idx.astype(np.uint8).copy()
+    else:
+        arr = np.full((h, w), TERRAIN_PLAINS, dtype=np.uint8)
+        arr[labels == 0] = TERRAIN_SEA
+    img = Image.fromarray(arr, "L").convert("P")
+    pal = _load_palette(palette_from)
+    if not pal:
+        pal = [0] * (256 * 3)
+        pal[TERRAIN_PLAINS*3:TERRAIN_PLAINS*3+3] = [86, 124, 27]
+        pal[TERRAIN_SEA*3:TERRAIN_SEA*3+3] = [8, 31, 130]
+        pal[TERRAIN_HILLS*3:TERRAIN_HILLS*3+3] = [112, 74, 31]
+        pal[TERRAIN_FOREST*3:TERRAIN_FOREST*3+3] = [0, 86, 6]
+    img.putpalette(pal)
+    img.save(path)
+
+
+def _load_palette(palette_from):
+    if palette_from and os.path.isfile(palette_from):
+        try:
+            return Image.open(palette_from).getpalette()
+        except Exception:
+            return None
+    return None
+
+
 def write_terrain(labels, thint, path, palette_from=None):
     """按地形提示写 terrain.bmp。
 
