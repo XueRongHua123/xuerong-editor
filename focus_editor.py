@@ -4692,6 +4692,63 @@ def portrait_import(root, src_path, tag, cid=None, overwrite=False, small=False)
             "msg": "头像已导入：%s（%dx%d）" % (sprite, W, H)}
 
 
+def _oob_files(root, tag, kind="land"):
+    """读国家历史里点名要加载的 OOB 文件名（不含 .txt）。
+
+    HOI4 不扫描 history/units 目录，而是由 history/countries/<TAG> 里的
+    set_oob / oob / set_air_oob / set_naval_oob 逐条点名加载。
+    自己起个文件名写进去，游戏根本不会读。
+
+    同一个国家常有 DLC 分支（有/没有 Man the Guns 各一套），
+    返回全部，调用方对每个都追加才保险。
+    """
+    tag = (tag or "").strip().upper()
+    if not tag:
+        return []
+    keys = {
+        "land":  ("set_oob", "oob"),
+        "air":   ("set_air_oob", "air_oob"),
+        "naval": ("set_naval_oob", "naval_oob"),
+    }.get(kind) or ("set_oob", "oob")
+
+    hist = None
+    for b in reversed(mod_layers(root) or []):
+        if not b:
+            continue
+        hd = os.path.join(b, "history", "countries")
+        if not os.path.isdir(hd):
+            continue
+        for fn in sorted(os.listdir(hd)):
+            if fn.upper().startswith(tag + " ") and fn.endswith(".txt"):
+                hist = os.path.join(hd, fn)
+                break
+        if hist:
+            break
+    if not hist:
+        return []
+    try:
+        txt = io.open(hist, encoding="utf-8-sig", errors="replace").read()
+    except Exception:
+        return []
+
+    all_names = []
+    for k in keys:
+        for m in re.finditer(r'(?m)^\s*' + k + r'\s*=\s*"([^"]+)"', txt):
+            nm = m.group(1).strip()
+            if nm and nm not in all_names:
+                all_names.append(nm)
+    if not all_names:
+        return []
+    # 只保留和第一条同年份的：GER_1936 和 GER_1936_nsb 是一组（DLC 分支），
+    # GER_1939 是 1939 剧本的，改了没意义还会污染。
+    first = all_names[0]
+    yr = re.search(r'(\d{4})', first)
+    if not yr:
+        return [first]
+    y = yr.group(1)
+    return [n for n in all_names if y in n]
+
+
 GFX_KINDS = {
     "goal":  {"dir": "gfx/interface/goals",   "prefix": "GFX_goal_",   "label": "国策"},
     "idea":  {"dir": "gfx/interface/ideas",   "prefix": "GFX_idea_",   "label": "想法"},
@@ -5718,7 +5775,7 @@ def _dec_category_register(root, category, icon="GFX_decision_category_generic")
     return True, "已注册类别"
 
 
-def decision_add(root, did, category, icon="GFX_decision_generic", cost=50,
+def decision_add(root, did, category, icon="GFX_decision_category_generic", cost=50,
                  fire_only_once=True, effect="add_political_power = 50",
                  category_new=None):
     """新建一条决议。
@@ -7350,7 +7407,24 @@ def air_wing_add(root, province, name, eq_type, owner, amount=10, tag=None):
     os.makedirs(d, exist_ok=True)
 
     # 找现有的同 owner 文件里的 air_wings；没有就用 zz_air_wings.txt
-    dst = os.path.join(d, "%s_1936_zz_air.txt" % owner)
+    _oobs = _oob_files(root, owner, "air")
+    if _oobs:
+        dst = os.path.join(d, _oobs[0] + ".txt")
+        # 同名文件不能直接覆盖，先复制原版
+        if not os.path.exists(dst):
+            for b in reversed(mod_layers(tgt) or []):
+                if not b:
+                    continue
+                cand = os.path.join(b, "history", "units", _oobs[0] + ".txt")
+                if os.path.isfile(cand):
+                    try:
+                        import shutil as _sh6
+                        _sh6.copyfile(cand, dst)
+                    except Exception:
+                        pass
+                    break
+    else:
+        dst = os.path.join(d, "%s_1936_zz_air.txt" % owner)
     block = ('\t%d = {\n'
              '\t\tname = "%s"\n'
              '\t\t%s = {\n'
@@ -7933,9 +8007,23 @@ def template_add(name, unit, x=0, y=0, root=None, tag=None):
     d = os.path.join(tgt, "history", "units")
     os.makedirs(d, exist_ok=True)
     tag = (tag or "").strip().upper()
-    if tag:
-        # 文件名的国家前缀是 HOI4 判断模板归属的依据，
-        # 写成 zz_units.txt 的话游戏不知道这个模板属于谁，部队引用不到。
+    _oobs = _oob_files(root, tag, "land") if tag else []
+    if _oobs:
+        # 模板必须和部队进同一个被点名的 OOB 文件，自起文件名游戏不读
+        p = os.path.join(d, _oobs[0] + ".txt")
+        if not os.path.exists(p):
+            for b2 in reversed(mod_layers(tgt) or []):
+                if not b2:
+                    continue
+                cand = os.path.join(b2, "history", "units", _oobs[0] + ".txt")
+                if os.path.isfile(cand):
+                    try:
+                        import shutil as _sh7
+                        _sh7.copyfile(cand, p)
+                    except Exception:
+                        pass
+                    break
+    elif tag:
         p = os.path.join(d, "%s_1936_zz.txt" % tag)
     else:
         p = os.path.join(d, "zz_units.txt")
@@ -7994,7 +8082,25 @@ def unit_add(location, template, name=None, exp=None, eq=None, root=None, tag=No
     d = os.path.join(tgt, "history", "units")
     os.makedirs(d, exist_ok=True)
     tag = (tag or "").strip().upper()
-    if tag:
+    _oobs = _oob_files(root, tag, "land") if tag else []
+    if _oobs:
+        # 写进国家历史点名的那个 OOB 文件（DLC 分支可能有多个，每个都写）
+        p = os.path.join(d, _oobs[0] + ".txt")
+        # 这个文件名和原版同名，直接写会把原版几百支部队全覆盖掉。
+        # 先把原版那份复制过来，再往里面追加。
+        if not os.path.exists(p):
+            for b in reversed(mod_layers(tgt) or []):
+                if not b:
+                    continue
+                cand = os.path.join(b, "history", "units", _oobs[0] + ".txt")
+                if os.path.isfile(cand):
+                    try:
+                        import shutil as _sh4
+                        _sh4.copyfile(cand, p)
+                    except Exception:
+                        pass
+                    break
+    elif tag:
         p = os.path.join(d, "%s_1936_zz.txt" % tag)
     else:
         p = os.path.join(d, "zz_units.txt")
@@ -8036,6 +8142,40 @@ def unit_add(location, template, name=None, exp=None, eq=None, root=None, tag=No
 
     snapshot(p) if os.path.exists(p) else None
     io.open(p, "wb").write(_bom_for(p) + new_text.encode("utf-8"))
+    # 其它 DLC 分支的 OOB 也补一份，否则换 DLC 组合部队就没了
+    for _nm in _oobs[1:]:
+        _p2 = os.path.join(d, _nm + ".txt")
+        if not os.path.exists(_p2):
+            for b in reversed(mod_layers(tgt) or []):
+                if not b:
+                    continue
+                cand = os.path.join(b, "history", "units", _nm + ".txt")
+                if os.path.isfile(cand):
+                    try:
+                        import shutil as _sh5
+                        _sh5.copyfile(cand, _p2)
+                    except Exception:
+                        pass
+                    break
+        if os.path.exists(_p2):
+            _raw2 = io.open(_p2, encoding="utf-8-sig", errors="replace").read()
+        else:
+            _raw2 = "units = {\n}\n"
+        _t2 = _strip_keep_len(_raw2)
+        _um2 = re.search(r'(?m)^[ \t]*units[ \t]*=\s*\{', _t2)
+        if _um2:
+            _ub2 = _t2.find("{", _um2.end() - 1)
+            _ue2 = brace_match(_t2, _ub2)
+            if _ue2 > _ub2:
+                _new2 = _raw2[:_ue2 - 1] + block + _raw2[_ue2 - 1:]
+            else:
+                _new2 = _raw2.rstrip() + "\nunits = {\n" + block + "}\n"
+        else:
+            _new2 = _raw2.rstrip() + "\nunits = {\n" + block + "}\n"
+        if os.path.exists(_p2):
+            snapshot(_p2)
+        io.open(_p2, "wb").write(_bom_for(_p2) + _new2.encode("utf-8"))
+
     load_units(root, force=True)
     return {"ok": True, "file": os.path.relpath(p, tgt),
             "msg": "已在省 %d 布置 1 支 %s" % (location, template)}
@@ -13934,7 +14074,7 @@ def add_idea(root, oid):
         m = re.search(r'(?m)^\s*country\s*=\s*\{', text)
     b = text.find('{', m.start())
     e = brace_match(text, b)
-    block = "\n\t\t%s = {\n\t\t\tpicture = GFX_idea_generic\n\t\t\tmodifier = {\n\t\t\t}\n\t\t}\n" % oid
+    block = "\n\t\t%s = {\n\t\t\tpicture = GFX_idea_generic_army_war_college\n\t\t\tmodifier = {\n\t\t\t}\n\t\t}\n" % oid
     prefix = text[:e - 1].rstrip(" \t")
     newtext = prefix + "\n" + block + "\t" + text[e - 1:]
     backup(path)
