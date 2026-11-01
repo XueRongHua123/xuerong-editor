@@ -5503,6 +5503,102 @@ def _diag_replace_refs(root):
     return out
 
 
+def _diag_replace_stub(root):
+    """声明了 replace_path 的目录，这一层里到底有没有写东西。
+
+    2026-11-02 真机二分（46 轮）的结论固化成检查项：
+
+    * 目录被 replace 但本 mod 里为空 → 引擎在读一个空目录，等于这一类数据全没了
+    * 其中 **common/national_focus 没有 `default = yes` 的国策树 → 进游戏必崩**，
+      崩点在 `Loaded N provinces` 之后 1–2 秒，`error.log` 一个字都不写，
+      堆栈全是 PHYSFS_swapULE64（符号解析失败），从日志上完全看不出来。
+
+    三条对照：注释占位崩、只匹配本 tag 的树崩、带 `default = yes` 的树过。
+    """
+    out = []
+    layers = mod_layers(root) or [root] or []
+    seen = set()
+    for b in reversed(layers):
+        if not b:
+            continue
+        try:
+            decl = _mod_descriptor(b).get("replace") or []
+        except Exception:
+            continue
+        for sub in decl:
+            sub = (sub or "").strip().replace("\\", "/")
+            if not sub or sub in seen:
+                continue
+            seen.add(sub)
+            owner = b
+            try:
+                owner = _replace_owner(root, sub) or b
+            except Exception:
+                pass
+            d = os.path.join(owner, sub.replace("/", os.sep))
+            files = []
+            anyfile = []
+            if os.path.isdir(d):
+                anyfile = [f for f in os.listdir(d)
+                           if os.path.isfile(os.path.join(d, f))]
+                files = [f for f in anyfile if f.endswith(".txt")]
+            if not anyfile:
+                # 空目录本身不一定会崩：muvluvCN 就把 common/ai_equipment、
+                # common/bop 有意 replace 成空，游戏照常进。所以只报 warning，
+                # 只有「已知必崩」的目录才升级成 error。
+                hard = sub in ("common/national_focus", "history/states")
+                out.append(_finding(
+                    "replace.empty_dir", "error" if hard else "warning",
+                    "%s 被 replace_path 声明为「只从本 mod 读」，但这一层里是空的"
+                    " —— 游戏会读到一个空目录" % sub,
+                    "descriptor.mod", 0, 'replace_path="%s"' % sub,
+                    "删掉这条 replace_path（改为新增文件与原版合并），"
+                    "或往 %s/ 里放内容" % sub,
+                    {"kind": "replace_dangling", "sub": sub, "subs": [sub],
+                     "options": ["drop_replace", "ignore"]}))
+                continue
+            if not files and sub.startswith(("common/", "history/", "events")):
+                out.append(_finding(
+                    "replace.no_txt", "warning",
+                    "%s 被 replace_path 整体接管，但目录里没有 .txt，"
+                    "引擎读不到任何数据" % sub,
+                    "descriptor.mod", 0, 'replace_path="%s"' % sub,
+                    "确认这一类数据是不是真的不需要"))
+            if sub == "common/national_focus":
+                blob = ""
+                for f in files:
+                    try:
+                        blob += io.open(os.path.join(d, f), encoding="utf-8-sig",
+                                        errors="replace").read()
+                    except Exception:
+                        pass
+                if "default = yes" not in blob:
+                    out.append(_finding(
+                        "replace.focus_no_default", "error",
+                        "common/national_focus 被整体替换，但没有 default = yes 的"
+                        "国策树 —— 实测进游戏必崩，且 error.log 无任何记录",
+                        os.path.join("common", "national_focus", files[0]), 0,
+                        "缺少 default = yes",
+                        "写一棵带 default = yes 的树（qa/world_stubs.py 的 "
+                        "focus_tree_stub 可直接用），或撤销这条 replace_path"))
+            if sub == "common/ai_strategy":
+                for f in files:
+                    try:
+                        raw = io.open(os.path.join(d, f), encoding="utf-8-sig",
+                                      errors="replace").read()
+                    except Exception:
+                        continue
+                    if re.match(r'\s*ai_strategy\s*=\s*\{\s*\}', raw):
+                        out.append(_finding(
+                            "replace.ai_strategy_bare", "warning",
+                            "common/ai_strategy 里写了空的 `ai_strategy = { }`，"
+                            "引擎会把块名当成策略名，报 missing or empty enable trigger",
+                            os.path.join("common", "ai_strategy", f), 0,
+                            "ai_strategy = { }",
+                            "改成一条永不启用的具名策略（见 qa/world_stubs.py）"))
+    return out
+
+
 # ---------------- replace 断链的修复动作 ----------------
 #
 # 诊断只能把「replace 掉了 A，别处还在引用 A」列出来；真省时间的是在面板上直接点掉。
@@ -6590,7 +6686,7 @@ def diagnose(root=None):
                _diag_recruit_last_line, _diag_decision_category,
                _diag_character_unrecruited, _diag_localisation_missing,
                _diag_tag_def_missing, _diag_tag_undefined, _diag_replace_risk,
-               _diag_replace_refs,
+               _diag_replace_refs, _diag_replace_stub,
                _diag_division_template_missing,
                _diag_schema_unknown_field, _diag_schema_character,
                _diag_schema_decision, _diag_schema_ideas,
@@ -7143,6 +7239,7 @@ def world_create(out_dir, source="procedural", width=1024, height=512,
         return done()
     land.sort()
     made_states, first_state = 0, None
+    state_map = []          # [(州号, [省号...])]，补给图要用真实州号
     try:
         step_n = int(per_state) if int(per_state) > 0 else 8
     except Exception:
@@ -7156,8 +7253,10 @@ def world_create(out_dir, source="procedural", width=1024, height=512,
                          owner=tag)
         if r.get("ok"):
             made_states += 1
+            sid = r.get("id") or r.get("state") or made_states
+            state_map.append((sid, list(pids)))
             if first_state is None:
-                first_state = r.get("id") or r.get("state") or 1
+                first_state = sid
         elif "已经存在" not in (r.get("msg") or ""):
             steps.append({"step": "建州 %d" % (made_states + 1),
                           "ok": False, "msg": r.get("msg") or ""})
@@ -7195,6 +7294,36 @@ def world_create(out_dir, source="procedural", width=1024, height=512,
                                  countries=[tag]))
     except Exception as e:
         steps.append({"step": "剧本", "ok": False, "msg": str(e)})
+
+    # 9) 被 replace 的目录逐个补占位。
+    #    这一步是「能加载」和「能进游戏」的分界：descriptor 里 50 条 replace_path
+    #    声明了 50 个只从本 mod 读的目录，缺一个就有一个目录读空。
+    #    最要命的是 common/national_focus —— 没有 default = yes 的树必崩，
+    #    而且 error.log 一个字都不写（详见 qa/world_stubs.py 开头）。
+    try:
+        import sys as _sys
+        _qa = _qa_dir()
+        if _qa not in _sys.path:
+            _sys.path.insert(0, _qa)
+        import world_stubs
+        made = world_stubs.write_all(out_dir, tag)
+        bad = [p for p in world_stubs.check(out_dir, dirs=world_stubs.REPLACE_DIRS)
+               if p["level"] == "error"]
+        steps.append({"step": "目录占位", "ok": not bad,
+                      "msg": "%d 个目录" % len(made) if not bad
+                             else bad[0]["dir"] + "：" + bad[0]["msg"]})
+    except Exception as e:
+        steps.append({"step": "目录占位", "ok": False, "msg": str(e)})
+
+    # 10) 补给图：地图阶段不知道州号，这里按真实州号重写
+    #     （早期版本把省号写进了 states={}，5 个州的地图写出 207 个州号）
+    try:
+        import mapgen_write as _mgw
+        n_sa = _mgw.write_supply_graph(os.path.join(out_dir, "map"), state_map)
+        steps.append({"step": "补给图", "ok": n_sa > 0,
+                      "msg": "%d 个补给区 / %d 个补给节点" % (n_sa, len(state_map))})
+    except Exception as e:
+        steps.append({"step": "补给图", "ok": False, "msg": str(e)})
 
     return done({"provinces": len(land), "states": made_states, "tag": tag})
 

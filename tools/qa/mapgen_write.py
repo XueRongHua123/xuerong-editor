@@ -501,8 +501,54 @@ def write_strategic_regions(out_root, labels, groups=None, per_region=60):
     return made
 
 
+def write_supply_graph(map_dir, states, per_area=60):
+    """按**真实州号**重写补给区与补给节点。
+
+    为什么必须单独一步
+    ------------------
+    `map/supplyareas/*.txt` 的 `states = { }` 要的是**州号**，而州是在
+    history/states 里才建的。地图生成阶段还不知道州号，早期版本就把省号抄了进去
+    （实测 5 个州的地图写出 1..207 的州号，其中 202 个不存在），
+    `map/supply_nodes.txt` 也一直是 0 字节。
+
+    这两处不会让游戏崩（实测能过），但补给图是空的：部队开局立刻缺补给。
+    所以等地建完州之后再回来重写一次。
+
+    states: [(state_id, [province_id, ...]), ...]
+    """
+    d = os.path.join(map_dir, "supplyareas")
+    _ensure(d)
+    for fn in os.listdir(d):
+        if fn.endswith(".txt"):
+            os.remove(os.path.join(d, fn))
+    states = [(int(s), list(p)) for s, p in states if p]
+    if not states:
+        return 0
+    made = 0
+    sid = 1
+    for i in range(0, len(states), per_area):
+        chunk = states[i:i + per_area]
+        body = ("supply_area={\n\tid=%d\n\tname=\"SUPPLYAREA_%d\"\n\tvalue=%d\n"
+                "\tstates={\n%s\t}\n}\n") % (
+            sid, sid, max(3, len(chunk)),
+            "".join("\t\t%d\n" % s for s, _p in chunk))
+        io.open(os.path.join(d, "%d-SupplyArea.txt" % sid), "w", encoding="utf-8",
+                newline="").write(body)
+        made += 1
+        sid += 1
+    # 补给节点：原版格式是每行「州号 省号」，一个州至少一个节点
+    nodes = "".join("%d %d \n" % (s, p[0]) for s, p in states)
+    io.open(os.path.join(map_dir, "supply_nodes.txt"), "w", encoding="utf-8",
+            newline="").write(nodes)
+    return made
+
+
 def write_supply_areas(out_root, labels, groups=None, per_area=120):
-    """写补给区。groups 给了就按地理聚类分组。"""
+    """写补给区。groups 给了就按地理聚类分组。
+
+    注意：这里写的是**省号**，只在没有建州（纯地图预览）时才能用。
+    走 scaffold / world_create 时会被 write_supply_graph 覆盖成正确州号。
+    """
     d = os.path.join(out_root, "supplyareas")
     _ensure(d)
     n = int(labels.max())

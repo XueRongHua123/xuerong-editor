@@ -22,38 +22,18 @@ def _w(path, text):
 
 
 # 换掉地图就等于换掉了省的数量和编号，所有「按省 id / 州 id 引用」的原版数据都会指错。
-# 下面这些目录必须一起 replace 掉，否则游戏在加载期就会因为 invalid state id 崩溃。
-# 顺序无关，但少一个都不行。
-REPLACE_DIRS = (
-    # 参考 East Showdown（创意工坊 2948642461）的做法：
-    # 换地图等于换省号/州号，凡是「按 id 引用」的目录都得一起替换，
-    # 否则原版数据会指向不存在的省/州，加载期直接崩。
-    #
-    # 注意：不替换整个 "map"。provinces.bmp / definition.csv / heightmap.bmp
-    # 这些用同名文件覆盖就生效；但 strategicregions 和 supplyareas 原版有几百个
-    # 文件，不替换会和我们的混在一起，所以这两条子目录必须 replace。
-    "map/strategicregions",
-    "map/supplyareas",
-    "history/states",
-    "history/countries",
-    "history/units",
-    # AI 策略里到处是 state = 123 这种硬引用，替换成空目录，
-    # 让 AI 退回默认行为，也好过引用不存在的州
-    "common/ai_strategy",
-    "common/ai_strategy_plans",
-    "common/ai_areas",
-    "common/ai_war_goals",
-    "common/ai_templates",
-    "common/ai_equipment",
-    "common/ai_focuses",
-    # 剧本入口由我们自己生成
-    "common/bookmarks",
-    # 注意：common/country_tags 不能 replace。
-    # 原版 383 个 tag 的 trigger / effect（形如 `GER = { ... }`）全靠它求值；
-    # 整目录替换后，原版国策、事件、脚本里的 tag 引用一律变成
-    # "Unknown trigger-type: GER"，实测 58762 行 error.log 里九成是这个。
-    # 自己的 tag 用新增文件 zz_editor_tags.txt 合并进去即可。
-)
+# 这 50 条目录必须一起 replace 掉，否则游戏在加载期就会崩。
+# 清单与占位内容统一放在 qa/world_stubs.py（那边有逐条理由与真机验证记录）。
+try:
+    import world_stubs
+except Exception:                                    # 被当包导入时包路径不同
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import world_stubs
+
+REPLACE_DIRS = world_stubs.REPLACE_DIRS
+
+
 
 
 
@@ -129,20 +109,23 @@ def write_country_history(mod_dir, tag="ZZZ"):
 
 
 def write_states(mod_dir, labels, tag="ZZZ", per_state=8, capital_province=1,
-                 sea_ids=None):
+                 sea_ids=None, with_map=False):
     """按省 id 顺序每 per_state 个切一个州。
 
     每个州必须有：id / name / manpower / state_category / provinces / local_supplies /
     history 里的 owner。缺一个游戏都起不来。
+
+    with_map=True 时返回 (州数, [(州号, [省号...])])，给补给图用。
     """
     n = int(labels.max())
     if n == 0:
-        return 0
+        return (0, []) if with_map else 0
     seas = set(int(x) for x in (sea_ids or ()))
     # 海省绝不能进 state：州里出现 sea 省，游戏会在地图加载期报错退出
     land_ids = [i for i in range(1, n + 1) if i not in seas]
     n_states = 0
     sid = 1
+    mapping = []
     for start in range(0, len(land_ids), per_state):
         pids = land_ids[start:start + per_state]
         if not pids:
@@ -172,9 +155,10 @@ def write_states(mod_dir, labels, tag="ZZZ", per_state=8, capital_province=1,
         body.append("}")
         _w(os.path.join(mod_dir, "history", "states", "%d-%s.txt" % (sid, name)),
            "\n".join(body) + "\n")
+        mapping.append((sid, list(pids)))
         n_states += 1
         sid += 1
-    return n_states
+    return (n_states, mapping) if with_map else n_states
 
 
 def write_units(mod_dir, tag="ZZZ", provinces=()):
@@ -236,6 +220,9 @@ def write_bookmarks(mod_dir, name="雪绒战役", tag="ZZZ", date="1936.1.1.12")
 def write_ai_stubs(mod_dir, tag="ZZZ"):
     """被 replace 掉的 AI 目录里塞一个占位文件。
 
+    **已被 qa/world_stubs.py 取代**，保留只为兼容老脚本调用。
+    新代码请用 world_stubs.write_all（清单更全，且带 national_focus 的默认树）。
+
     目录整个被卸载后如果连文件都没有，不同版本表现不一样。
 
     ai_strategy 不能写 `ai_strategy = { }`：那样引擎会把块名当成策略名，
@@ -292,15 +279,16 @@ def build(mod_dir, labels, mod_name="雪绒地图测试", tag="ZZZ", per_state=8
     made.append("common/countries/%s.txt" % tag)
     write_country_history(mod_dir, tag)
     made.append("history/countries/%s - Test.txt" % tag)
-    ns = write_states(mod_dir, labels, tag, per_state, sea_ids=sea_ids)
+    ns, smap = write_states(mod_dir, labels, tag, per_state, sea_ids=sea_ids,
+                            with_map=True)
     made.append("history/states/ × %d" % ns)
     write_localisation(mod_dir, mod_name)
     made.append("localisation/")
 
-    # 按 East Showdown 的路子补齐：OOB / 剧本 / AI 占位
+    # 按 East Showdown 的路子补齐：OOB / 剧本 / 各目录占位
     try:
-        # 拿第一个省的 id 给开局部队用
-        first_prov = 1
+        # 开局部队放在第一个州的第一块地上（不能写死 1：省 1 可能是海）
+        first_prov = smap[0][1][0] if smap and smap[0][1] else 1
         made.append(write_units(mod_dir, tag, [first_prov]))
     except Exception:
         pass
@@ -308,10 +296,24 @@ def build(mod_dir, labels, mod_name="雪绒地图测试", tag="ZZZ", per_state=8
         made.append(write_bookmarks(mod_dir, mod_name, tag))
     except Exception:
         pass
+    # 被 replace 的每个目录都必须有东西，尤其 national_focus 要带 default = yes
     try:
-        made.extend(write_ai_stubs(mod_dir, tag))
+        made.extend(world_stubs.write_all(mod_dir, tag))
+    except Exception as e:
+        return {"ok": False, "states": ns, "made": made,
+                "msg": "写占位失败：%s" % e}
+    # 补给区/补给节点要按真实州号写，必须等地建完
+    try:
+        import mapgen_write as _mgw
+        _mgw.write_supply_graph(os.path.join(mod_dir, "map"), smap)
+        made.append("map/supplyareas + supply_nodes.txt")
     except Exception:
         pass
 
-    return {"ok": True, "states": ns, "made": made,
-            "msg": "骨架完成：%d 个州（含 OOB / 剧本 / AI 占位）" % ns}
+    problems = world_stubs.check(mod_dir, dirs=REPLACE_DIRS)
+    fatal = [p for p in problems if p["level"] == "error"]
+    return {"ok": not fatal, "states": ns, "made": made,
+            "problems": problems,
+            "msg": ("骨架完成：%d 个州（占位 %d 个目录）" % (ns, len(REPLACE_DIRS)))
+                   if not fatal else
+                   ("骨架有 %d 处硬伤：%s" % (len(fatal), fatal[0]["dir"]))}

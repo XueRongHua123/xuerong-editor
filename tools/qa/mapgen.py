@@ -240,8 +240,14 @@ def generate(source="procedural", out_dir=None, width=1024, height=512,
     r = mgw.write_strategic_regions(map_dir, labels, gr)
     say("  %d 个战略区" % r)
     say("生成补给区…")
-    sup = mgw.write_supply_areas(map_dir, labels, gs)
-    say("  %d 个补给区" % sup)
+    if scaffold:
+        # 州还没建，写不出正确的州号；等 scaffold 建完州会用
+        # write_supply_graph 按真实州号重写补给区和 supply_nodes.txt
+        say("  跳过（交给 scaffold 按真实州号重写）")
+        sup = 0
+    else:
+        sup = mgw.write_supply_areas(map_dir, labels, gs)
+        say("  %d 个补给区（省号占位，仅供地图预览）" % sup)
 
     meta = {"source": source, "width": size[0], "height": size[1],
             "provinces": n, "seed": seed,
