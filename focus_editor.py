@@ -4096,29 +4096,40 @@ def adopt_dir(mod_root, sub, force=False):
     sub = (sub or "").replace("\\", "/").strip("/")
     if not sub:
         return {"ok": False, "msg": "目录名不能为空"}
+    # 顶层桶目录（common / history / gfx…）不能整目录接管：原版 common 有 2267 个
+    # 文件，搬进来再写 replace_path="common"，等于把整个游戏数据换成一份残缺副本，
+    # 加载期直接崩。这类目录要改只能逐个文件接管。
+    if "/" not in sub:
+        return {"ok": False,
+                "msg": "%s 是顶层目录，整目录接管会把几千个文件搬进 mod 并写 "
+                       "replace_path=\"%s\"，等于换掉整个 %s；请改用单文件接管或撤销 replace"
+                       % (sub, sub, sub)}
 
-    # 目标必须是链顶（自己可写的那层），不能是原版
-    top = None
-    for r in (ROOTS or []):
-        lay = mod_layers(r) or [r]
-        cand = lay[-1] if lay else r
-        if cand and not is_under_game(cand):
-            top = cand
-    if not top:
+    # 目标必须是链顶（自己可写的那层），不能是原版。
+    # 用 _top_mod 而不是只查 ROOTS：脚本调用（world_create 编排、qa 脚本）时
+    # ROOTS 是空的，只查 ROOTS 会误报「找不到可写的 mod 目录」。
+    top = _top_mod(mod_root)
+    if not top or is_under_game(top):
         return {"ok": False, "msg": "找不到可写的 mod 目录"}
     if mod_root and os.path.abspath(mod_root) != os.path.abspath(top):
         return {"ok": False, "msg": "只能对当前加载的最上层 mod 操作"}
 
     layers = mod_layers(top) or [top]
-    # 源：当前生效的那一层（有 replace_path 就取接管层，否则取链里最后有的）
+    # 源：当前生效的那一层（有 replace_path 就取接管层，否则取链里最后有的）。
+    # 一定要跳过 top 自己：把自己拷给自己会抛 SameFileError 被吞掉，
+    # 结果是「拷贝 0 个文件」却照样写了 replace_path，看起来成功实则什么都没做。
     src = _replace_owner(top, sub)
+    if src and os.path.abspath(src) == os.path.abspath(top):
+        src = None
     if not src:
         for b in reversed(layers):
-            if b and os.path.isdir(os.path.join(b, sub.replace("/", os.sep))):
+            if not b or os.path.abspath(b) == os.path.abspath(top):
+                continue
+            if os.path.isdir(os.path.join(b, sub.replace("/", os.sep))):
                 src = b
                 break
     if not src:
-        return {"ok": False, "msg": "叠加链里找不到 %s" % sub}
+        return {"ok": False, "msg": "叠加链里找不到 %s（父层和原版都没有这个目录）" % sub}
 
     src_d = os.path.join(src, sub.replace("/", os.sep))
     dst_d = os.path.join(top, sub.replace("/", os.sep))
@@ -4768,10 +4779,23 @@ def portrait_import(root, src_path, tag, cid=None, overwrite=False, small=False)
 #   msg       给人看的一句话
 #   repair    怎么改，能自动修的填路由名
 
-def _finding(code, severity, msg, file="", line=0, excerpt="", repair=""):
+def _finding(code, severity, msg, file="", line=0, excerpt="", repair="", fix=None):
+    """一条诊断结果。
+
+    fix 非空表示这条 finding 有可执行的动作（诊断面板会渲染成按钮）：
+
+        {"kind": "replace_dangling",        动作类型
+         "sub": "common/ideas",             出问题的目录（被 replace 掉的那个）
+         "subs": ["common/ideas", ...],     同一行里涉及的多个被 replace 目录
+         "ref_dir": "common/achievements",  引用方目录（已去掉 vanilla/ 前缀）
+         "options": ["drop_replace", "adopt_ref_dir", "ignore"]}
+
+    空 dict 和不传等价，前端按「没有按钮」处理。
+    """
     return {"code": code, "severity": severity, "msg": msg,
             "file": file, "line": line or 0,
-            "excerpt": (excerpt or "").strip()[:200], "repair": repair}
+            "excerpt": (excerpt or "").strip()[:200], "repair": repair,
+            "fix": fix or {}}
 
 
 def _diag_oob_not_referenced(root):
@@ -5393,6 +5417,7 @@ def _diag_replace_refs(root):
     # 只看本 mod 自己的文件会一条都报不出来。
     hits = {}
     scanned = []
+    ignored = _replace_ignored(root)
     for layer in layers:
         if not layer or not os.path.isdir(layer):
             continue
@@ -5434,14 +5459,41 @@ def _diag_replace_refs(root):
     for gkey in sorted(hits):
         items = hits[gkey]
         subs = sorted({(i[0], i[1]) for i in items})
+        sub_list = [s[0] for s in subs]
         first = items[0]
+        ref_dir = _replace_ref_dir(first[4])
+        # 用户点过「忽略」的组合不再提示：这些引用确认不会被执行到。
+        if _replace_ignore_key(root, sub_list, ref_dir, gkey) in ignored:
+            continue
         desc = "、".join("%s(%s)" % (lb, sb) for sb, lb in subs)
+        # 「接管」只对真正的子目录开放：common/achievements.txt 这种直接在
+        # common/ 根下的文件，分组键会折成 common，接管它等于把整个原版 common
+        # （实测 2267 个文件）搬进 mod 再 replace_path="common"，直接把工程炸掉。
+        opts = ["drop_replace"]
+        note = ""
+        if "/" in ref_dir:
+            why = _replace_adopt_block(ref_dir)
+            if why:
+                note = why
+            else:
+                opts.append("adopt_ref_dir")
+        else:
+            note = ("引用方是 %s 根目录下的单个文件，接管整个 %s 代价太大，"
+                    "只能撤销 replace 或忽略" % (ref_dir or "mod", ref_dir or "mod"))
+        opts.append("ignore")
         out.append(_finding(
             "replace.dangling_refs", "error",
             "这个目录下有 %d 处引用已被 replace 替换掉的 %s，加载期会报 Invalid / Unknown；"
             "首个是 %s 第 %d 行的 %s" % (len(items), desc, first[4], first[3], first[2]),
             first[4], first[3], first[2],
-            "要么去掉对应的 replace_path，要么把这个目录也一并替换并自行提供内容"))
+            "要么去掉对应的 replace_path，要么把这个目录也一并替换并自行提供内容",
+            fix={"kind": "replace_dangling",
+                 "sub": sub_list[0] if sub_list else "",
+                 "subs": sub_list,
+                 "ref_dir": ref_dir,
+                 "group": gkey,
+                 "note": note,
+                 "options": opts}))
         if len(out) >= 40:
             out.append(_finding(
                 "replace.dangling_refs.more", "info",
@@ -5450,6 +5502,297 @@ def _diag_replace_refs(root):
             break
     return out
 
+
+# ---------------- replace 断链的修复动作 ----------------
+#
+# 诊断只能把「replace 掉了 A，别处还在引用 A」列出来；真省时间的是在面板上直接点掉。
+# 对一条 replace.dangling_refs 有三个动作：
+#
+#   撤销 replace   从 descriptor.mod 删掉那条 replace_path（推荐，最省事）
+#   接管该目录     把引用方整个拷进本 mod 并 replace，之后改自己的副本
+#   忽略           确认这些引用不会被执行到，不再提示
+#
+# 为什么「接管」也要做：换地图时原版目录里按省号/州号写的引用全部失效，
+# 必须整体替换，这时「撤销 replace」不成立，只能连引用方一起接管。
+
+# 这几类目录整体替换后游戏直接起不来（实测，见 DEV_LESSONS 里 replace_path 那条）：
+# 只允许「撤销 replace」，不允许接管。
+_REPLACE_NEVER_ADOPT = (
+    ("music", "纯资源目录，换空后引擎报 Could not find music named maintheme"),
+    ("gfx/flags", "所有旗帜 sprite 失效"),
+    ("gfx/portraits", "所有人像贴图失效"),
+    ("portraits", "所有人像贴图失效"),
+    ("gfx/loadingscreens", "读盘图缺失"),
+    ("common/units", "师团模板与 OOB 全部失效"),
+    ("common/technologies", "set_technology 与科技树全部失效"),
+    ("common/country_tags", "整目录替换后原版 383 个 tag 全部失效"),
+)
+
+_REPLACE_IGNORE_FILE = os.path.join(WORK, "cache", "replace_ignore.json")
+
+
+def _replace_norm(sub):
+    return (sub or "").replace("\\", "/").strip("/").lower()
+
+
+def _replace_ref_dir(rel):
+    """把诊断里的 file（可能带 vanilla/ 前缀）折成引用方目录。
+
+    'vanilla/common/achievements/x.txt' -> 'common/achievements'
+    'common/achievements.txt'           -> 'common'
+    'achievements.txt'                  -> ''
+    """
+    rel = (rel or "").replace("\\", "/").lstrip("/")
+    if rel.startswith("vanilla/"):
+        rel = rel[len("vanilla/"):]
+    return rel.rsplit("/", 1)[0] if "/" in rel else ""
+
+
+def _replace_adopt_block(sub):
+    """这个目录能不能接管：能返回空串，不能返回原因。"""
+    n = _replace_norm(sub)
+    if not n:
+        return "目录名为空"
+    for k, why in _REPLACE_NEVER_ADOPT:
+        if n == k or n.startswith(k + "/"):
+            return "%s 不能接管（%s）" % (sub, why)
+    return ""
+
+
+def _replace_ignore_all():
+    try:
+        data = json.loads(io.open(_REPLACE_IGNORE_FILE, encoding="utf-8",
+                                  errors="replace").read())
+        return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _replace_ignore_key(root, subs, ref_dir, group=""):
+    """忽略项的唯一键：同一个 mod 里，「同一组被 replace 目录 + 同一个引用方分组」。
+
+    键里带 root 是因为不同 mod 到处都有 common/decisions 这种同名目录，
+    A mod 里确认过的忽略不该顺手把 B mod 的同名问题也屏蔽掉。
+
+    group 是诊断里的原始分组键（可能带 vanilla/ 前缀）。必须带上它而不是只用
+    ref_dir：vanilla/common/ai_strategy 和本 mod 自己的 common/ai_strategy 折出来
+    的 ref_dir 是同一个，只用 ref_dir 会把两条互不相干的分组一起按掉。
+    """
+    base = os.path.abspath(root or "").replace("\\", "/").lower()
+    ss = ",".join(sorted({_replace_norm(s) for s in (subs or []) if _replace_norm(s)}))
+    tail = (group or ref_dir or "").replace("\\", "/").lower()
+    return "%s|%s|%s" % (base, ss, tail)
+
+
+def _replace_ignored(root):
+    return {x.get("key") for x in _replace_ignore_all() if x.get("key")}
+
+
+def replace_ignore(root, sub="", ref_dir="", subs=None, group="", remove=False):
+    """把一条 replace.dangling_refs 标记为已知问题，不再提示。
+
+    记录只存在本地（work/cache/replace_ignore.json），不写进 mod，
+    也不改变游戏行为——它只让诊断闭嘴。remove=True 是恢复提示。
+    """
+    root = _map_pick(root) if root else (ROOTS[-1] if ROOTS else None)
+    if not root:
+        return {"ok": False, "msg": "没有打开的 mod"}
+    ss = list(subs) if isinstance(subs, (list, tuple, set)) and subs else [sub]
+    key = _replace_ignore_key(root, ss, ref_dir, group)
+    if not _replace_norm(ref_dir) and not any(_replace_norm(x) for x in ss):
+        return {"ok": False, "msg": "参数不完整"}
+    data = _replace_ignore_all()
+    kept = [x for x in data if x.get("key") != key]
+    if remove:
+        changed = len(kept) != len(data)
+        msg = "已恢复这条提示" if changed else "这条本来就没有被忽略"
+        data = kept
+    else:
+        msg = "已标记为已知问题，不再提示"
+        data = kept + [{"key": key, "root": os.path.abspath(root),
+                        "subs": sorted({_replace_norm(x) for x in ss if _replace_norm(x)}),
+                        "ref_dir": _replace_norm(ref_dir),
+                        "group": (group or "").replace("\\", "/")}]
+    try:
+        os.makedirs(os.path.dirname(_REPLACE_IGNORE_FILE), exist_ok=True)
+        _atomic_write(_REPLACE_IGNORE_FILE,
+                      json.dumps(data, ensure_ascii=False, indent=1).encode("utf-8"))
+    except Exception as e:
+        return {"ok": False, "msg": "忽略记录写入失败：%s" % e}
+    return {"ok": True, "msg": msg, "key": key, "count": len(data)}
+
+
+def _invalidate_layers():
+    """改完 descriptor.mod 必须清两级缓存。
+
+    _LAYERS_CACHE 管「叠加链是哪几层」，_DESC_CACHE 管「这一层的 replace_path 有哪些」。
+    只清前者的话 _replace_owner 还拿旧的 replace 列表判断，撤销了也照旧报危险目录。
+    """
+    for _c in (_LAYERS_CACHE, _DESC_CACHE):
+        try:
+            _c.clear()
+        except Exception:
+            pass
+
+
+def replace_drop(root, sub):
+    """从 descriptor.mod 删掉一条 replace_path。
+
+    只动本 mod（链顶）自己的 descriptor，父 mod 和原版一行不碰：
+    父 mod 声明的 replace_path 是那边的意图，改它等于替别人的工程做决定。
+    返回 {"ok", "msg", "removed"}。
+    """
+    sub = (sub or "").replace("\\", "/").strip("/")
+    if not sub:
+        return {"ok": False, "msg": "目录名不能为空", "removed": 0}
+    root = _map_pick(root) if root else (ROOTS[-1] if ROOTS else None)
+    top = _top_mod(root)
+    if not top or is_under_game(top):
+        return {"ok": False, "msg": "找不到可写的 mod 目录", "removed": 0}
+    desc_path = os.path.join(top, "descriptor.mod")
+    if not os.path.exists(desc_path):
+        return {"ok": False, "removed": 0,
+                "msg": "%s 里没有 descriptor.mod" % (os.path.basename(top.rstrip("\\/")) or top)}
+
+    owner = _replace_owner(top, sub)
+    if owner and os.path.abspath(owner) != os.path.abspath(top):
+        return {"ok": False, "removed": 0,
+                "msg": "replace_path=\"%s\" 是上一层 mod（%s）声明的，本 mod 删不掉；"
+                       "要去那边改，或者改用接管" % (
+                           sub, os.path.basename(owner.rstrip("\\/")) or owner)}
+
+    try:
+        raw = io.open(desc_path, "rb").read()
+    except Exception as e:
+        return {"ok": False, "msg": "读 descriptor.mod 失败：%s" % e, "removed": 0}
+    has_bom = raw.startswith(b"\xef\xbb\xbf")
+    try:
+        text = raw.decode("utf-8-sig")
+    except Exception:
+        text = raw.decode("utf-8", "replace")
+
+    target = _replace_norm(sub)
+    pat = re.compile(r'^\s*replace_path\s*=\s*"([^"]*)"', re.I)
+    keep, removed = [], 0
+    # splitlines(True) 保留原行尾，CRLF 的 descriptor 改完还是 CRLF
+    for ln in text.splitlines(True):
+        m = pat.match(ln)
+        if m and _replace_norm(m.group(1)) == target:
+            removed += 1
+            continue
+        keep.append(ln)
+
+    if not removed:
+        return {"ok": True, "removed": 0, "descriptor": desc_path,
+                "msg": "descriptor.mod 里已经没有 replace_path=\"%s\"，无需撤销" % sub}
+
+    try:
+        snapshot(desc_path)
+        _atomic_write(desc_path,
+                      (b"\xef\xbb\xbf" if has_bom else b"") + "".join(keep).encode("utf-8"))
+    except Exception as e:
+        return {"ok": False, "msg": "写 descriptor.mod 失败：%s" % e, "removed": 0}
+
+    _invalidate_layers()
+    try:
+        reload_data()
+    except Exception:
+        pass
+
+    msg = "已从 descriptor.mod 删掉 replace_path=\"%s\"" % sub
+    still = _replace_owner(top, sub)
+    if still:
+        msg += "；但 %s 的 descriptor 也声明了这条，仍然生效" % (
+            os.path.basename(still.rstrip("\\/")) or still)
+    return {"ok": True, "removed": removed, "descriptor": desc_path, "msg": msg}
+
+
+def replace_fix_all(root, kind="drop_replace", subs=None, force=False):
+    """对 replace 断链做批量修复。
+
+    kind:
+      "drop_replace"  —— 对每个危险目录，删掉它的 replace_path
+      "adopt_ref_dir" —— 对每个危险目录，把引用方目录接管进本 mod
+
+    subs: 只处理这些目录（被 replace 的目录名，或引用方目录名都认），None 表示全部
+    force: 接管时允许覆盖本 mod 里已有的同名文件（界面上已 confirm 过）
+
+    返回 {"ok", "kind", "done": [{sub, action, ok, msg}], "left": 剩余危险目录数, "msg"}
+    """
+    root = _map_pick(root) if root else (ROOTS[-1] if ROOTS else None)
+    if not root:
+        return {"ok": False, "msg": "没有打开的 mod", "done": [], "left": 0}
+    kind = kind if kind in ("drop_replace", "adopt_ref_dir") else "drop_replace"
+
+    want = set()
+    if subs:
+        if isinstance(subs, str):
+            subs = [subs]
+        want = {_replace_norm(s) for s in subs if _replace_norm(s)}
+
+    findings = [f for f in _diag_replace_refs(root)
+                if f.get("code") == "replace.dangling_refs" and (f.get("fix") or {})]
+    if not findings:
+        return {"ok": True, "kind": kind, "done": [], "left": 0,
+                "msg": "没有需要处理的 replace 断链"}
+
+    top = _top_mod(root)
+    done, seen = [], set()
+    for f in findings:
+        fx = f["fix"]
+        fsubs = [s for s in (fx.get("subs") or [fx.get("sub") or ""]) if s]
+        ref = fx.get("ref_dir") or ""
+        if want and not (want & {_replace_norm(s) for s in fsubs} or _replace_norm(ref) in want):
+            continue
+        if kind == "drop_replace":
+            targets = fsubs
+        else:
+            # 不是每个分组都能接管：选项里没有 adopt_ref_dir 的（顶层桶目录、
+            # music/units/country_tags 这类禁做目录）直接跳过，别硬搬。
+            targets = [ref] if ref and "adopt_ref_dir" in (fx.get("options") or []) else []
+        for t in targets:
+            key = "drop:" + _replace_norm(t) if kind == "drop_replace" else "adopt:" + _replace_norm(t)
+            if key in seen:          # 多个目录引用同一个被 replace 目录时只处理一次
+                continue
+            seen.add(key)
+            if kind == "drop_replace":
+                r = replace_drop(root, t)
+                done.append({"sub": t, "action": "drop_replace",
+                             "ok": bool(r.get("ok")), "msg": r.get("msg") or ""})
+            else:
+                why = _replace_adopt_block(t)
+                if why:
+                    done.append({"sub": t, "action": "adopt_ref_dir",
+                                 "ok": False, "msg": why})
+                    continue
+                r = adopt_dir(top, t, force=bool(force))
+                done.append({"sub": t, "action": "adopt_ref_dir",
+                             "ok": bool(r.get("ok")),
+                             "msg": r.get("msg") or "",
+                             "copied": r.get("copied", 0)})
+
+    ok_n = len([d for d in done if d["ok"]])
+    if kind == "drop_replace":
+        msg = "撤销 %d 条 replace_path" % ok_n
+    else:
+        copied = sum(int(d.get("copied") or 0) for d in done if d["ok"])
+        msg = "接管 %d 个目录，拷贝 %d 个文件" % (ok_n, copied)
+    if len(done) > ok_n:
+        msg += "；%d 条未成功（原因见列表）" % (len(done) - ok_n)
+
+    # 全部做完再看还剩多少：不能拿旧清单算，撤销一条会连带别的条目一起消失
+    left = 0
+    if done:
+        try:
+            left = len([f for f in _diag_replace_refs(root)
+                        if f.get("code") == "replace.dangling_refs"])
+        except Exception:
+            left = 0
+        msg += "，剩余 %d 个危险目录" % left
+    else:
+        left = len(findings)
+        msg = "没有匹配到要处理的目录"
+    return {"ok": True, "kind": kind, "done": done, "left": left, "msg": msg}
 
 
 def _diag_tag_undefined(root):
@@ -17538,6 +17881,22 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path == "/api/adopt_dir":
             self._send(adopt_dir(body.get("root"), body.get("sub"),
                                  bool(body.get("force"))))
+        elif self.path == "/api/replace_drop":
+            self._send(replace_drop(body.get("root") or None, body.get("sub") or ""))
+        elif self.path == "/api/replace_fix_all":
+            self._send(replace_fix_all(
+                body.get("root") or None,
+                kind=body.get("kind") or "drop_replace",
+                subs=body.get("subs") or None,
+                force=bool(body.get("force"))))
+        elif self.path == "/api/replace_ignore":
+            self._send(replace_ignore(
+                body.get("root") or None,
+                sub=body.get("sub") or "",
+                ref_dir=body.get("ref_dir") or "",
+                subs=body.get("subs") or None,
+                group=body.get("group") or "",
+                remove=bool(body.get("remove"))))
         elif self.path == "/api/write_targets":
             # POST 分支里 self.q 取不到参数，必须从 body 拿
             self._send(write_targets(body.get("root") or None))

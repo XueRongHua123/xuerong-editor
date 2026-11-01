@@ -1117,6 +1117,7 @@
     检查的是「游戏读不到但也不会报错」这类问题：OOB 没被点名、sprite 名拼错、
     招募写在文件末尾、决议类别没注册。全在本地算，不启动游戏。
   </div>
+  <div id="diagFixBar" style="display:none;margin-bottom:8px"></div>
   <div id="diagList"></div>
 </div>
 <div id="countryModal">
@@ -12330,17 +12331,40 @@ initDensity();
 loadData();
 
 // ---------- 诊断 ----------
+// v1.23.34 replace 断链从「一句话建议」变成可点的按钮：
+//   撤销 replace / 接管该目录 / 忽略，外加面板顶部的批量条。
 (function(){
   const entry = document.getElementById('diagEntry');
   const panel = document.getElementById('diagPanel');
   if(!entry || !panel) return;
   const list  = document.getElementById('diagList');
   const cnt   = document.getElementById('diagCount');
+  const bar   = document.getElementById('diagFixBar');
 
   const SEV = { error:['#e05','严重'], warning:['#e90','警告'], info:['#39c','提示'] };
 
   function esc(t){
     return String(t==null?'':t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  }
+
+  // 后端 fix.options 里有哪几个就渲染哪几个，名字只在这里翻译
+  const OPT_LABEL = { drop_replace:'撤销 replace', adopt_ref_dir:'接管该目录', ignore:'忽略' };
+  const OPT_ACT   = { drop_replace:'drop', adopt_ref_dir:'adopt', ignore:'ignore' };
+
+  function fixButtons(f){
+    const fx = f.fix;
+    if(!fx || !fx.options || !fx.options.length) return '';
+    const subs = (fx.subs && fx.subs.length ? fx.subs : [fx.sub]).filter(Boolean).join(',');
+    return '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center">'
+      + fx.options.map(function(o){
+          const act = OPT_ACT[o] || o;
+          return '<button class="btn" style="font-size:11px;padding:2px 7px"'
+            + ' data-act="'+act+'" data-subs="'+esc(subs)+'" data-ref="'+esc(fx.ref_dir||'')+'"'
+            + ' data-group="'+esc(fx.group||'')+'">'
+            + esc(OPT_LABEL[o] || o) + '</button>';
+        }).join('')
+      + (fx.note ? '<span style="font-size:10.5px;color:var(--muted)">'+esc(fx.note)+'</span>' : '')
+      + '</div>';
   }
 
   function render(items){
@@ -12350,7 +12374,7 @@ loadData();
     }
     list.innerHTML = items.map(function(f, i){
       const sev = SEV[f.severity] || ['#888','?'];
-      return '<div style="border-left:3px solid '+sev[0]+';background:rgba(255,255,255,.02);padding:7px 9px;margin-bottom:6px;border-radius:4px">'
+      return '<div style="border-left:3px solid '+sev[0]+';background:color-mix(in srgb,'+sev[0]+' 6%,var(--panel2));padding:7px 9px;margin-bottom:6px;border-radius:4px">'
         + '<div style="display:flex;gap:6px;align-items:baseline;font-size:11px">'
         + '<span style="color:'+sev[0]+';font-weight:600">'+sev[1]+'</span>'
         + '<span style="color:var(--muted)">'+esc(f.code)+'</span>'
@@ -12358,24 +12382,110 @@ loadData();
         + '<span style="color:var(--muted)">'+esc(f.file||'')+(f.line?' : '+f.line:'')+'</span>'
         + '</div>'
         + '<div style="font-size:12px;margin-top:3px;line-height:1.5">'+esc(f.msg)+'</div>'
-        + (f.excerpt ? '<div style="font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:#9ab;background:rgba(0,0,0,.25);padding:3px 6px;margin-top:4px;border-radius:3px;white-space:pre-wrap;overflow-wrap:anywhere">'+esc(f.excerpt)+'</div>' : '')
-        + (f.repair ? '<div style="font-size:11px;color:#7c9;margin-top:4px">修：'+esc(f.repair)+'</div>' : '')
+        + (f.excerpt ? '<div style="font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:var(--muted);background:rgba(0,0,0,.18);padding:3px 6px;margin-top:4px;border-radius:3px;white-space:pre-wrap;overflow-wrap:anywhere">'+esc(f.excerpt)+'</div>' : '')
+        + (f.repair ? '<div style="font-size:11px;color:var(--accent-2);margin-top:4px">修：'+esc(f.repair)+'</div>' : '')
+        + fixButtons(f)
         + '</div>';
     }).join('');
   }
 
+  // 最近一次操作结果。批量操作后危险目录可能清零、汇总条会被收起，
+  // 这条消息必须留在面板上，否则用户看不到「撤销了几条、还剩几个」。
+  let lastMsg = '';
+
+  function msgHtml(){
+    return '<div id="diagFixMsg" style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.5">'
+      + esc(lastMsg) + '</div>';
+  }
+
+  function setStatus(t){
+    lastMsg = t || '';
+    const el = document.getElementById('diagFixMsg');
+    if(el) el.textContent = lastMsg;
+  }
+
+  function renderBar(items){
+    if(!bar) return;
+    const dg = (items||[]).filter(function(x){ return x.code === 'replace.dangling_refs'; });
+    if(!dg.length){
+      if(lastMsg){ bar.style.display = 'block'; bar.innerHTML = msgHtml(); }
+      else { bar.style.display = 'none'; bar.innerHTML = ''; }
+      return;
+    }
+    bar.style.display = 'block';
+    const adoptable = dg.filter(function(x){
+      return ((x.fix||{}).options||[]).indexOf('adopt_ref_dir') >= 0; }).length;
+    bar.innerHTML = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;'
+      + 'background:color-mix(in srgb,#e05577 10%,var(--panel2));border:1px solid color-mix(in srgb,#e05577 35%,var(--line));'
+      + 'padding:7px 9px;border-radius:5px;font-size:12px">'
+      + '<span>检测到 <b>'+dg.length+'</b> 个目录引用了已被 replace 替换掉的内容</span>'
+      + '<span style="flex:1"></span>'
+      + '<button class="btn" data-act="drop-all" style="font-size:11px;padding:2px 7px">全部撤销 replace</button>'
+      + (adoptable ? '<button class="btn" data-act="adopt-all" style="font-size:11px;padding:2px 7px">全部接管（'+adoptable+' 个）</button>' : '')
+      + '</div>'
+      + msgHtml();
+  }
+
+  async function post(url, payload){
+    const r = await (await fetch(url, {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload||{})})).json();
+    return r;
+  }
+
+  async function act(actName, subs, ref, group){
+    const subList = (subs||'').split(',').filter(Boolean);
+    try{
+      if(actName === 'drop' || actName === 'drop-all'){
+        setStatus('正在撤销 replace…');
+        const r = await post('/api/replace_fix_all', {kind:'drop_replace', subs: actName==='drop' ? subList : null});
+        setStatus(r.msg || (r.ok === false ? '失败' : '完成'));
+        const bad = (r.done||[]).filter(function(d){ return !d.ok; });
+        if(bad.length) setStatus((r.msg||'') + '　' + bad.map(function(d){ return d.sub+'：'+d.msg; }).join('；'));
+      }else if(actName === 'adopt' || actName === 'adopt-all'){
+        if(!confirm('接管会把引用方目录整个复制进本 mod，并写入 replace_path。\n文件多时会有几百个，确定继续？')) return;
+        setStatus('正在接管…');
+        const r = await post('/api/replace_fix_all', {kind:'adopt_ref_dir',
+          subs: actName==='adopt' ? [ref] : null, force:true});
+        setStatus((r.msg||'') + '　引用仍需自行修改，或点「忽略」');
+        const bad = (r.done||[]).filter(function(d){ return !d.ok; });
+        if(bad.length) setStatus((r.msg||'') + '　' + bad.map(function(d){ return d.sub+'：'+d.msg; }).join('；'));
+      }else if(actName === 'ignore'){
+        setStatus('已忽略…');
+        const r = await post('/api/replace_ignore', {subs: subList, ref_dir: ref, group: group});
+        setStatus(r.msg || '完成');
+      }
+    }catch(e){
+      setStatus('请求失败：' + e);
+      return;
+    }
+    await run();
+  }
+
+  if(bar){
+    bar.addEventListener('click', function(e){
+      const b = e.target.closest('button[data-act]');
+      if(!b) return;
+      act(b.dataset.act, b.dataset.subs || '', b.dataset.ref || '', b.dataset.group || '');
+    });
+  }
+  list.addEventListener('click', function(e){
+    const b = e.target.closest('button[data-act]');
+    if(!b) return;
+    act(b.dataset.act, b.dataset.subs || '', b.dataset.ref || '', b.dataset.group || '');
+  });
+
   async function run(){
     cnt.textContent = '扫描中…';
     try{
-      const r = await (await fetch('/api/diagnose', {method:'POST',
-        headers:{'Content-Type':'application/json'}, body: JSON.stringify({})})).json();
-      if(r.ok === false){ cnt.textContent = r.msg || '失败'; render([]); return; }
+      const r = await post('/api/diagnose', {});
+      if(r.ok === false){ cnt.textContent = r.msg || '失败'; render([]); renderBar([]); return; }
       const items = r.findings || [];
       const bad = items.filter(function(x){ return x.severity === 'error'; }).length;
       const warn = items.filter(function(x){ return x.severity === 'warning'; }).length;
       cnt.textContent = items.length
         ? (items.length + ' 项（严重 ' + bad + ' / 警告 ' + warn + '）')
         : '没有发现问题';
+      renderBar(items);
       render(items);
     }catch(e){
       cnt.textContent = '请求失败';
