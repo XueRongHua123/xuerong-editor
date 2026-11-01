@@ -10,9 +10,13 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.request
 
 REPO = "XueRongHua123/xuerong-editor"
+USER = "x-access-token"   # GitHub API 用 token 作密码，用户名随意
+TOKEN = ""
+
 API = "https://api.github.com"
 
 
@@ -27,34 +31,94 @@ def token():
 
 
 def call(method, path, data=None, raw=None, ctype="application/json"):
+    """调 GitHub API。
+
+    用 curl 而不是 urllib：这台机器上 urllib 的 TLS 握手经常中途断
+    （UNEXPECTED_EOF_WHILE_READING），连 GET 都会失败，而 curl 稳定。
+    raw 参数保留兼容，但大文件请走 upload_asset。
+    """
+    import subprocess
     url = path if path.startswith("http") else API + path
-    body = None
-    if raw is not None:
-        body = raw
-    elif data is not None:
-        body = json.dumps(data).encode()
-    req = urllib.request.Request(url, data=body, method=method)
-    req.add_header("Authorization", "Bearer " + TOKEN)
-    req.add_header("Accept", "application/vnd.github+json")
-    req.add_header("User-Agent", "xuerong-editor-release")
-    if body is not None:
-        req.add_header("Content-Type", ctype)
+    cmd = ["curl", "-s", "--retry", "5", "--retry-delay", "3", "--max-time", "600",
+           "-u", "%s:%s" % (USER, TOKEN), "-X", method,
+           "-H", "Accept: application/vnd.github+json",
+           "-H", "User-Agent: xuerong-editor-release",
+           "-w", "\n%{http_code}"]
+    tmp = None
+    if data is not None:
+        tmp = os.path.join(os.environ.get("TEMP", "."), "_gh_body.json")
+        open(tmp, "w", encoding="utf-8", newline="").write(json.dumps(data))
+        cmd += ["-H", "Content-Type: application/json", "--data-binary", "@" + tmp]
+    elif raw is not None:
+        tmp = os.path.join(os.environ.get("TEMP", "."), "_gh_body.bin")
+        open(tmp, "wb").write(raw if isinstance(raw, bytes) else bytes(raw))
+        cmd += ["-H", "Content-Type: " + ctype, "--data-binary", "@" + tmp]
+    cmd.append(url)
     try:
-        with urllib.request.urlopen(req, timeout=300) as r:
-            return r.status, json.loads(r.read().decode() or "{}")
-    except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read().decode() or "{}")
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=700,
+                           encoding="utf-8", errors="replace")
+        out = (r.stdout or "").strip().splitlines()
+        code = 0
+        body = "{}"
+        if out:
+            try:
+                code = int(out[-1])
+                body = "\n".join(out[:-1]) or "{}"
+            except Exception:
+                body = "\n".join(out)
+        try:
+            return code, json.loads(body)
+        except Exception:
+            return code, {"message": body[:200]}
+    except Exception as e:
+        return 0, {"message": str(e)[:200]}
+    finally:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+
+def upload_asset(upload_url, name, path):
+    """上传附件。
+
+    urllib 一次 POST 20MB+ 时，中间网络设备常把 SSL 连接掐断
+    （UNEXPECTED_EOF_WHILE_READING），重试也没用。
+    curl 的 --retry 加分段式发送能过，所以大文件走 curl。
+    """
+    import subprocess
+    url = upload_url + "?name=" + urllib.parse.quote(name)
+    try:
+        r = subprocess.run(
+            ["curl", "-s", "--retry", "5", "--retry-delay", "5", "--max-time", "900",
+             "-u", "%s:%s" % (USER, TOKEN), "-X", "POST",
+             "-H", "Content-Type: application/octet-stream",
+             "--data-binary", "@" + path, url, "-w", "\n%{http_code}"],
+            capture_output=True, text=True, timeout=1000,
+            encoding="utf-8", errors="replace")
+        out = (r.stdout or "").strip().splitlines()
+        code = 0
+        body = "{}"
+        if out:
+            try:
+                code = int(out[-1])
+                body = "\n".join(out[:-1]) or "{}"
+            except Exception:
+                body = "\n".join(out)
+        return code, body
+    except Exception as e:
+        return 0, {"message": str(e)[:100]}
 
 
 def main():
     global TOKEN
+    TOKEN = token()
     if len(sys.argv) < 5:
         print(__doc__)
         return 2
     tag, title, notes_file = sys.argv[1], sys.argv[2], sys.argv[3]
     files = sys.argv[4:]
     notes = open(notes_file, encoding="utf-8").read() if os.path.exists(notes_file) else ""
-    TOKEN = token()
     if not TOKEN:
         print("没有取到 GitHub token")
         return 1
@@ -84,10 +148,9 @@ def main():
         if name in have:
             print("已存在，跳过：", name)
             continue
-        data = open(f, "rb").read()
-        st, res = call("POST", upload_url + "?name=" + urllib.parse.quote(name),
-                       raw=data, ctype="application/octet-stream")
-        print(("上传 %s ← %s → %s" % (name, local, "ok" if st in (200, 201) else res.get("message", st))))
+        st, res = upload_asset(upload_url, name, f)
+        print(("上传 %s ← %s → %s" % (name, local,
+                                      "ok" if st in (200, 201) else str(res)[:80])))
     return 0
 
 

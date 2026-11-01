@@ -1,0 +1,317 @@
+# -*- coding: utf-8 -*-
+"""从省图生成一个能启动的最小 mod 骨架。
+
+地图片能生成 map/ 24 个文件，但游戏要启动还缺：
+  descriptor.mod
+  history/states/*.txt      每个省必须归属到某个州
+  common/country_tags/
+  common/countries/
+  history/countries/
+  localisation/
+"""
+import io
+import os
+import numpy as np
+
+import mapgen_extra as mgx
+
+
+def _w(path, text):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    io.open(path, "w", encoding="utf-8", newline="").write(text)
+
+
+# 换掉地图就等于换掉了省的数量和编号，所有「按省 id / 州 id 引用」的原版数据都会指错。
+# 下面这些目录必须一起 replace 掉，否则游戏在加载期就会因为 invalid state id 崩溃。
+# 顺序无关，但少一个都不行。
+REPLACE_DIRS = (
+    # 参考 East Showdown（创意工坊 2948642461）的做法：
+    # 换地图等于换省号/州号，凡是「按 id 引用」的目录都得一起替换，
+    # 否则原版数据会指向不存在的省/州，加载期直接崩。
+    #
+    # 注意：不替换整个 "map"。provinces.bmp / definition.csv / heightmap.bmp
+    # 这些用同名文件覆盖就生效；但 strategicregions 和 supplyareas 原版有几百个
+    # 文件，不替换会和我们的混在一起，所以这两条子目录必须 replace。
+    "map/strategicregions",
+    "map/supplyareas",
+    "history/states",
+    "history/countries",
+    "history/units",
+    # AI 策略里到处是 state = 123 这种硬引用，替换成空目录，
+    # 让 AI 退回默认行为，也好过引用不存在的州
+    "common/ai_strategy",
+    "common/ai_strategy_plans",
+    "common/ai_areas",
+    "common/ai_war_goals",
+    "common/ai_templates",
+    "common/ai_equipment",
+    "common/ai_focuses",
+    # 剧本入口由我们自己生成
+    "common/bookmarks",
+    # 注意：common/country_tags 不能 replace。
+    # 原版 383 个 tag 的 trigger / effect（形如 `GER = { ... }`）全靠它求值；
+    # 整目录替换后，原版国策、事件、脚本里的 tag 引用一律变成
+    # "Unknown trigger-type: GER"，实测 58762 行 error.log 里九成是这个。
+    # 自己的 tag 用新增文件 zz_editor_tags.txt 合并进去即可。
+)
+
+
+
+def _desc_body(name, version, with_path=False, mod_dir_name=""):
+    lines = ['version="%s"' % version,
+             'tags={ "Alternative History" }',
+             'name="%s"' % name,
+             'supported_version="1.19.*"']
+    if with_path and mod_dir_name:
+        lines.append('path="mod/%s"' % mod_dir_name)
+    for d in REPLACE_DIRS:
+        lines.append('replace_path="%s"' % d)
+    return "\n".join(lines) + "\n"
+
+
+def write_descriptor(mod_dir, name, version="1.0.0"):
+    d = os.path.join(mod_dir, "descriptor.mod")
+    _w(d, _desc_body(name, version))
+    # 同时写一份到 mod 目录外（HOI4 的 mod/ 下需要 <name>.mod 指路）
+    outer = os.path.join(os.path.dirname(mod_dir), os.path.basename(mod_dir) + ".mod")
+    _w(outer, _desc_body(name, version, True, os.path.basename(mod_dir)))
+    return d
+
+
+def write_country_tags(mod_dir, tag="ZZZ"):
+    """写自己的 tag。
+
+    不 replace 原版 common/country_tags，这里只是新增一个文件，
+    条目会和原版 00_countries.txt 的 383 个 tag 合并。
+    原版是裸键值列表（`GER = "countries/Germany.txt"`，没有 countries = { } 包裹），
+    本文件照同一格式写，避免两层不同结构的解析差异。
+    """
+    _w(os.path.join(mod_dir, "common", "country_tags", "zz_editor_tags.txt"),
+       '%s = "countries/%s.txt"\n' % (tag, tag))
+
+
+def write_country_def(mod_dir, tag="ZZZ", color=(70, 120, 180)):
+    _w(os.path.join(mod_dir, "common", "countries", "%s.txt" % tag),
+       'graphical_culture = western_european_gfx\n'
+       'graphical_culture_2d = western_european_2d\n'
+       'color = { %d %d %d }\n' % color)
+
+
+def write_country_history(mod_dir, tag="ZZZ"):
+    """国家历史。
+
+    两处必须照原版写全，少一个进游戏时就崩在初始化阶段
+    （game.log 停在 Launching SINGLEPLAYER-game，异常地址 0x00007FF6BEED4300）：
+
+    1. set_popularities 必须四项意识形态齐全。只写 neutrality 是不够的，
+       引擎初始化派系时时会读到空指针。
+    2. set_research_slots 要写，否则科研槽为 0 时同样会在初始化里出问题。
+
+    oob 指向真实 OOB 文件名（不含 .txt），写成空串会指向不存在的 OOB。
+    """
+    _w(os.path.join(mod_dir, "history", "countries", "%s - Test.txt" % tag),
+       'capital = 1\n'
+       'set_research_slots = 3\n'
+       'oob = "%s_1936"\n' % tag +
+       'set_technology = {\n\tinfantry_weapons = 1\n}\n'
+       'set_politics = {\n'
+       '\truling_party = neutrality\n'
+       '\tlast_election = "1936.1.1"\n'
+       '\telection_frequency = 48\n'
+       '\telections_allowed = no\n'
+       '}\n'
+       'set_popularities = {\n'
+       '\tdemocratic = 10\n'
+       '\tfascism = 10\n'
+       '\tcommunism = 10\n'
+       '\tneutrality = 70\n'
+       '}\n')
+
+
+def write_states(mod_dir, labels, tag="ZZZ", per_state=8, capital_province=1,
+                 sea_ids=None):
+    """按省 id 顺序每 per_state 个切一个州。
+
+    每个州必须有：id / name / manpower / state_category / provinces / local_supplies /
+    history 里的 owner。缺一个游戏都起不来。
+    """
+    n = int(labels.max())
+    if n == 0:
+        return 0
+    seas = set(int(x) for x in (sea_ids or ()))
+    # 海省绝不能进 state：州里出现 sea 省，游戏会在地图加载期报错退出
+    land_ids = [i for i in range(1, n + 1) if i not in seas]
+    n_states = 0
+    sid = 1
+    for start in range(0, len(land_ids), per_state):
+        pids = land_ids[start:start + per_state]
+        if not pids:
+            continue
+        # 州名用省 id 范围
+        name = "STATE_%d" % sid
+        body = [
+            "state = {",
+            "\tid = %d" % sid,
+            '\tname = "%s"' % name,
+            "\tmanpower = 100000",
+            "\tstate_category = rural",
+            "\tprovinces = {",
+        ]
+        for pid in pids:
+            body.append("\t\t%d" % pid)
+        body.append("\t}")
+        body.append("\tlocal_supplies = 1.0")
+        # 第一个州归玩家 tag，其余不归属（无主地）
+        if sid == 1:
+            body.append("\thistory = {")
+            body.append("\t\towner = %s" % tag)
+            body.append("\t\t1936.1.1 = {")
+            body.append("\t\t\towner = %s" % tag)
+            body.append("\t\t}")
+            body.append("\t}")
+        body.append("}")
+        _w(os.path.join(mod_dir, "history", "states", "%d-%s.txt" % (sid, name)),
+           "\n".join(body) + "\n")
+        n_states += 1
+        sid += 1
+    return n_states
+
+
+def write_units(mod_dir, tag="ZZZ", provinces=()):
+    """写 history/units。OOB 可以很空，但这个目录被 replace 掉之后
+    至少要有文件，否则某些版本会在加载期报找不到 OOB。"""
+    d = os.path.join(mod_dir, "history", "units")
+    os.makedirs(d, exist_ok=True)
+    # 一个最小的师团模板 + 一支开局部队，保证国家有东西
+    body = ['division_template = {',
+            '\tname = "%s_Infantry"' % tag,
+            '\tregiments = {',
+            '\t\tinfantry = { x = 0 y = 0 }',
+            '\t}',
+            '}',
+            '']
+    pl = [p for p in provinces][:1]
+    if pl:
+        body += ['units = {',
+                 '\tdivision = {',
+                 '\t\tdivision_name = {',
+                 '\t\t\tis_name_ordered = yes',
+                 '\t\t\tname_order = 1',
+                 '\t\t}',
+                 '\t\tlocation = %d' % pl[0],
+                 '\t\tdivision_template = "%s_Infantry"' % tag,
+                 '\t\tstart_experience_factor = 0.3',
+                 '\t}',
+                 '}',
+                 '']
+    _w(os.path.join(d, "%s_1936.txt" % tag), "\n".join(body))
+    return os.path.join("history", "units", "%s_1936.txt" % tag)
+
+
+def write_bookmarks(mod_dir, name="雪绒战役", tag="ZZZ", date="1936.1.1.12"):
+    """写 common/bookmarks。没有剧本的话游戏会跳过剧本选择，
+    直接拿默认局面开局，玩家看不出这是个新世界。"""
+    d = os.path.join(mod_dir, "common", "bookmarks")
+    os.makedirs(d, exist_ok=True)
+    body = ['bookmarks = {',
+            '\tbookmark = {',
+            '\t\tname = "ZZ_EDITOR_BOOKMARK"',
+            '\t\tdesc = "ZZ_EDITOR_BOOKMARK_DESC"',
+            '\t\tdate = %s' % date,
+            '\t\tpicture = "GFX_select_date_1936"',
+            '\t\tdefault_country = "%s"' % tag,
+            '\t\tdefault = yes',
+            '',
+            '\t\t"%s" = {' % tag,
+            '\t\t\thistory = "ZZ_EDITOR_BOOKMARK_COUNTRY"',
+            '\t\t\tideology = neutrality',
+            '\t\t}',
+            '\t}',
+            '}',
+            '']
+    _w(os.path.join(d, "zz_editor_bookmarks.txt"), "\n".join(body))
+    return "common/bookmarks/zz_editor_bookmarks.txt"
+
+
+def write_ai_stubs(mod_dir, tag="ZZZ"):
+    """被 replace 掉的 AI 目录里塞一个占位文件。
+
+    目录整个被卸载后如果连文件都没有，不同版本表现不一样。
+
+    ai_strategy 不能写 `ai_strategy = { }`：那样引擎会把块名当成策略名，
+    报 "AI strategy ai_strategy with missing or empty enable trigger"。
+    原版结构是「顶层 = 策略名，ai_strategy = { type id value } 嵌在里面」，
+    这里写一条永不启用的合法策略（enable 恒假、abort 恒真）。
+    """
+    made = []
+    stub = (
+        "zz_editor_stub = {\n"
+        "\tallowed = {\n\t\talways = no\n\t}\n"
+        "\tenable = {\n\t\talways = no\n\t}\n"
+        "\tabort = {\n\t\talways = yes\n\t}\n"
+        "\tai_strategy = {\n\t\ttype = alliance\n\t\tid = \"%s\"\n\t\tvalue = 0\n\t}\n"
+        "}\n" % tag)
+    for sub, head in (
+            ("common/ai_strategy", stub),
+            ("common/ai_strategy_plans", ""),
+            ("common/ai_areas", ""),
+            ("common/ai_war_goals", ""),
+            ("common/ai_templates", ""),
+            ("common/ai_equipment", ""),
+            ("common/ai_focuses", ""),
+    ):
+        d = os.path.join(mod_dir, sub.replace("/", os.sep))
+        os.makedirs(d, exist_ok=True)
+        _w(os.path.join(d, "zz_editor_placeholder.txt"), head)
+        made.append(sub + "/zz_editor_placeholder.txt")
+    return made
+
+
+def write_localisation(mod_dir, name):
+    d = os.path.join(mod_dir, "localisation")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "zz_editor_l_english.yml")
+    io.open(p, "w", encoding="utf-8-sig", newline="").write(
+        "l_english:\n"
+        ' STATE_1:0 "起始州"\n'
+    )
+
+
+def build(mod_dir, labels, mod_name="雪绒地图测试", tag="ZZZ", per_state=8,
+          sea_ids=None):
+    """在 mod_dir 下补齐所有能让游戏启动的文件。"""
+    made = []
+    if not mod_dir:
+        return {"ok": False, "msg": "没给目录", "made": made}
+    os.makedirs(mod_dir, exist_ok=True)
+    write_descriptor(mod_dir, mod_name)
+    made.append("descriptor.mod")
+    write_country_tags(mod_dir, tag)
+    made.append("common/country_tags/zz_editor_tags.txt")
+    write_country_def(mod_dir, tag)
+    made.append("common/countries/%s.txt" % tag)
+    write_country_history(mod_dir, tag)
+    made.append("history/countries/%s - Test.txt" % tag)
+    ns = write_states(mod_dir, labels, tag, per_state, sea_ids=sea_ids)
+    made.append("history/states/ × %d" % ns)
+    write_localisation(mod_dir, mod_name)
+    made.append("localisation/")
+
+    # 按 East Showdown 的路子补齐：OOB / 剧本 / AI 占位
+    try:
+        # 拿第一个省的 id 给开局部队用
+        first_prov = 1
+        made.append(write_units(mod_dir, tag, [first_prov]))
+    except Exception:
+        pass
+    try:
+        made.append(write_bookmarks(mod_dir, mod_name, tag))
+    except Exception:
+        pass
+    try:
+        made.extend(write_ai_stubs(mod_dir, tag))
+    except Exception:
+        pass
+
+    return {"ok": True, "states": ns, "made": made,
+            "msg": "骨架完成：%d 个州（含 OOB / 剧本 / AI 占位）" % ns}

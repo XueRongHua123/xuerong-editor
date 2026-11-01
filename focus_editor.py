@@ -20,6 +20,22 @@ import editor_i18n as i18n
 
 FROZEN = getattr(sys, "frozen", False)
 _HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _qa_dir():
+    """qa 目录的位置。
+
+    源码仓库里 qa 在 tools/qa（公开仓库的目录结构），
+    打包成 exe 后是平铺的 _MEIPASS/qa，开发目录是 work/qa。
+    三个位置都试，找不到就返回默认值，交给调用方报错。
+    """
+    for base in (getattr(sys, "_MEIPASS", "") or "", _HERE,
+                 os.path.dirname(_HERE)):
+        for rel in (("qa",), ("tools", "qa")):
+            p = os.path.join(base, *rel) if base else ""
+            if p and os.path.isdir(p):
+                return p
+    return os.path.join(_HERE, "qa")
 W = os.path.dirname(_HERE) if os.path.basename(_HERE).lower() == "work" else _HERE
 
 # 版本号：打包时由 make_release.py 生成 _build_version.py 注入；源码运行则回退到 git tag
@@ -3974,6 +3990,26 @@ def _replace_owner(mod_root, sub):
     return None
 
 
+def _top_mod(root=None):
+    """链顶那个可写的 mod 目录（跳过原版）。
+
+    优先用传入的 root 解析叠加链，再退回全局 ROOTS。
+    只看 ROOTS 的写法在脚本直接调用时会因为 ROOTS 为空而误报
+    「找不到可写的 mod 目录」，哪怕传入的 root 完全可写。
+    """
+    if root:
+        lay = mod_layers(root) or [root]
+        cand = lay[-1] if lay else root
+        if cand and not is_under_game(cand):
+            return cand
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            return cand
+    return None
+
+
 def write_base(mod_root, sub):
     """写某目录下的文件时应该写到哪一层。
 
@@ -3987,12 +4023,20 @@ def write_base(mod_root, sub):
     owner = _replace_owner(mod_root, sub)
     if owner:
         return owner, "replace_path"
+    # 和 _country_tags_write_base 一样：优先用传入的 mod_root，
+    # 全局 ROOTS 为空时（脚本调用、world_create 编排）依然能找到链顶。
     top = None
-    for r in (ROOTS or []):
-        lay = mod_layers(r) or [r]
-        cand = lay[-1] if lay else r
+    if mod_root:
+        lay = mod_layers(mod_root) or [mod_root]
+        cand = lay[-1] if lay else mod_root
         if cand and not is_under_game(cand):
             top = cand
+    if not top:
+        for r in (ROOTS or []):
+            lay = mod_layers(r) or [r]
+            cand = lay[-1] if lay else r
+            if cand and not is_under_game(cand):
+                top = cand
     return top, "top"
 
 
@@ -4013,7 +4057,7 @@ def map_generate(source="procedural", out_dir=None, width=1200, height=440,
     """调用 qa/mapgen.py 生成完整 map/ 目录。"""
     try:
         import sys as _sys
-        _qa = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qa")
+        _qa = _qa_dir()
         if _qa not in _sys.path:
             _sys.path.insert(0, _qa)
         import mapgen
@@ -4280,12 +4324,7 @@ def _units_write_base(root):
     必须先用自己的 mod 接管该目录。
     返回 (路径, 错误消息)。
     """
-    top = None
-    for r in (ROOTS or []):
-        lay = mod_layers(r) or [r]
-        cand = lay[-1] if lay else r
-        if cand and not is_under_game(cand):
-            top = cand
+    top = _top_mod(root)
     if not top:
         return None, "找不到可写的 mod 目录"
     tgt, why = write_base(root, "history/units")
@@ -4498,12 +4537,7 @@ def _country_hist_file(root, tag):
 
 def _country_hist_write_base(root):
     """history/countries 的写入层，拒写父 mod。"""
-    top = None
-    for r in (ROOTS or []):
-        lay = mod_layers(r) or [r]
-        cand = lay[-1] if lay else r
-        if cand and not is_under_game(cand):
-            top = cand
+    top = _top_mod(root)
     if not top:
         return None, "找不到可写的 mod 目录"
     tgt, why = write_base(root, "history/countries")
@@ -5211,6 +5245,328 @@ def _diag_tag_def_missing(root):
     return out
 
 
+# 大写词里不是国家 tag 的那些（作用域切换、逻辑运算、布尔常量）
+_TAG_NOT_A_TAG = {
+    "ROOT", "FROM", "PREV", "THIS", "OWNER", "CONTROLLER", "CAPITAL",
+    "OVERLORD", "FACTION_LEADER", "ENEMY", "IF", "ELSE", "ELSE_IF",
+    "AND", "OR", "NOT", "NOR", "NAND", "XOR", "LIMIT", "YES", "NO", "DEF",
+    "FROMFROM", "MIO", "VICTORY_POINTS", "TAG",
+}
+
+# 这些目录里的顶层大写块是数据分组（人名组、师命名组等），
+# 只是碰巧和 3 位 tag 同形，不是 scope 切换
+_TAG_SKIP_DIRS = ("common/names", "common/units/names", "common/units/codenames")
+
+
+# replace_path 掉这些目录时，原版内容会整体消失，
+# 但原版（以及其他 mod）的脚本仍然在引用它们
+_REPLACE_RISK = (
+    ("common/country_tags", "国家 tag", r'(?m)^\s*([A-Z][A-Z0-9]{2})\s*='),
+    ("common/scripted_triggers", "脚本化 trigger", r'(?m)^\s*([a-z_][a-z0-9_]*)\s*=\s*\{'),
+    ("common/scripted_effects", "脚本化 effect", r'(?m)^\s*([a-z_][a-z0-9_]*)\s*=\s*\{'),
+    ("common/ideas", "国家精神", r'(?m)^\s*([a-z_][a-z0-9_]*)\s*=\s*\{'),
+    ("common/technologies", "科技", r'(?m)^\s*([a-z_][a-z0-9_]*)\s*=\s*\{'),
+)
+
+
+def _replace_collect(layer, sub, pat):
+    """收集某个层里某个目录下定义的名字集合。"""
+    got = set()
+    if not layer:
+        return got
+    d = os.path.join(layer, *sub.split("/"))
+    if not os.path.isdir(d):
+        return got
+    try:
+        fns = os.listdir(d)
+    except Exception:
+        return got
+    for fn in fns:
+        if not fn.endswith(".txt"):
+            continue
+        try:
+            txt = io.open(os.path.join(d, fn), encoding="utf-8-sig",
+                          errors="replace").read()
+        except Exception:
+            continue
+        for m in re.finditer(pat, txt):
+            got.add(m.group(1))
+    return got
+
+
+def _diag_replace_risk(root):
+    """replace_path 把原版目录整体屏蔽后，原版定义的 tag / trigger / effect
+    仍然被原版脚本引用，会变成海量的 Unknown xxx-type 错误。
+
+    这是实测最贵的一类：40 省测试地图 replace 了 common/country_tags，
+    只剩自建的 1 个 tag，原版 383 个全部失效，
+    error.log 从 0 涨到 58762 行，其中九成是 "Unknown trigger-type: GER"。
+    """
+    out = []
+    layers = mod_layers(root) or [root] or []
+    if not layers:
+        return out
+    game = layers[0]
+    for sub, label, pat in _REPLACE_RISK:
+        owner = _replace_owner(root, sub)
+        if not owner:
+            continue
+        ours = _replace_collect(owner, sub, pat)
+        if sub == "common/country_tags":
+            # 别名目录不受这次 replace 影响，合并进来
+            ours |= _replace_collect(owner, "common/country_tag_aliases", pat)
+        theirs = _replace_collect(game, sub, pat)
+        if sub == "common/country_tags":
+            theirs |= _replace_collect(game, "common/country_tag_aliases", pat)
+        missing = theirs - ours
+        if not missing:
+            continue
+        # 分级：只提供极少数名字的，几乎肯定是「骨架 + 误 replace」，原版会大面积失效；
+        # 提供几十上百个的，是 overhaul 型 mod 的有意整体替换，只作提示。
+        sev = "error" if len(ours) < 10 else "info"
+        sample = "、".join(sorted(missing)[:6])
+        kind = "error" if sev == "error" else "info"
+        if sev == "error":
+            note = ("原版脚本仍在引用这些名字，加载期会刷出海量 Unknown xxx-type 错误"
+                    if sub != "common/country_tags" else
+                    "原版脚本里的 TAG = { } 一律报 Unknown trigger/effect-type")
+        else:
+            note = "整体替换是有意为之的话可忽略；若仍有原版脚本在用这些名字，会报 Unknown"
+        out.append(_finding(
+            "replace.drops_vanilla", sev,
+            "%s 被 replace_path 整体替换：原版 %d 个%s，本 mod 提供 %d 个，"
+            "缺 %d 个（%s…）。%s"
+            % (sub, len(theirs), label, len(ours), len(missing), sample, note),
+            "descriptor.mod", 0, 'replace_path="%s"' % sub,
+            "去掉这条 replace_path，把自建内容写进 %s 下的新文件与原版合并；"
+            "确实要整体替换时，需自行提供被引用到的全部名字" % sub))
+    return out
+
+
+# 每个数据目录被 replace 后，其他目录里这些关键词就指向「已经被丢掉的内容」。
+# 只匹配「明确引用」的关键词，不做通用标识符匹配，避免满屏误报。
+_REF_KEYWORDS = (
+    ("common/ideas", "国家精神", (
+        "add_timed_idea", "add_idea", "add_ideas", "remove_idea", "remove_ideas",
+        "swap_ideas", "has_idea", "has_idea_with_trait", "modify_idea")),
+    ("common/characters", "人物", (
+        "recruit_character", "has_character", "kill_character",
+        "retire_character", "add_trait")),
+    ("common/national_focus", "国策树", (
+        "load_focus_tree", "complete_national_focus", "uncomplete_national_focus")),
+    ("common/decisions", "决议", (
+        "activate_decision", "complete_decision", "remove_decision")),
+    ("common/technologies", "科技", (
+        "set_technology", "add_tech_bonus", "has_tech")),
+    ("common/units/names", "番号命名组", (
+        "division_names_group", "ship_names_group", "army_names_group")),
+)
+
+
+def _diag_replace_refs(root):
+    """replace 掉一个数据目录后，还有哪些文件在引用它。
+
+    HOI4 的 replace_path 是整体屏蔽：声明后该目录只从这一层读。
+    只替换 common/ideas 而不替换引用它的 achievements / continuous_focus /
+    special_projects / factions，这些文件里的 add_timed_idea 就全指向不存在的
+    精神，加载期刷出海量 Invalid idea（实测一轮 3879 条）。
+
+    这个检查在动手之前把「会断哪些引用」列出来，省掉一轮 150 秒的真机验证。
+    """
+    out = []
+    layers = mod_layers(root) or [root] or []
+    if not layers:
+        return out
+    top = _top_mod(root)
+    if not top:
+        return out
+
+    replaced = set()
+    for sub, _label, _kw in _REF_KEYWORDS:
+        if _replace_owner(root, sub):
+            replaced.add(sub)
+    if not replaced:
+        return out
+
+    # 必须扫全部层：真正在引用被 replace 目录的往往是原版文件
+    # （achievements.txt、continuous_focus、special_projects、factions）。
+    # 只看本 mod 自己的文件会一条都报不出来。
+    hits = {}
+    scanned = []
+    for layer in layers:
+        if not layer or not os.path.isdir(layer):
+            continue
+        for dirpath, _dirs, files in os.walk(layer):
+            rel_dir = os.path.relpath(dirpath, layer).replace(os.sep, "/")
+            if rel_dir.startswith(("localisation", "map", ".git")):
+                continue
+            if any(rel_dir == d or rel_dir.startswith(d + "/") for d in replaced):
+                continue
+            scanned.append((layer, dirpath, rel_dir, files))
+    if not scanned:
+        return out
+    for layer, dirpath, rel_dir, files in scanned:
+        for fn in sorted(files):
+            if not fn.endswith(".txt"):
+                continue
+            p = os.path.join(dirpath, fn)
+            base = (rel_dir + "/" + fn) if rel_dir != "." else fn
+            # 原版文件加 vanilla/ 前缀，避免和同名 mod 文件混在一起
+            rel = base if layer == top else ("vanilla/" + base)
+            try:
+                txt = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            except Exception:
+                continue
+            for sub, label, kws in _REF_KEYWORDS:
+                if sub not in replaced:
+                    continue
+                for kw in kws:
+                    idx = txt.find(kw)
+                    if idx < 0:
+                        continue
+                    line = txt.count(chr(10), 0, idx) + 1
+                    # 按目录归并：原版里同一个目录往往有几十个文件都在引用，
+                    # 逐个报会把界面刷满，也没有额外信息量。
+                    gkey = rel.rsplit("/", 1)[0] if rel.endswith(".txt") else rel
+                    hits.setdefault(gkey, []).append((sub, label, kw, line, rel))
+                    break
+
+    for gkey in sorted(hits):
+        items = hits[gkey]
+        subs = sorted({(i[0], i[1]) for i in items})
+        first = items[0]
+        desc = "、".join("%s(%s)" % (lb, sb) for sb, lb in subs)
+        out.append(_finding(
+            "replace.dangling_refs", "error",
+            "这个目录下有 %d 处引用已被 replace 替换掉的 %s，加载期会报 Invalid / Unknown；"
+            "首个是 %s 第 %d 行的 %s" % (len(items), desc, first[4], first[3], first[2]),
+            first[4], first[3], first[2],
+            "要么去掉对应的 replace_path，要么把这个目录也一并替换并自行提供内容"))
+        if len(out) >= 40:
+            out.append(_finding(
+                "replace.dangling_refs.more", "info",
+                "同类目录还有很多，已列出前 40 个", "", 0, "",
+                "先处理这 40 个，再重新跑诊断"))
+            break
+    return out
+
+
+
+def _diag_tag_undefined(root):
+    """引用了不存在的国家 tag。
+
+    `TAG = { ... }` 在脚本里是 scope 切换，`original_tag = TAG` 是筛选条件。
+    tag 没在 common/country_tags 里定义时，游戏对每一处引用报一条
+    "Unknown trigger-type: TAG" 或 "Unknown effect-type: TAG"。
+
+    这是实测最贵的那类错误：一个被 replace 掉的 country_tags 目录，
+    在 40 省的测试地图上刷出 58762 行 error.log，其中九成是它。
+    静态跑这里 2 秒就能定位，不必等 150 秒一轮的真机加载。
+    """
+    out = []
+
+    # 1) 收集「实际能生效」的 tag。
+    #    不能简单地把叠加链上所有层的 tag 都算数：某一层若声明
+    #    replace_path="common/country_tags"，下层（含原版）的 tag 会被整体屏蔽，
+    #    脚本里再引用它们就是 Unknown trigger-type。
+    #    这正是 40 省测试地图刷出 58762 行 error.log 的那个根因。
+    known = set()
+    layers = mod_layers(root) or [root] or []
+    for sub in ("common/country_tags", "common/country_tag_aliases"):
+        srcs = layers
+        owner = _replace_owner(root, sub)
+        if owner and owner in layers:
+            # 只剩接管层及以上有效
+            srcs = layers[layers.index(owner):]
+        for layer in srcs:
+            td = os.path.join(layer, *sub.split("/"))
+            if not os.path.isdir(td):
+                continue
+            try:
+                fns = os.listdir(td)
+            except Exception:
+                continue
+            for fn in fns:
+                if not fn.endswith(".txt"):
+                    continue
+                try:
+                    txt = io.open(os.path.join(td, fn), encoding="utf-8-sig",
+                                  errors="replace").read()
+                except Exception:
+                    continue
+                for m in re.finditer(r'(?m)^\s*([A-Z][A-Z0-9]{2})\s*=', txt):
+                    known.add(m.group(1))
+    if not known:
+        return out
+
+    # 2) 只扫本 mod 自己的文件（原版的引用是官方数据，不归我们管）
+    top = None
+    for r in (ROOTS or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top:
+        return out
+
+    # 3) 两种明确的 tag 引用写法
+    pat_scope = re.compile(r'^([A-Z][A-Z0-9]{2})\s*=\s*\{')
+    pat_param = re.compile(
+        r'^(?:original_tag|country_exists|has_tag|tag|add_core|remove_core|'
+        r'has_war_with|is_in_faction_with|is_guaranteed_by)\s*=\s*([A-Z][A-Z0-9]{2})\s*$')
+
+    per_file = {}
+    total = 0
+    dropped = 0
+    for dirpath, _dirs, files in os.walk(top):
+        rel_dir = os.path.relpath(dirpath, top).replace(os.sep, "/")
+        if rel_dir.startswith("localisation") or rel_dir.startswith("map"):
+            continue
+        if any(rel_dir.startswith(d) for d in _TAG_SKIP_DIRS):
+            continue
+        for fn in sorted(files):
+            if not fn.endswith(".txt"):
+                continue
+            p = os.path.join(dirpath, fn)
+            base = (rel_dir + "/" + fn) if rel_dir != "." else fn
+            # 原版文件加 vanilla/ 前缀，避免和同名 mod 文件混在一起
+            rel = base if layer == top else ("vanilla/" + base)
+            try:
+                lines = io.open(p, encoding="utf-8-sig",
+                                errors="replace").read().splitlines()
+            except Exception:
+                continue
+            for i, ln in enumerate(lines, 1):
+                st = ln.strip()
+                if not st or st.startswith("#"):
+                    continue
+                m = pat_scope.match(st) or pat_param.match(st)
+                if not m:
+                    continue
+                tg = m.group(1)
+                if tg in known or tg in _TAG_NOT_A_TAG:
+                    continue
+                n = per_file.get(rel, 0)
+                if n >= 3 or total >= 30:
+                    dropped += 1
+                    continue
+                per_file[rel] = n + 1
+                total += 1
+                out.append(_finding(
+                    "script.tag_undefined", "error",
+                    "引用了未定义的国家 tag %s；游戏会对这处引用报 "
+                    "Unknown trigger/effect-type: %s" % (tg, tg),
+                    rel, i, st,
+                    "确认 common/country_tags 里有 %s，或改成这个 mod 实际使用的 tag" % tg))
+    if dropped:
+        out.append(_finding(
+            "script.tag_undefined.more", "info",
+            "还有 %d 处同类引用未逐条列出（同一文件最多 3 条、总数最多 30 条）" % dropped,
+            "", 0, "",
+            "先修上面列出的，再重新跑诊断看剩余"))
+    return out
+
+
 def _diag_division_template_missing(root):
     """units 里引用的 division_template 有没有定义。"""
     out = []
@@ -5355,8 +5711,8 @@ def _cwt_te():
     names = set()
     try:
         import importlib.util as _ilu
-        here = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
-        p = os.path.join(here, "qa", "cwt", "parse.py")
+        here = _qa_dir()
+        p = os.path.join(here, "cwt", "parse.py")
         if os.path.isfile(p):
             spec = _ilu.spec_from_file_location("_cwt_parse_te", p)
             mod = _ilu.module_from_spec(spec)
@@ -5376,8 +5732,8 @@ def _cwt_rules():
     try:
         import importlib.util as _ilu
         # PyInstaller 打包后资源在 sys._MEIPASS 下，源码运行时在脚本目录
-        here = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
-        p = os.path.join(here, "qa", "cwt", "parse.py")
+        here = _qa_dir()
+        p = os.path.join(here, "cwt", "parse.py")
         if os.path.isfile(p):
             spec = _ilu.spec_from_file_location("_cwt_parse", p)
             mod = _ilu.module_from_spec(spec)
@@ -5826,6 +6182,61 @@ def _diag_schema_focus(root):
     return out
 
 
+_MAP_DIAG_FILES = {
+    1: "default.map", 2: "provinces.bmp", 3: "provinces.bmp",
+    4: "definition.csv", 5: "definition.csv", 6: "definition.csv",
+    7: "definition.csv", 8: "definition.csv", 9: "provinces.bmp",
+    10: "continent.txt", 11: "definition.csv", 12: "strategicregions",
+}
+
+
+def _diag_map_format(root):
+    """map/ 目录格式体检：这一项回答"这张地图能不能进游戏"。
+
+    查的是 HOI4 地图加载期的硬约束（尺寸 256 倍数、definition.csv 行尾与列、
+    大洲 1..N、continent.txt 是纯列表、海必须是省、省必须归属战略区）。
+    判断依据与引擎一致：同一个最小地图，这里报的 FAIL 就是 error.log 里报的那几条。
+
+    实现在 qa/map_diag.py，两边共用一套规则，改一处两边都变。
+    """
+    out = []
+    try:
+        import sys as _sys
+        _qa = _qa_dir()
+        if _qa not in _sys.path:
+            _sys.path.insert(0, _qa)
+        import map_diag
+    except Exception:
+        return out
+    mp = None
+    try:
+        for b in reversed(mod_layers(root) or [root]):
+            cand = os.path.join(b, "map")
+            if os.path.isfile(os.path.join(cand, "provinces.bmp")):
+                mp = cand
+                break
+    except Exception:
+        return out
+    if not mp:
+        return out
+    try:
+        res = map_diag.diagnose(mp)
+    except Exception:
+        return out
+    for it in res.get("items", []):
+        if it.get("level") == "PASS":
+            continue
+        fn = _MAP_DIAG_FILES.get(it.get("id")) or "provinces.bmp"
+        msg = it.get("title") or ""
+        if it.get("detail"):
+            msg = msg + "：" + it["detail"]
+        out.append(_finding(
+            "map.format.%d" % int(it.get("id") or 0),
+            "error" if it.get("level") == "FAIL" else "warning",
+            msg, os.path.join("map", fn), 0, "", ""))
+    return out
+
+
 def diagnose(root=None):
     """扫描当前 mod，返回结构化诊断列表。"""
     root = _map_pick(root) if root else (ROOTS[-1] if ROOTS else None)
@@ -5835,9 +6246,12 @@ def diagnose(root=None):
     for fn in (_diag_oob_not_referenced, _diag_gfx_missing,
                _diag_recruit_last_line, _diag_decision_category,
                _diag_character_unrecruited, _diag_localisation_missing,
-               _diag_tag_def_missing, _diag_division_template_missing,
+               _diag_tag_def_missing, _diag_tag_undefined, _diag_replace_risk,
+               _diag_replace_refs,
+               _diag_division_template_missing,
                _diag_schema_unknown_field, _diag_schema_character,
                _diag_schema_decision, _diag_schema_ideas,
+               _diag_map_format,
                # _diag_schema_focus：国策树嵌套太深（focus → completion_reward
                # → add_tech_bonus → 参数），深度算不稳，误报 0.24% 不可接受。
                # 代码留着，等有更好的深度跟踪再启用。
@@ -6101,13 +6515,24 @@ def load_country_tags(root=None):
 
 
 def _country_tags_write_base(root):
-    """common/country_tags 的写入层，拒写父 mod。"""
+    """common/country_tags 的写入层，拒写父 mod。
+
+    先按传入的 root 解析叠加链，再退回全局 ROOTS。
+    只看 ROOTS 的话，直接调用（脚本、world_create 这类编排）会因为没有
+    全局状态而误报「找不到可写的 mod 目录」，哪怕 root 本身完全可写。
+    """
     top = None
-    for r in (ROOTS or []):
-        lay = mod_layers(r) or [r]
-        cand = lay[-1] if lay else r
+    if root:
+        lay = mod_layers(root) or [root]
+        cand = lay[-1] if lay else root
         if cand and not is_under_game(cand):
             top = cand
+    if not top:
+        for r in (ROOTS or []):
+            lay = mod_layers(r) or [r]
+            cand = lay[-1] if lay else r
+            if cand and not is_under_game(cand):
+                top = cand
     if not top:
         return None, "找不到可写的 mod 目录"
     tgt, why = write_base(root, "common/country_tags")
@@ -6217,6 +6642,218 @@ def country_tag_add(root, tag, color=None, culture="western_european_gfx"):
     return {"ok": True, "tag": tag, "color": rgb, "file": "zz_editor_tags.txt",
             "msg": "已加 tag %s（颜色 %d,%d,%d，定义 countries/%s.txt）" % (
                 tag, rgb[0], rgb[1], rgb[2], tag)}
+
+
+def country_history_create(root, tag, capital=1, ruling_party="neutrality",
+                           name=None, oob=None, research_slots=3):
+    """给新 tag 写 history/countries/<TAG> - <Name>.txt。
+
+    country_tag_add 只写 common/country_tags 和 common/countries，
+    不写 history —— 新国家在游戏里就是「没有首都、没有政府、没有科技」的空壳。
+    这个函数补的就是这一层，格式照原版最简国家（如 NWF）写。
+    """
+    root = _map_pick(root)
+    tag = (tag or "").upper().strip()
+    if not re.match(r'^[A-Z][A-Z0-9]{1,3}$', tag):
+        return {"ok": False, "msg": "tag 格式不对（如 GER、UNI）"}
+    top, _states = _states_dir_for_write(root)
+    if not top:
+        return {"ok": False, "msg": "找不到可写的 mod 目录（原版只读）"}
+    try:
+        cap = int(capital)
+    except Exception:
+        return {"ok": False, "msg": "capital 必须是省号"}
+
+    d = os.path.join(top, "history", "countries")
+    os.makedirs(d, exist_ok=True)
+    # HOI4 按 tag 认国家历史、不看文件名，同一个 tag 有两个文件会互相打架。
+    # 所以先按「文件名里的 tag」查重，而不是只查同名文件。
+    try:
+        for fn in os.listdir(d):
+            if not fn.endswith(".txt"):
+                continue
+            head = fn.split(" ")[0].split(".")[0].strip().upper()
+            if head == tag:
+                return {"ok": False,
+                        "msg": "这个 tag 已经有国家历史：%s" % fn}
+    except Exception:
+        pass
+    safe = re.sub(r'[^\w\u4e00-\u9fa5-]+', "_", (name or tag))[:40]
+    fname = "%s - %s.txt" % (tag, safe)
+    p = os.path.join(d, fname)
+    if os.path.exists(p):
+        return {"ok": False, "msg": "已经存在：%s" % fname}
+
+    body = 'capital = %d\nset_research_slots = %d\n' % (cap, int(research_slots))
+    if oob:
+        body += 'oob = "%s"\n' % oob
+    body += (
+        'set_technology = {\n\tinfantry_weapons = 1\n}\n'
+        'set_politics = {\n'
+        '\truling_party = %s\n'
+        '\tlast_election = "1936.1.1"\n'
+        '\telection_frequency = 48\n'
+        '\telections_allowed = no\n'
+        '}\n'
+        'set_popularities = {\n'
+        '\tdemocratic = 10\n'
+        '\tfascism = 10\n'
+        '\tcommunism = 10\n'
+        '\tneutrality = 70\n'
+        '}\n' % ruling_party)
+    try:
+        _atomic_write(p, _bom_for(p) + body.encode("utf-8"))
+    except Exception as e:
+        return {"ok": False, "msg": "写文件失败：%s" % e}
+    reload_data()
+    return {"ok": True, "tag": tag,
+            "file": os.path.relpath(p, top).replace(os.sep, "/"),
+            "msg": "已建 %s 的国家历史（首都省 %d）" % (tag, cap)}
+
+
+def world_create(out_dir, source="procedural", width=1024, height=512,
+                 n_provinces=40, min_size=300, seed=11, src_path=None,
+                 sea_level=0.42, balance=True, min_province_px=800,
+                 n_regions=None, n_supply=None,
+                 tag="ZZV", country_name="新世界", color=None,
+                 per_state=8, mod_name=None, army=True):
+    """一键建世界：地图 → tag → 州 → 国家历史 → 军队 → 本地化 → 剧本。
+
+    每一步都调用编辑器已有的函数（map_generate / country_tag_add /
+    state_create / country_history_create / template_add / unit_add /
+    loc_generate / bookmark_add），不自己拼文件。任何一步失败都会记进 steps
+    并终止后续步骤，避免在半成品上继续叠加。
+
+    返回 {"ok", "steps": [{step, ok, msg}], "out_dir", "provinces", "states"}
+    """
+    steps = []
+    out_dir = os.path.abspath(out_dir) if out_dir else ""
+
+    def rec(name, r):
+        ok = bool(r.get("ok")) if isinstance(r, dict) else bool(r)
+        msg = (r.get("msg") if isinstance(r, dict) else "") or ""
+        steps.append({"step": name, "ok": ok, "msg": msg})
+        return ok
+
+    if not out_dir:
+        return {"ok": False, "msg": "要指定输出目录", "steps": steps}
+
+    def done(extra=None):
+        d = {"ok": all(s["ok"] for s in steps), "steps": steps,
+             "out_dir": out_dir}
+        if extra:
+            d.update(extra)
+        return d
+
+    # 1) 地图（只出 map/，骨架交给下面的步骤）
+    r = map_generate(source=source, out_dir=out_dir, width=width, height=height,
+                     n_provinces=n_provinces, min_size=min_size, seed=seed,
+                     src_path=src_path, sea_level=sea_level, balance=balance,
+                     min_province_px=min_province_px,
+                     n_regions=n_regions, n_supply=n_supply)
+    if not rec("地图生成", r):
+        return done()
+
+    # 2) descriptor：mod_layers / country_tag_add / state_create 都靠它认出
+    #    「这是一个 mod」，没有它后面每一步都会报「找不到可写的 mod 目录」。
+    try:
+        import mapgen_scaffold as _scaf
+        _scaf.write_descriptor(out_dir, mod_name or country_name or "新世界")
+        steps.append({"step": "写 descriptor", "ok": True, "msg": ""})
+    except Exception as e:
+        steps.append({"step": "写 descriptor", "ok": False, "msg": str(e)})
+        return done()
+
+    # 3) 重载，让 PROV_RGB / COUNTRIES 认识这张新图
+    try:
+        load_mod(out_dir)
+        _ensure_prov_rgb(out_dir)   # 懒加载，不主动触发就一直是空的
+        steps.append({"step": "重载地图", "ok": True,
+                      "msg": "%d 个省" % len(PROV_RGB)})
+    except Exception as e:
+        steps.append({"step": "重载地图", "ok": False, "msg": str(e)})
+        return done()
+
+    n_prov = max(0, len(PROV_RGB) - 1)   # 去掉省 0
+
+    # 3) tag 必须先存在，州和历史的 owner 才能引用
+    if not rec("建国家 tag", country_tag_add(out_dir, tag, color)):
+        return done()
+
+    # 4) 按每州 per_state 个省切州，全部归这个 tag。
+    #    必须只取陆省：HOI4 的州里一旦出现 sea 省，加载期直接报错退出。
+    #    definition.csv 第 5 列是 land / sea，用它精确筛。
+    land = []
+    csvp = os.path.join(out_dir, "map", "definition.csv")
+    try:
+        for line in io.open(csvp, encoding="utf-8", errors="replace"):
+            parts = line.strip().split(";")
+            if len(parts) >= 5 and parts[4].strip() == "land":
+                try:
+                    pid = int(parts[0])
+                except Exception:
+                    continue
+                if pid > 0:
+                    land.append(pid)
+    except Exception as e:
+        steps.append({"step": "读 definition.csv", "ok": False, "msg": str(e)})
+        return done()
+    land.sort()
+    made_states, first_state = 0, None
+    try:
+        step_n = int(per_state) if int(per_state) > 0 else 8
+    except Exception:
+        step_n = 8
+    for i in range(0, len(land), step_n):
+        pids = land[i:i + step_n]
+        if not pids:
+            continue
+        r = state_create(pids, root=out_dir,
+                         name="%s_%d" % (tag, made_states + 1),
+                         owner=tag)
+        if r.get("ok"):
+            made_states += 1
+            if first_state is None:
+                first_state = r.get("id") or r.get("state") or 1
+        elif "已经存在" not in (r.get("msg") or ""):
+            steps.append({"step": "建州 %d" % (made_states + 1),
+                          "ok": False, "msg": r.get("msg") or ""})
+            break
+    steps.append({"step": "建州", "ok": made_states > 0,
+                  "msg": "建成 %d 个州，每州 %d 省" % (made_states, step_n)})
+
+    # 5) 国家历史：首都取第一个陆省
+    capital = land[0] if land else 1
+    rec("国家历史", country_history_create(
+        out_dir, tag, capital=capital, name=country_name,
+        oob=("%s_1936" % tag if army else None)))
+
+    # 6) 开局部队（可选）
+    if army:
+        try:
+            tres = template_add("%s_Infantry" % tag, "infantry",
+                                root=out_dir, tag=tag)
+            if rec("师团模板", tres):
+                rec("开局部队", unit_add(capital, "%s_Infantry" % tag,
+                                         root=out_dir, tag=tag))
+        except Exception as e:
+            steps.append({"step": "军队", "ok": False, "msg": str(e)})
+
+    # 7) 本地化占位
+    try:
+        rec("本地化", loc_generate(out_dir))
+    except Exception as e:
+        steps.append({"step": "本地化", "ok": False, "msg": str(e)})
+
+    # 8) 剧本
+    try:
+        rec("剧本", bookmark_add(out_dir, country_name or mod_name or "新世界",
+                                 "1936.1.1.12", default_country=tag,
+                                 countries=[tag]))
+    except Exception as e:
+        steps.append({"step": "剧本", "ok": False, "msg": str(e)})
+
+    return done({"provinces": len(land), "states": made_states, "tag": tag})
 
 
 def country_tag_delete(root, tag):
@@ -7319,7 +7956,7 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
             portrait_note = "（头像导入异常：%s）" % str(e)[:40]
 
     body = ['\t%s = {' % cid,
-            '\t\tname = "%s"' % name.replace('"', "")]
+            '		name = "%s"' % name.replace('"', "")]
     if portrait_large or portrait_small:
         body.append('\t\tportraits = {')
         body.append('\t\t\tarmy = {')
@@ -7661,12 +8298,7 @@ def load_bookmarks(root=None):
 
 def _bookmark_write_base(root):
     """common/bookmarks 的写入层，拒写父 mod。"""
-    top = None
-    for r in (ROOTS or []):
-        lay = mod_layers(r) or [r]
-        cand = lay[-1] if lay else r
-        if cand and not is_under_game(cand):
-            top = cand
+    top = _top_mod(root)
     if not top:
         return None, "找不到可写的 mod 目录"
     tgt, why = write_base(root, "common/bookmarks")
@@ -7718,10 +8350,10 @@ def _game_language():
     return "l_english"
 
 
-def _bookmark_loc(root, name, desc, countries):
+def _bookmark_loc(root, key, disp, desc_text, countries):
     """给剧本写本地化，否则界面上显示的是 NAME/DESC 这种 key。
 
-    name 和 desc 是同一个 key 时只写一条，避免 HOI4 报重复定义。
+    key 是 ASCII 标识符（写进 bookmarks），disp / desc_text 是中文显示名。
     """
     tgt, err = _bookmark_write_base(root)
     if not tgt:
@@ -7749,9 +8381,12 @@ def _bookmark_loc(root, name, desc, countries):
         if re.search(r'(?m)^\s*' + re.escape(k) + r'\s*:', joined):
             return
         body.append(' %s:0 "%s"' % (k, v))
-    add(name, name)
-    if desc and desc != name:
-        add(desc, desc)
+    add(key, disp)
+    if desc_text and desc_text != disp:
+        add(key + "_DESC", desc_text)
+    else:
+        # desc 与 name 同文时也要写一条，否则界面上的「历史简介」显示裸 key
+        add(key + "_DESC", disp)
     for c in countries:
         add(c.upper() + "_DESC", c.upper())
 
@@ -7793,9 +8428,12 @@ def bookmark_add(root, name, date, desc=None, picture=None, default_country=None
     os.makedirs(d, exist_ok=True)
     p = os.path.join(d, "zz_editor_bookmarks.txt")
 
+    # 本地化 key 只能是最长 25 字符的 ASCII 标识符，中文名必须放在值那边。
+    # 直接把中文名当 key 写进 yml，游戏报 Invalid key name，剧本名也显示不出来。
+    bkey = "ZZ_EDITOR_BM_" + hashlib.md5(name.encode("utf-8")).hexdigest()[:8].upper()
     block = ['\tbookmark = {',
-             '\t\tname = "%s"' % name.replace('"', ""),
-             '\t\tdesc = "%s"' % (desc or name).replace('"', ""),
+             '		name = "%s"' % bkey,
+             '		desc = "%s_DESC"' % bkey,
              '\t\tdate = %s' % date,
              '\t\tpicture = "%s"' % (picture or "GFX_select_date_1936"),
              '\t\tdefault_country = "%s"' % tag,
@@ -7831,7 +8469,7 @@ def bookmark_add(root, name, date, desc=None, picture=None, default_country=None
         snapshot(p)
     _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
     try:
-        _bookmark_loc(root, name, desc or name, clist)
+        _bookmark_loc(root, bkey, name, desc or name, clist)
     except Exception:
         pass
     return {"ok": True,
@@ -10054,10 +10692,14 @@ def _free_state_id():
     return n
 
 
-def state_create(provinces, root=None, name=None, category="rural", manpower=100000, sid=None):
+def state_create(provinces, root=None, name=None, category="rural", manpower=100000,
+                 sid=None, owner=None):
     """用给定省份新建一个州。
+
     - 这些省若已属于别的州，会从原州移出（HOI4 里一个省只能属于一个州）
     - 文件写到链顶 mod 的 history/states/，原版与父 mod 不写
+    - 给了 owner 就同时写 history = { owner / add_core_of }，
+      否则这个州是无主地，地图上不会属于任何国家
     """
     root = _map_pick(root)
     try:
@@ -10133,7 +10775,20 @@ def state_create(provinces, root=None, name=None, category="rural", manpower=100
         "\tprovinces = {",
     ]
     body_lines += ["\t\t%d" % p for p in pids]
-    body_lines += ["\t}", "\tlocal_supplies = 0.0", "}", ""]
+    body_lines += ["\t}", "\tlocal_supplies = 0.0"]
+    # history 块必须在 provinces 之后也能解析，但照原版顺序写在前面更稳。
+    # 没有 owner 的州是无主地，新地图上建完州却不写 owner，国家就没有领土。
+    own = (owner or "").strip().upper()
+    if own:
+        # 插在 state_category 之后、provinces 之前（原版州文件就是这个顺序）。
+        # body_lines 前 5 行：state={ / id / name / manpower / state_category
+        body_lines = body_lines[:5] + [
+            "\thistory = {",
+            "\t\towner = %s" % own,
+            "\t\tadd_core_of = %s" % own,
+            "\t}",
+        ] + body_lines[5:]
+    body_lines += ["}", ""]
     content = "\n".join(body_lines)
 
     os.makedirs(states_dir, exist_ok=True)
@@ -10150,7 +10805,9 @@ def state_create(provinces, root=None, name=None, category="rural", manpower=100
     # 内存里也建一条，界面立刻能用
     STATES[new_id] = {
         "id": new_id, "name": st_name, "manpower": str(mp), "category": cat,
-        "provinces": pids, "owner": "", "cores": [], "victory_points": {},
+        "provinces": pids, "owner": (owner or "").strip().upper(),
+        "cores": [(owner or "").strip().upper()] if owner else [],
+        "victory_points": {},
         "buildings": {}, "path": fpath, "file": fpath, "source": os.path.basename(top),
         "root": top, "rel": os.path.relpath(fpath, top), "created": True,
     }
@@ -16787,6 +17444,34 @@ class Handler(SimpleHTTPRequestHandler):
                                        body.get("color"), body.get("culture")))
         elif self.path == "/api/country_tag_delete":
             self._send(country_tag_delete(body.get("root") or None, body.get("tag")))
+        elif self.path == "/api/country_history_create":
+            self._send(country_history_create(
+                body.get("root") or None, body.get("tag"),
+                capital=body.get("capital") or 1,
+                ruling_party=body.get("ruling_party") or "neutrality",
+                name=body.get("name"), oob=body.get("oob") or None,
+                research_slots=body.get("research_slots") or 3))
+        elif self.path == "/api/world_create":
+            self._send(world_create(
+                body.get("out_dir") or "",
+                source=body.get("source") or "procedural",
+                width=body.get("width") or 1024,
+                height=body.get("height") or 512,
+                n_provinces=body.get("n_provinces") or 40,
+                min_size=body.get("min_size") or 300,
+                seed=body.get("seed") or 11,
+                src_path=body.get("src_path") or None,
+                sea_level=body.get("sea_level") or 0.42,
+                balance=body.get("balance", True),
+                min_province_px=body.get("min_province_px") or 800,
+                n_regions=body.get("n_regions") or None,
+                n_supply=body.get("n_supply") or None,
+                tag=body.get("tag") or "ZZV",
+                country_name=body.get("country_name") or "新世界",
+                color=body.get("color") or None,
+                per_state=body.get("per_state") or 8,
+                mod_name=body.get("mod_name") or None,
+                army=body.get("army", True)))
         elif self.path == "/api/country_tag_refs":
             self._send(country_tag_refs(body.get("root") or None, body.get("tag")))
         elif self.path == "/api/country_starter":

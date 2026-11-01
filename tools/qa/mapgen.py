@@ -13,6 +13,7 @@ import mapgen_core as core
 import mapgen_write as mgw
 import mapgen_extra as mgx
 import mapgen_sources as mgs
+import mapgen_scaffold as mgsc
 
 HOI4_MAP = r'E:\SteamLibrary\steamapps\common\Hearts of Iron IV\map'
 
@@ -22,12 +23,25 @@ def _detect_size(labels):
     return w, h
 
 
-def generate(source="procedural", out_dir=None, width=1200, height=440,
+def _align256(v):
+    """向上取整到 256 的倍数。
+
+    HOI4 要求 provinces.bmp 等地图位图的宽高都必须是 256 的倍数，
+    不是整数倍时游戏在加载期直接崩，且 error.log 里只留 shader 报错，
+    看不出是尺寸问题。
+    """
+    v = int(v)
+    return ((v + 255) // 256) * 256
+
+
+def generate(source="procedural", out_dir=None, width=1024, height=512,
              n_provinces=180, min_size=300, seed=11, src_path=None,
              sea_level=0.42, template_map=HOI4_MAP, log=None,
              balance=True, min_province_px=800,
              n_regions=None, n_supply=None, bbox=None, rivers_path=None,
-             cities_path=None, city_radius=4):
+             cities_path=None, city_radius=4,
+             scaffold=False, mod_name="雪绒地图测试", mod_tag="ZZZ",
+             per_state=8):
     """生成完整 map/ 目录。
 
     source:
@@ -37,6 +51,9 @@ def generate(source="procedural", out_dir=None, width=1200, height=440,
       image       任意图片按色块
     """
     out = []
+    # 尺寸强制对齐 256，避免调用方传了非倍数导致加载期崩
+    width = _align256(width)
+    height = _align256(height)
     gnames = {}
     thint = None
     rmask = None
@@ -124,8 +141,36 @@ def generate(source="procedural", out_dir=None, width=1200, height=440,
         land = labels > 0
         say("  %d → %d 个省" % (before, n))
 
-    colors = core.unique_colors(n, seed)
+    # 海也要成省：not-land 切连通块，id 接在陆省后面（n+1 .. n+sea_n）
+    say("切分海省…")
+    sea_ids = set()
+    sea_n = 0
+    try:
+        import mapgen_sea as mgsea
+        sea_arr, sea_n = mgsea.split_sea(land)
+        if sea_n:
+            labels = np.where(land, labels, sea_arr + n)
+            sea_ids = set(range(n + 1, n + sea_n + 1))
+            say("  %d 个海省（id %d..%d）" % (sea_n, n + 1, n + sea_n))
+        else:
+            say("  没有海，跳过")
+    except Exception as e:
+        say("  海省切分失败：%s" % str(e)[:80])
+
+    n_all = n + sea_n
+    colors = core.unique_colors(n_all, seed)
     say("分配了 %d 个唯一颜色" % len(colors))
+
+    # 陆省按质心纬度分洲（continent.txt 的 ID 顺序 = 这里的 1..7）
+    conts = {}
+    try:
+        cen = mgx.centroids(labels)
+        for pid in range(1, n + 1):
+            y = cen.get(pid, (0.0, 0.0))[1]
+            band = int(y / max(1.0, float(labels.shape[0])) * 7) + 1
+            conts[pid] = min(7, max(1, band))
+    except Exception as e:
+        say("  分洲失败，全归 1 号洲：%s" % str(e)[:60])
 
     map_dir = os.path.join(out_dir, "map")
     os.makedirs(map_dir, exist_ok=True)
@@ -134,9 +179,11 @@ def generate(source="procedural", out_dir=None, width=1200, height=440,
     mgw.write_provinces(labels, colors, os.path.join(map_dir, "provinces.bmp"))
     say("写 definition.csv…")
     mgw.write_definition_csv(labels, colors, os.path.join(map_dir, "definition.csv"),
-                             names=gnames)
+                             names=gnames, continents=conts, sea_ids=sea_ids)
     say("写 heightmap.bmp…")
-    mgw.write_heightmap(land, os.path.join(map_dir, "heightmap.bmp"))
+    mgw.write_heightmap(
+        land, os.path.join(map_dir, "heightmap.bmp"),
+        palette_from=os.path.join(template_map, "heightmap.bmp") if template_map else None)
     say("写 world_normal.bmp…")
     try:
         mgw.write_world_normal(os.path.join(map_dir, "heightmap.bmp"),
@@ -163,10 +210,12 @@ def generate(source="procedural", out_dir=None, width=1200, height=440,
     mgw.write_cities(labels, _tarr, os.path.join(map_dir, "cities.bmp"),
                      os.path.join(template_map, "cities.bmp") if template_map else None,
                      city_mask=cmask)
-    mgw.write_blank_indexed(size, os.path.join(map_dir, "trees.bmp"))
+    mgw.write_blank_indexed(
+        size, os.path.join(map_dir, "trees.bmp"),
+        palette_from=os.path.join(template_map, "trees.bmp") if template_map else None)
     say("写 default.map / continent.txt…")
     mgw.write_default_map(os.path.join(map_dir, "default.map"), n)
-    mgw.write_continent_txt(os.path.join(map_dir, "continent.txt"), 1)
+    mgw.write_continent_txt(os.path.join(map_dir, "continent.txt"))
 
     if template_map and os.path.isdir(template_map):
         say("从原版复制模板文件…")
@@ -176,7 +225,7 @@ def generate(source="procedural", out_dir=None, width=1200, height=440,
         say("  没找到原版 map 目录，跳过模板复制")
 
     say("写空文件…")
-    mgw.write_empty_texts(map_dir)
+    mgw.write_empty_texts(map_dir, size=size)
     say("按地理位置聚类…")
     try:
         nreg = int(n_regions) if n_regions else max(1, (n + 59) // 60)
@@ -199,6 +248,19 @@ def generate(source="procedural", out_dir=None, width=1200, height=440,
             "land_pixels": int(land.sum())}
     io.open(os.path.join(out_dir, "mapgen.json"), "w", encoding="utf-8",
             newline="").write(json.dumps(meta, ensure_ascii=False, indent=1))
+    if scaffold:
+        say("补齐 mod 骨架（descriptor / states / 国家 / 本地化）…")
+        try:
+            sc = mgsc.build(out_dir, labels, mod_name, mod_tag, int(per_state),
+                            sea_ids=sea_ids)
+            if sc.get("ok"):
+                for m in sc["made"]:
+                    say("  " + m)
+            else:
+                say("  骨架失败：" + (sc.get("msg") or ""))
+        except Exception as e:
+            say("  骨架失败：%s" % str(e)[:80])
+
     say("完成：%d 个省，%dx%d" % (n, size[0], size[1]))
     return {"ok": True, "province_count": n, "width": size[0],
             "height": size[1], "map_dir": map_dir, "log": out,
