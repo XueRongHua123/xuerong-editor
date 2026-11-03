@@ -16306,7 +16306,7 @@ def save_focus(root, rel, fid, fields):
     # 校验：重新解析该 focus
     try:
         spans2 = []
-        for m in re.finditer(r'(?m)^\s*focus\s*=\s*\{', newtext):
+        for m in re.finditer(r'(?m)^\s*(?:focus|shared_focus)\s*=\s*\{', newtext):
             b2 = newtext.find('{', m.end() - 1)
             e2 = brace_match(newtext, b2)
             spans2.append((b2, e2))
