@@ -377,6 +377,82 @@ def diagnose(map_dir):
     else:
         add(12, "PASS", "所有陆省都归属了战略区", "%d 个省" % len(land_ids))
 
+    # 13-15 索引图语义方向
+    #
+    # 这三张 8 位图都是「用索引表达语义」，索引写反不会报错，只会让引擎把海当陆。
+    # 方向是按省份类型做面积统计反解出来的（原版 + ES 双向验证）：
+    #   rivers.bmp  255 = 陆地，254 = 海洋，3/4/6/11 = 河
+    #   terrain.bmp 15  = 海洋，0 = plains，1 = forest，2 = hills，11 = mountain
+    #   cities.bmp  15  = 无城市，0/1/2 = 有城市（对应 cities.txt 的 color_group）
+    _prov = _bmp_pixels(os.path.join(map_dir, "provinces.bmp"))
+    if _prov is not None and _prov.ndim == 3 and rows:
+        _key = (_prov[:, :, 0].astype(np.int32) << 16) | \
+               (_prov[:, :, 1].astype(np.int32) << 8) | _prov[:, :, 2].astype(np.int32)
+        _land_m = np.zeros(_key.shape, dtype=bool)
+        _sea_m = np.zeros(_key.shape, dtype=bool)
+        for r in rows:
+            if r[0] == 0:
+                continue
+            c = (r[1] << 16) | (r[2] << 8) | r[3]
+            if r[4] == "land":
+                _land_m |= (_key == c)
+            elif r[4] == "sea":
+                _sea_m |= (_key == c)
+
+        _rv = _bmp_pixels(os.path.join(map_dir, "rivers.bmp"))
+        if _rv is None or _rv.ndim != 2:
+            add(13, "WARN", "rivers.bmp 读不到，跳过语义检查")
+        else:
+            lp = (_rv[_land_m] == 255).sum() / max(1, int(_land_m.sum()))
+            sp = (_rv[_sea_m] == 254).sum() / max(1, int(_sea_m.sum()))
+            if lp < 0.9 or sp < 0.9:
+                add(13, "FAIL", "rivers.bmp 海陆方向反了",
+                    "陆地像素里 255 只占 %.0f%%，海洋像素里 254 只占 %.0f%%"
+                    "（255=陆、254=海；写反等于全图都是海）" % (lp * 100, sp * 100))
+            else:
+                add(13, "PASS", "rivers.bmp 方向正确",
+                    "陆地 255 占 %.0f%% / 海洋 254 占 %.0f%%" % (lp * 100, sp * 100))
+
+        _tr = _bmp_pixels(os.path.join(map_dir, "terrain.bmp"))
+        if _tr is None or _tr.ndim != 2:
+            add(14, "WARN", "terrain.bmp 读不到，跳过语义检查")
+        else:
+            sp = (_tr[_sea_m] == 15).sum() / max(1, int(_sea_m.sum()))
+            if sp < 0.9:
+                add(14, "FAIL", "terrain.bmp 海不是索引 15",
+                    "海洋像素里 15 只占 %.0f%%（15=(8,31,130) 深蓝=海）" % (sp * 100))
+            else:
+                add(14, "PASS", "terrain.bmp 海是索引 15", "占 %.0f%%" % (sp * 100))
+
+        _ct = _bmp_pixels(os.path.join(map_dir, "cities.bmp"))
+        if _ct is None or _ct.ndim != 2:
+            add(15, "WARN", "cities.bmp 读不到，跳过语义检查")
+        else:
+            none_p = (_ct == 15).sum() / _ct.size
+            if none_p < 0.5:
+                add(15, "FAIL", "cities.bmp 大部分不是 15（无城市）",
+                    "15 只占 %.0f%% —— 索引 0 是「有城市」，整图 0 == 整图都是城市区"
+                    % (none_p * 100))
+            else:
+                add(15, "PASS", "cities.bmp 以 15（无城市）为主",
+                    "15 占 %.0f%%" % (none_p * 100))
+    else:
+        add(13, "WARN", "缺 provinces.bmp / definition，跳过 bmp 语义检查")
+
+    # 16 补给节点：第一列是节点等级，恒为 1
+    _snp = os.path.join(map_dir, "supply_nodes.txt")
+    if os.path.isfile(_snp):
+        _sn = [ln.split() for ln in (_read_text(_snp) or "").splitlines() if ln.strip()]
+        _bad = [f for f in _sn if len(f) != 2 or f[0] != "1"]
+        if _bad:
+            add(16, "FAIL", "supply_nodes.txt 第一列不是恒为 1",
+                "第一列是节点等级（原版 727 行、ES 1822 行全是 1），"
+                "写州号会变成等级 1/2/3/4。前几个：%s" % (_bad[:3],))
+        else:
+            add(16, "PASS", "supply_nodes.txt 格式正确", "%d 行" % len(_sn))
+    else:
+        add(16, "WARN", "没有 supply_nodes.txt")
+
     fails = [i for i in items if i["level"] == "FAIL"]
     warns = [i for i in items if i["level"] == "WARN"]
     return {"ok": not fails, "items": items,

@@ -184,24 +184,37 @@ TERRAIN_SEA = 15       # (8,31,130)  深蓝
 TERRAIN_SNOW = 16      # (255,255,255) 白
 
 
-# rivers.bmp 的常用索引（实测自 HoI4 1.19）
-RIVER_LAND = 254      # (122,122,122) 陆地
-RIVER_SEA = 255       # (255,255,255) 海
+# rivers.bmp 的常用索引。
+#
+# **255 = 陆地，254 = 海洋** —— 这是按省份类型做面积统计反解出来的，不是猜的：
+#   原版  陆省像素 405 万 → 255 占 396 万（97.7%）；海省像素 743 万 → 254 占 742 万（99.96%）
+#   ES    陆省像素 1188 万 → 255 占 1173 万；      海省像素 107 万 → 254 占 107 万
+# 两个能跑的自定义地图 mod 都是这个方向，而这里是**反的**（254 当陆、255 当海），
+# 加上下面那句 `labels == 0` 又永远不成立，结果整张图被涂成 254 —— 在引擎眼里
+# **全图都是海**。已实测：改对之后仍然崩在同一偏移，所以它不是这次的崩因，
+# 但方向必须掰正，否则地形/河流渲染永远是错的。
+RIVER_LAND = 255      # (255,255,255) 陆地
+RIVER_SEA = 254       # (122,122,122) 海
 RIVER_MAIN = 3        # (0,225,255)   主流（青）
 RIVER_TRIB = 6        # (0,100,255)   支流（蓝）
-RIVER_SMALL = 4       # (0,200,255)   小溪
+RIVER_SMALL = 4        # (0,200,255)   小溪
 RIVER_DEEP = 11       # (0,0,100)     深河
 
 
-def write_rivers(labels, rivers, path, palette_from=None):
+def write_rivers(labels, rivers, path, palette_from=None, sea_mask=None):
     """写 rivers.bmp。
 
-    labels  省图（0 = 海）
+    labels  省图
     rivers  bool 数组，True = 河（可为 None 表示无河）
+    sea_mask  海=True 的布尔图。**必须传** —— 海也是真省号，`labels == 0`
+              永远不成立（和 terrain.bmp / cities.bmp 是同一族 bug）。
     """
     h, w = labels.shape
     arr = np.full((h, w), RIVER_LAND, dtype=np.uint8)
-    arr[labels == 0] = RIVER_SEA
+    if sea_mask is not None and getattr(sea_mask, "shape", None) == labels.shape:
+        arr[np.asarray(sea_mask, dtype=bool)] = RIVER_SEA
+    else:
+        arr[labels == 0] = RIVER_SEA
     if rivers is not None and rivers.shape == labels.shape:
         arr[rivers] = RIVER_MAIN
     pal = _palette_bytes(palette_from) if palette_from else None
@@ -236,11 +249,16 @@ def write_cities(labels, terrain_idx, path, palette_from=None, city_mask=None,
     if city_mask is not None and city_mask.shape == labels.shape:
         arr = np.full((h, w), CITY_NONE, dtype=np.uint8)
         arr[(city_mask > 0) & (labels > 0)] = city_index
-    elif terrain_idx is not None and terrain_idx.shape == labels.shape:
-        arr = terrain_idx.astype(np.uint8).copy()
     else:
-        arr = np.full((h, w), TERRAIN_PLAINS, dtype=np.uint8)
-        arr[labels == 0] = TERRAIN_SEA
+        # 没给城市掩码 = 「这张图没有城市区」，一律 CITY_NONE。
+        #
+        # 旧写法是 `arr = 全 TERRAIN_PLAINS(0)` + `arr[labels == 0] = 15`。两个问题：
+        #   1. `labels == 0` 永远不成立（海也是真省号）；
+        #   2. 0 在这张图里是 **CITY_FOREIGN = 有城市**。
+        # 结果是整张图 52 万像素全被标成「城市区」，海也算 —— 而 ES 是 100% 15、
+        # 原版 86% 是 15。实测改成 15 之后仍然崩在同一偏移，所以不是崩因，
+        # 但「全图都是城市区」显然不是想要的样子。
+        arr = np.full((h, w), CITY_NONE, dtype=np.uint8)
     pal = _palette_bytes(palette_from) if palette_from else None
     if not pal:
         pal = [0] * (256 * 3)
@@ -266,18 +284,30 @@ def _load_palette(palette_from):
         return None
 
 
-def write_terrain(labels, thint, path, palette_from=None):
+def write_terrain(labels, thint, path, palette_from=None, sea_mask=None):
     """按地形提示写 terrain.bmp。
 
-    labels  省图（0 = 海）
+    labels  省图
     thint   地形提示（0 plains / 1 hills / 2 mountain / 3 snow / 4 desert），
             可为 None
     palette_from  从哪个文件借调色板（一般是原版 terrain.bmp）
+    sea_mask      海=True 的布尔图。**必须传**，否则整张图都是 plains。
+
+    注意：terrain.bmp 是**按调色板颜色**表达地形的，引擎拿每个像素的 RGB 去
+    匹配 `common/terrain/00_terrain.txt` 里的地形。原版里 index 15 = (8,31,130)
+    深蓝 = 海，index 0 = (86,124,27) 绿 = plains。
+
+    以前这里写的是 `arr[labels == 0] = TERRAIN_SEA` —— 但海也是**真省**（id 从
+    n+1 起），labels 里根本没有 0，于是整张图（连海带陆）全是 index 0 = plains。
+    后果是每个海省都带着「陆地地形」进初始化。
     """
     h, w = labels.shape
     arr = np.full((h, w), TERRAIN_PLAINS, dtype=np.uint8)
-    # 海
-    arr[labels == 0] = TERRAIN_SEA
+    # 海：优先用显式掩码；没给才退回「labels==0」这个老写法
+    if sea_mask is not None and getattr(sea_mask, "shape", None) == labels.shape:
+        arr[np.asarray(sea_mask, dtype=bool)] = TERRAIN_SEA
+    else:
+        arr[labels == 0] = TERRAIN_SEA
     if thint is not None and thint.shape == labels.shape:
         land = labels > 0
         arr[land & (thint == 1)] = TERRAIN_HILLS
@@ -634,8 +664,11 @@ def write_supply_graph(map_dir, states, per_area=60):
                 newline="").write(body)
         made += 1
         sid += 1
-    # 补给节点：原版格式是每行「州号 省号」，一个州至少一个节点
-    nodes = "".join("%d %d \n" % (s, p[0]) for s, p in states)
+    # 补给节点：格式是「节点等级 省号」，等级几乎恒为 1
+    # （原版 727 行第一列**全是 1**，ES 1822 行也全是 1）。
+    # 旧写法把**州号**写进了第一列，等于写出等级 1/2/3/4 —— 实测不是崩因，
+    # 但等级不是这么用的。
+    nodes = "".join("1 %d \n" % p[0] for s, p in states)
     io.open(os.path.join(map_dir, "supply_nodes.txt"), "w", encoding="utf-8",
             newline="").write(nodes)
     return made

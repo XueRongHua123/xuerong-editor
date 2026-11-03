@@ -170,6 +170,78 @@ def main():
             raw = io.open(os.path.join(md, fn), encoding="utf-8").read()
             check("%s 里没有省 0" % fn,
                   not any(ln.startswith("0;") for ln in raw.splitlines()))
+
+        # [8] bmp / 补给节点的语义方向（都是「labels == 0 永不成立」那一族）
+        #
+        # 这一组的对象是地图生成器，不是占位生成器；占位测试不产 bmp 时跳过。
+        _need = [os.path.join(md, n) for n in
+                 ("provinces.bmp", "rivers.bmp", "cities.bmp", "terrain.bmp",
+                  "definition.csv")]
+        if not all(os.path.exists(p) for p in _need):
+            check("[8] bmp 语义（本次不产 bmp，跳过）", True, "占位测试没有地图 bmp")
+        else:
+            try:
+                import numpy as _np
+                from PIL import Image as _Im
+                _lab = _np.asarray(_Im.open(os.path.join(md, "provinces.bmp")).convert("RGB"))
+                _key = (_lab[:, :, 0].astype(_np.int32) << 16) | \
+                       (_lab[:, :, 1].astype(_np.int32) << 8) | _lab[:, :, 2].astype(_np.int32)
+                _rgb2pid, _kind = {}, {}
+                for _ln in io.open(os.path.join(md, "definition.csv"), encoding="utf-8", errors="replace"):
+                    _p = _ln.strip().split(";")
+                    if len(_p) >= 5:
+                        try:
+                            _rgb2pid[(int(_p[1]), int(_p[2]), int(_p[3]))] = int(_p[0])
+                            _kind[int(_p[0])] = _p[4]
+                        except Exception:
+                            pass
+                _land = _np.zeros(_key.shape, dtype=bool)
+                _sea = _np.zeros(_key.shape, dtype=bool)
+                for _pid, _k in _kind.items():
+                    if _pid <= 0:
+                        continue
+                    _rgb = [r for r, p in _rgb2pid.items() if p == _pid]
+                    if not _rgb:
+                        continue
+                    _c = (_rgb[0][0] << 16) | (_rgb[0][1] << 8) | _rgb[0][2]
+                    if _k == "land":
+                        _land |= (_key == _c)
+                    else:
+                        _sea |= (_key == _c)
+
+                # rivers.bmp：255 = 陆，254 = 海（原版与 ES 双向验证过）
+                _rv = _np.asarray(_Im.open(os.path.join(md, "rivers.bmp")))
+                check("rivers.bmp 陆地像素是 255",
+                      int((_rv[_land] == 255).sum()) > 0.9 * max(1, int(_land.sum())),
+                      "255 占 %.1f%%" % (100.0 * (_rv[_land] == 255).sum() / max(1, _land.sum())))
+                check("rivers.bmp 海洋像素是 254",
+                      int((_rv[_sea] == 254).sum()) > 0.9 * max(1, int(_sea.sum())),
+                      "254 占 %.1f%%" % (100.0 * (_rv[_sea] == 254).sum() / max(1, _sea.sum())))
+
+                # cities.bmp：15 = 无城市。整张图不能全是有城市（索引 0）
+                _ct = _np.asarray(_Im.open(os.path.join(md, "cities.bmp")))
+                check("cities.bmp 默认是 15（无城市）",
+                      int((_ct == 15).sum()) > 0.5 * _ct.size,
+                      "15 占 %.1f%%" % (100.0 * (_ct == 15).sum() / _ct.size))
+
+                # terrain.bmp：海是 15
+                _tr = _np.asarray(_Im.open(os.path.join(md, "terrain.bmp")))
+                check("terrain.bmp 海洋像素是 15",
+                      int((_tr[_sea] == 15).sum()) > 0.9 * max(1, int(_sea.sum())),
+                      "15 占 %.1f%%" % (100.0 * (_tr[_sea] == 15).sum() / max(1, _sea.sum())))
+            except Exception as _e:
+                check("[8] bmp 语义检查可运行", False, str(_e)[:80])
+
+        # supply_nodes.txt：第一列是节点等级，恒为 1
+        _snp = os.path.join(md, "supply_nodes.txt")
+        if not os.path.exists(_snp):
+            check("[8] supply_nodes（本次不产，跳过）", True, "")
+        else:
+            _sn = [ln.split() for ln in
+                   io.open(_snp, encoding="utf-8").read().splitlines() if ln.strip()]
+            check("supply_nodes 第一列全是 1",
+                  bool(_sn) and all(len(f) == 2 and f[0] == "1" for f in _sn),
+                  str(_sn[:3]))
     finally:
         shutil.rmtree(d, ignore_errors=True)
 

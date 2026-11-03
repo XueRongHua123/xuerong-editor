@@ -227,6 +227,27 @@ def click(x, y, hwnd=None):
 
 
 def shot(path, window=True):
+    """截图。
+
+    **用本进程的 ImageGrab 抓整屏，不用外部截图脚本。**
+    原因（2026-11-03 晚查清，这是前几轮「点了没反应」的总根源）：
+    外部截图进程是 DPI 不感知的，它拿到的窗口矩形是 1536×960（逻辑像素），
+    而游戏是 borderless_fullscreen，真实画布 1920×1200。
+    于是截出来的图只是**画布左上角的 1536×960**：
+    右下角的「选择国家」按钮根本没进画面，我们照着这张图量的坐标永远是错的。
+    本进程声明了 DPI 感知，ImageGrab 抓到的就是 1920×1200 全画布，
+    截图坐标 = 屏幕物理坐标 = 点击坐标，三者终于一致。
+
+    window 参数保留只为兼容调用方（现在总是整屏）。
+    """
+    try:
+        from PIL import ImageGrab
+        im = ImageGrab.grab()          # all_screens 不必要，单屏 1920×1200
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        im.save(path)
+        return path
+    except Exception as e:
+        print("  ImageGrab 失败，退回外部截图：%s" % e)
     cmd = [PS_EXE, "-NoProfile", "-ExecutionPolicy", "Bypass",
            "-File", SHOT_PS1, "-Out", path]
     if window:
@@ -357,22 +378,15 @@ def main():
 
     # 窗口要等它真的建出来再找（启动后 1 秒内 EnumWindows 还拿不到）
     hwnd = _hwnd(pid)
-    # 点击坐标按**窗口内坐标**给（截图就是窗口，量出来直接能用）。
-    # SetCursorPos / SendInput 要的是屏幕坐标，窗口不一定在 (0,0)，必须加窗口原点。
-    # 这一条以前没做，靠窗口恰好贴在左上角蒙对；窗口一挪，(1032,936) 就点到别的按钮上了。
+    # 截图是**整屏**（ImageGrab，1920×1200），所以截图坐标就是屏幕坐标，
+    # 不要再加窗口原点、也不要乘任何比例。游戏是 borderless_fullscreen，
+    # 窗口原点本来就是 (0,0)，但就算不是也不该加——加了反而错。
     ox, oy = 0, 0
-    if hwnd:
-        r = wt.RECT()
-        user32.GetWindowRect(hwnd, ctypes.byref(r))
-        ox, oy = r.left, r.top
-    print("窗口原点 (%d,%d)" % (ox, oy))
     if hwnd:
         print("前台: %s hwnd=%s" % ("OK" if focus(hwnd) else "没抢到", hwnd))
     else:
         print("前台: 没找到游戏窗口，点击会落空")
     shot(os.path.join(OUTDIR, "%s_00.png" % a.tag))
-    # 再存一张整屏：窗口截图的坐标原点是「窗口矩形」，整屏是屏幕绝对坐标。
-    # 两张放一起比，就能看出窗口真实位置和 UI 有没有偏移，点击坐标不会再靠蒙。
     shot(os.path.join(OUTDIR, "%s_screen.png" % a.tag), window=False)
     # 缩放恒为 1.0 —— 这条是**实测**出来的，别再按 DPI 比例去乘。
     #

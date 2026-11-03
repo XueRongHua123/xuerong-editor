@@ -34,6 +34,70 @@ def _align256(v):
     return ((v + 255) // 256) * 256
 
 
+def _clean_tiny_sea(labels, n_land, sea_n, sea_ids, say=None, min_px=32):
+    """把面积 < min_px 的海省并掉，再把海省 id 连续重编号。
+
+    两轮：
+      1. 有海邻居 → 并进邻接面积最大的海省
+      2. 没有海邻居（被陆地包死的 1 像素小湖）→ 并进邻接的陆省，这个像素算陆地
+
+    第 2 步会让极少数像素从海变陆（实测几十个像素 / 52 万），换来的是
+    definition.csv 里不再有「1 像素的省」这种退化数据。
+    """
+    def _nb_ids(mask):
+        out = []
+        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            out.append(np.roll(labels, (dy, dx), axis=(0, 1))[mask])
+        return np.concatenate(out) if out else None
+
+    lo, hi = n_land + 1, n_land + sea_n
+    for _ in range(6):
+        counts = np.bincount(labels.ravel(), minlength=hi + 1)
+        small = [i for i in range(lo, hi + 1) if 0 < counts[i] < min_px]
+        if not small:
+            break
+        moved = 0
+        for sid in small:
+            m = labels == sid
+            if not m.any():
+                continue
+            v = _nb_ids(m)
+            if v is None:
+                continue
+            v = v[v != sid]
+            # 先找海邻居，再退到陆省
+            sea_nb = v[(v > n_land) & (v <= hi)]
+            land_nb = v[(v >= 1) & (v <= n_land)]
+            pick = None
+            if sea_nb.size:
+                pick = int(np.bincount(sea_nb).argmax())
+            elif land_nb.size:
+                pick = int(np.bincount(land_nb).argmax())
+            if pick is None:
+                continue
+            labels[m] = pick
+            moved += 1
+        if not moved:
+            break
+
+    # 海省 id 连续重编号（不能留空洞：definition.csv 按 1..max 写，空洞会变成 0 像素省）
+    present = [i for i in range(lo, hi + 1) if (labels == i).any()]
+    remap = {}
+    for new, old in enumerate(present, start=n_land + 1):
+        remap[old] = new
+    if len(present) != sea_n or any(k != v for k, v in remap.items()):
+        buf = labels.copy()
+        for old, new in remap.items():
+            if old != new:
+                buf[labels == old] = new
+        labels = buf
+    sea_n = len(present)
+    sea_ids = set(range(n_land + 1, n_land + sea_n + 1))
+    if say:
+        say("  海省收尾：并掉小省并重编号 → %d 个海省" % sea_n)
+    return labels, sea_n, sea_ids
+
+
 def generate(source="procedural", out_dir=None, width=1024, height=512,
              n_provinces=180, min_size=300, seed=11, src_path=None,
              sea_level=0.42, template_map=HOI4_MAP, log=None,
@@ -157,6 +221,13 @@ def generate(source="procedural", out_dir=None, width=1024, height=512,
     except Exception as e:
         say("  海省切分失败：%s" % str(e)[:80])
 
+    # 收尾：把still很小的海省并掉，并连续重编号
+    # （split_sea 内部已经吸收过一轮，这里补「被陆地包死的 1 像素小湖」——
+    #   它们没有海邻居，只能并进周围的陆省。实测 167 个海省里有 57 个 ≤8 像素，
+    #   其中 10 个只有 1 像素；退化省在地图初始化时要算邻接和海军寻路。）
+    if sea_n:
+        labels, sea_n, sea_ids = _clean_tiny_sea(labels, n, sea_n, sea_ids, say)
+
     n_all = n + sea_n
     colors = core.unique_colors(n_all, seed)
     say("分配了 %d 个唯一颜色" % len(colors))
@@ -202,20 +273,21 @@ def generate(source="procedural", out_dir=None, width=1024, height=512,
     say("写 terrain.bmp（按地形提示）…")
     size = _detect_size(labels)
     _pal = os.path.join(template_map, "terrain.bmp") if template_map else None
-    mgw.write_terrain(labels, thint, os.path.join(map_dir, "terrain.bmp"), _pal)
+    mgw.write_terrain(labels, thint, os.path.join(map_dir, "terrain.bmp"), _pal,
+                      sea_mask=(~land))
     if rmask is not None:
         rmask = rmask & (labels > 0)   # 河道不落在海里
     mgw.write_rivers(labels, rmask, os.path.join(map_dir, "rivers.bmp"),
-                     os.path.join(template_map, "rivers.bmp") if template_map else None)
+                     os.path.join(template_map, "rivers.bmp") if template_map else None,
+                     sea_mask=(~land))
     _tarr = None
     if thint is not None:
         _tarr = np.full(labels.shape, 0, dtype=np.uint8)
-        _tarr[labels == 0] = 15
-        _land = labels > 0
-        _tarr[_land & (thint == 1)] = 2
-        _tarr[_land & (thint == 2)] = 11
-        _tarr[_land & (thint == 3)] = 16
-        _tarr[_land & (thint == 4)] = 3
+        _tarr[~land] = 15
+        _tarr[land & (thint == 1)] = 2
+        _tarr[land & (thint == 2)] = 11
+        _tarr[land & (thint == 3)] = 16
+        _tarr[land & (thint == 4)] = 3
     mgw.write_cities(labels, _tarr, os.path.join(map_dir, "cities.bmp"),
                      os.path.join(template_map, "cities.bmp") if template_map else None,
                      city_mask=cmask)
