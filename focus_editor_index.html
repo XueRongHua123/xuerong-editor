@@ -104,9 +104,9 @@
   #status.show{display:block}
   #welcome{position:fixed;inset:0;z-index:80;background:rgba(10,12,13,.8);display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
   #welcome.show{display:flex}
-  .welcome-card{display:flex;max-width:880px;width:calc(100% - 80px);background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.55)}
-  .welcome-art{width:44%;object-fit:cover;display:block}
-  .welcome-body{padding:22px 26px;display:flex;flex-direction:column;gap:10px;justify-content:center}
+  .welcome-card{display:flex;max-width:900px;width:calc(100% - 80px);background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.55)}
+  .welcome-art{width:44%;min-width:280px;object-fit:cover;object-position:78% center;display:block;align-self:stretch;background:var(--input)}
+  .welcome-body{padding:26px 30px;display:flex;flex-direction:column;gap:9px;justify-content:center;min-width:0}
   .welcome-body h1{margin:0;font-size:22px;color:var(--text)}
 .welcome-sub{position:relative;margin:0;padding:2px 0 4px 12px;color:var(--accent);font-size:12px;letter-spacing:1.4px;line-height:1.6;font-weight:normal}
 .welcome-sub::before{content:'';position:absolute;left:0;top:3px;bottom:4px;width:2px;background:var(--accent);border-radius:1px}
@@ -117,9 +117,26 @@
 .wc-item img{width:28px;height:28px;border-radius:50%;object-fit:cover;border:1px solid var(--line)}
   .welcome-body p{margin:0;color:var(--text);font-size:13px;line-height:1.7}
   .welcome-btns{display:flex;gap:10px;margin-top:4px;flex-wrap:wrap}
+  .welcome-lead{margin:2px 0 0!important;color:var(--muted)!important;font-size:12px!important}
+  .welcome-ways{display:flex;flex-direction:column;gap:6px;margin:2px 0 4px}
+  .way{display:grid;grid-template-columns:22px 1fr;grid-template-rows:auto auto;column-gap:10px;align-items:center;text-align:left;background:var(--input);border:1px solid var(--line);border-radius:9px;padding:9px 12px;cursor:pointer;font-family:inherit;transition:border-color .15s,background .15s,padding-left .15s}
+  .way:hover{border-color:var(--accent);background:var(--panel);padding-left:15px}
+  .way-ico{grid-row:1/3;font-size:16px;color:var(--accent);line-height:1;text-align:center}
+  .way-t{font-size:13px;color:var(--text);font-weight:600;line-height:1.35}
+  .way-d{font-size:11px;color:var(--muted);line-height:1.45}
+  .way.soon{opacity:.72}
+  .way.soon:hover{border-color:var(--line);padding-left:12px}
+  .exp-tag{display:inline-block;font-style:normal;font-size:10px;line-height:1.55;color:#d6ab4a;border:1px solid rgba(214,171,74,.42);background:rgba(214,171,74,.09);border-radius:4px;padding:0 4px;margin-left:6px;vertical-align:1px;letter-spacing:.3px}
   .btn.primary:hover{background:var(--accent-2)}
-  .welcome-tip{font-size:12px;color:var(--muted)}
-  .welcome-tip code{background:var(--input);border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:var(--text)}
+  .welcome-tip{font-size:12px;color:var(--muted);margin:0;line-height:1.6}
+  .welcome-tip code{background:var(--input);border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--text);font-size:11px}
+  .welcome-more{display:flex;align-items:center;gap:7px;font-size:12px}
+  .wm-dot{color:var(--line)}
+  .welcome-extra{display:none;flex-direction:column;gap:6px;padding:9px 0 0;border-top:1px dashed var(--line)}
+  .welcome-extra.show{display:flex}
+  .welcome-extra p{margin:0;font-size:12px;color:var(--muted);line-height:1.65}
+  .welcome-extra code{background:var(--input);border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--text);font-size:11px}
+
   .linkbtn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;text-decoration:underline;align-self:flex-start;padding:0}
   .linkbtn:hover{color:var(--accent)}
   @media(max-width:700px){.welcome-card{flex-direction:column}.welcome-art{width:100%;max-height:240px}}
@@ -209,6 +226,8 @@
   #locList .locrow:hover{background:var(--panel2)}
   #newMod{position:fixed;inset:0;z-index:86;background:rgba(10,12,13,.8);display:none;align-items:center;justify-content:center}
   #newMod.show{display:flex}
+  #worldGen{position:fixed;inset:0;z-index:86;background:rgba(10,12,13,.8);display:none;align-items:center;justify-content:center}
+  #worldGen.show{display:flex}
   .nm-card{width:min(560px,calc(100% - 80px));background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.55)}
   .nm-head{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line);color:var(--text);font-size:14px}
   .nm-body{padding:12px;display:flex;flex-direction:column;gap:8px}
@@ -833,6 +852,8 @@
   .src-btn.primary{border-color:color-mix(in srgb,var(--accent) 55%,transparent);
     background:color-mix(in srgb,var(--accent) 13%,var(--panel2))}
   .src-state{margin-top:8px;font-size:10.5px;color:var(--muted);min-height:15px;line-height:1.45}
+  .src-home-link{display:block;margin-top:2px;font-size:10.5px;color:var(--muted);text-align:left;padding:0}
+  .src-home-link:hover{color:var(--accent)}
   .src-state.busy{color:var(--accent)}
   .spin{display:inline-block;width:9px;height:9px;margin-right:6px;vertical-align:-1px;
     border:2px solid color-mix(in srgb,var(--accent) 30%,transparent);border-top-color:var(--accent);
@@ -845,6 +866,59 @@
     background:linear-gradient(90deg,transparent,var(--accent),transparent);
     animation:lbslide 1.15s ease-in-out infinite}
   @keyframes lbslide{0%{transform:translateX(-110%)}100%{transform:translateX(330%)}}
+  /* ---------- 加载遮罩：长任务（读 mod、扫图标、建地图）期间盖住界面 ---------- */
+  #busyMask{position:fixed;inset:0;z-index:998;background:rgba(8,10,9,.55);
+    display:none;align-items:center;justify-content:center;backdrop-filter:blur(2px)}
+  #busyMask.show{display:flex}
+  .busy-card{min-width:320px;max-width:min(520px,calc(100% - 60px));padding:22px 26px 18px;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 20px 48px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:10px}
+  .busy-title{font-size:14px;color:var(--text);font-weight:600;letter-spacing:.5px}
+  .busy-sub{font-size:12px;color:var(--muted);line-height:1.6;min-height:18px}
+  .busy-track{position:relative;height:6px;border-radius:3px;overflow:hidden;
+    background:color-mix(in srgb,var(--line) 70%,transparent)}
+  .busy-track i{position:absolute;top:0;bottom:0;width:36%;border-radius:3px;
+    background:linear-gradient(90deg,transparent,var(--accent),transparent);
+    animation:lbslide 1.15s ease-in-out infinite}
+  .busy-track.det i{left:0;width:0;border-radius:3px;
+    background:linear-gradient(90deg,var(--accent-2),var(--accent));
+    animation:none;transition:width .35s ease-out}
+  .busy-foot{display:flex;justify-content:space-between;align-items:center;
+    font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+  #guideBox{position:fixed;left:14px;bottom:14px;width:292px;background:var(--panel);
+    border:1px solid var(--line);border-radius:11px;box-shadow:0 12px 34px rgba(0,0,0,.5);
+    z-index:70;display:none;overflow:hidden;max-height:76vh;flex-direction:column}
+  #guideBox.show{display:flex}
+  .gb-head{display:flex;justify-content:space-between;align-items:center;
+    padding:7px 9px 7px 11px;border-bottom:1px solid var(--line);
+    cursor:grab;user-select:none;flex:0 0 auto;touch-action:none}
+  #guideBox.dragging .gb-head{cursor:grabbing}
+  .gb-head .gb-reset{background:none;border:none;color:var(--muted);font-size:11px;
+    cursor:pointer;padding:0 4px;font-family:inherit;opacity:0;transition:opacity .15s}
+  #guideBox:hover .gb-head .gb-reset{opacity:1}
+  .gb-head .gb-reset:hover{color:var(--accent)}
+  .gb-head b{font-size:12px;color:var(--accent);letter-spacing:.3px}
+  .gb-x{background:none;border:none;color:var(--muted);font-size:15px;line-height:1;
+    cursor:pointer;padding:0 2px;font-family:inherit}
+  .gb-x:hover{color:var(--text)}
+  .gb-body{padding:9px 11px 10px;display:flex;flex-direction:column;gap:9px;
+    overflow-y:auto;flex:1 1 auto;min-height:0}
+  .gb-flow{font-size:10.5px;color:var(--accent);letter-spacing:.4px;
+    padding-bottom:7px;border-bottom:1px dashed var(--line);margin-bottom:1px}
+  .gb-step{display:flex;gap:7px;font-size:11.5px;line-height:1.55;color:var(--muted)}
+  .gb-step.now{color:var(--text)}
+  .gb-step.now .gb-num{background:var(--accent);border-color:var(--accent);color:var(--panel);font-weight:700}
+  .gb-step.next{opacity:.5}
+  .gb-step.next .gb-txt b{font-weight:500}
+  .gb-num{flex:0 0 15px;height:15px;border-radius:50%;background:var(--input);
+    border:1px solid var(--line);color:var(--accent);font-size:9.5px;line-height:13px;
+    text-align:center;margin-top:1px}
+  .gb-txt{flex:1;min-width:0}
+  .gb-txt b{color:var(--text);font-weight:600;display:block;line-height:1.4}
+  .gb-btn{margin-top:5px;background:var(--input);border:1px solid var(--line);color:var(--accent);
+    border-radius:5px;padding:3px 9px;font-size:11px;cursor:pointer;font-family:inherit}
+  .gb-btn:hover{border-color:var(--accent);background:var(--panel)}
+  .gb-empty{font-size:11.5px;color:var(--muted);line-height:1.6}
   #status{background:color-mix(in srgb,var(--panel) 94%,transparent)!important;color:var(--text)!important;
     border:1px solid var(--line)!important;box-shadow:var(--shadow)!important}
   /* ---------- v0.55 国家中心与项目体检 ---------- */
@@ -910,7 +984,33 @@
 </style>
 </head>
 <body>
+<div id="jsErr" style="position:fixed;left:0;right:0;bottom:0;background:#8b1e1e;color:#fff;
+  font:11px/1.5 Consolas,monospace;padding:5px 9px;z-index:99999;display:none;white-space:pre-wrap"></div>
+<script>
+window.onerror = function(m, s, l, c){
+  var el = document.getElementById('jsErr');
+  if(el){ el.style.display = 'block'; el.textContent = 'JS 错误: ' + m + '  @' + (s||'').split('/').pop() + ':' + l + ':' + c; }
+};
+</script>
 <div id="loadBar"><div class="lb-inner"></div></div>
+<div id="busyMask">
+  <div class="busy-card">
+    <div class="busy-title" id="busyTitle">正在加载…</div>
+    <div class="busy-sub" id="busySub"></div>
+    <div class="busy-track"><i></i></div>
+    <div class="busy-foot"><span id="busyHint"></span><span id="busySec">0.0s</span></div>
+  </div>
+</div>
+<div id="guideBox">
+  <div class="gb-head" id="gbHead" title="按住拖动可移动，双击复位到左下角">
+    <b>下一步</b>
+    <span style="display:flex;gap:2px;align-items:center">
+      <button class="gb-reset" id="gbReset" title="复位到左下角">复位</button>
+      <button class="gb-x" id="gbClose" title="暂时关掉，侧栏能再打开">×</button>
+    </span>
+  </div>
+  <div class="gb-body" id="gbBody"></div>
+</div>
 <div id="tbMoreMenu"></div>
 <div id="app">
   <div id="side">
@@ -927,12 +1027,14 @@
         <button class="src-btn" id="newModBtn"><b>🆕 新建模组</b><i>生成能直接玩的空壳</i></button>
       </div>
       <div id="srcState" class="src-state">还没有加载 mod</div>
+      <button class="linkbtn src-home-link" id="welcomeBtn">🏠 打开欢迎页</button>
+      <button class="linkbtn src-home-link" id="guideBtn">❓ 打开引导</button>
     </div>
     <details open>
       <summary>国策树</summary>
       <input id="search" placeholder="搜索焦点 id / 名称...">
       <div id="searchHits"></div>
-      <div class="mp-acts" style="padding:4px 0"><button class="btn" id="ftOpen" style="width:100%;background:var(--panel2);border:1px solid var(--line2);height:30px">图形预览</button></div>
+      <div class="mp-acts" style="padding:4px 0"><button class="btn" id="ftOpen" onclick="window.__ftOpen&&window.__ftOpen()" style="width:100%;background:var(--panel2);border:1px solid var(--line2);height:30px">图形预览</button></div>
       <div id="treeList" style="max-height:300px;overflow:auto"></div>
     </details>
     <details open>
@@ -2058,16 +2160,36 @@
     <div class="welcome-body">
       <h1>欢迎使用雪绒的钢铁雄心编辑器</h1>
       <p class="welcome-sub">专为 HOI4 社区打造的一款免费开源模组编辑器</p>
-      <p class="welcome-credit">由开源模型 DeepSeek v4.1 flash 1017 开发 · 社区共有 · 禁止商业牟利</p>
-      <p>能改国策、国家精神、装备、科技、事件；装备设计器、原版参考、多模组叠加、AI 辅助和自动校验都在同一个窗口里。</p>
-      <p>选择 mod 文件夹时认准这一层：里面有 descriptor.mod（旁边通常还有 common）。原版目录是只读的，不会写坏游戏。</p>
-      <p>本体 + 子模组：先加载本体，再加载子模组；后加载的会覆盖同名内容。</p>
-      <div class="welcome-btns">
-        <button class="btn primary" id="welcomePick">选择 mod 文件夹（推荐）</button>
-        <button class="btn" id="welcomePath">手动输入路径</button>
+      <p class="welcome-lead">从哪开始？三条路口随时能换着走。</p>
+      <div class="welcome-ways">
+        <button class="way" id="wayEdit">
+          <span class="way-ico">✎</span>
+          <span class="way-t">改点现有的</span>
+          <span class="way-d">打开已有 mod，改国策、精神、科技、事件</span>
+        </button>
+        <button class="way" id="wayNew">
+          <span class="way-ico">＋</span>
+          <span class="way-t">做一个新 mod</span>
+          <span class="way-d">空目录起步，自带国策树与骨架</span>
+        </button>
+        <button class="way" id="wayWorld">
+          <span class="way-ico">◍</span>
+          <span class="way-t">造一个新世界<i class="exp-tag">实验性</i></span>
+          <span class="way-d">生成地图、国家、州、部队 · 目前进不去游戏</span>
+        </button>
       </div>
-      <p class="welcome-tip">命令行启动：<code>雪绒的钢铁雄心编辑器.exe --mod "本体目录" --mod "子模组目录"</code>（按先后顺序加载）</p>
-      <p class="welcome-tip">选错了或想追加？进入界面后点左侧「＋ 添加 mod」就行。</p>
+      <p class="welcome-tip">认准含 <code>descriptor.mod</code> 的那一层。原版目录只读，写不坏游戏。</p>
+      <div class="welcome-more">
+        <button class="linkbtn" id="welcomePath">直接输路径</button>
+        <span class="wm-dot">·</span>
+        <button class="linkbtn" id="welcomeMore">更多说明</button>
+      </div>
+      <div class="welcome-extra" id="welcomeExtra">
+        <p>本体 + 子模组：先加载本体，再加载子模组；后加载的覆盖同名内容。</p>
+        <p>命令行启动：<code>雪绒的钢铁雄心编辑器.exe --mod "本体目录" --mod "子模组目录"</code></p>
+        <p>已进入界面还想追加？点左侧「＋ 添加 mod」。</p>
+        <p class="welcome-credit">由开源模型 DeepSeek v4.1 flash 1017 开发 · 社区共有 · 禁止商业牟利</p>
+      </div>
       <div class="welcome-credits">
         <span class="wc-title">特别鸣谢</span>
         <span class="wc-item"><img src="/mascot/liang.png" alt="梁武峰"><b>梁武峰</b></span>
@@ -2342,7 +2464,7 @@
 </div>
 <div id="newMod">
   <div class="nm-card">
-    <div class="nm-head"><b>新建模组</b><button class="btn" id="nmClose">关闭</button></div>
+    <div class="nm-head"><b>新建模组</b><button class="btn" id="nmClose" onclick="document.getElementById('newMod').classList.remove('show')">关闭</button></div>
     <div class="nm-body">
       <label>保存位置<input type="text" id="nmBase"></label>
       <label>模组文件夹名<input type="text" id="nmId" placeholder="my_mod"></label>
@@ -2356,11 +2478,42 @@
         <label>国策树 ID<input type="text" id="nmTreeId" placeholder="my_tree"></label>
         <label>国家 TAG<input type="text" id="nmTag" placeholder="GER"></label>
       </div>
+      <label>依赖本体（做 submod 时填本体的 mod 名或目录；留空就是从原版开始）<input type="text" id="nmDep" placeholder="留空 = 从原版开始"></label>
+      <p class="welcome-tip" id="nmDepHint" style="display:none"></p>
       <p class="welcome-tip">不会替换原版文件，只在 common/national_focus 里新增一棵树；创建后自动加载。</p>
     </div>
     <div class="nm-foot">
-      <button class="btn" id="nmCancel">取消</button>
+      <button class="btn" id="nmCancel" onclick="document.getElementById('newMod').classList.remove('show')">取消</button>
       <button class="btn primary" id="nmOk">创建模组</button>
+    </div>
+  </div>
+</div>
+<div id="worldGen">
+  <div class="nm-card" style="width:min(620px,calc(100% - 80px))">
+    <div class="nm-head"><b>造一个新世界</b><button class="btn" id="wgClose" onclick="document.getElementById('worldGen').classList.remove('show')">关闭</button></div>
+    <div class="nm-body">
+      <label>输出目录<input type="text" id="wgOut" placeholder="D:\mods\我的新世界"></label>
+      <div class="nm-row">
+        <label>国家 TAG<input type="text" id="wgTag" value="ZZV"></label>
+        <label>国家名称<input type="text" id="wgName" value="新世界"></label>
+      </div>
+      <div class="nm-row">
+        <label>省份数量<input type="text" id="wgProv" value="40"></label>
+        <label>随机种子<input type="text" id="wgSeed" value="11"></label>
+      </div>
+      <div class="nm-row">
+        <label>国策数量<input type="text" id="wgFocus" value="24"></label>
+        <label>每州省份<input type="text" id="wgPerState" value="8"></label>
+      </div>
+      <label class="nm-check"><input type="checkbox" id="wgArmy" checked> 生成开局部队</label>
+      <label class="nm-check"><input type="checkbox" id="wgFocusOn" checked> 生成国策树</label>
+      <label class="nm-check"><input type="checkbox" id="wgEvent" checked> 生成开局事件</label>
+      <p class="welcome-tip">会写一整套 mod：地图、州、国家、部队、国策、本地化。生成完自动加载。</p>
+      <p class="welcome-tip" id="wgWarn">这一步耗时较长（几十秒到几分钟），期间界面会显示进度。</p>
+    </div>
+    <div class="nm-foot">
+      <button class="btn" id="wgCancel" onclick="document.getElementById('worldGen').classList.remove('show')">取消</button>
+      <button class="btn primary" id="wgOk">开始生成</button>
     </div>
   </div>
 </div>
@@ -2459,6 +2612,7 @@ let NODE_W = 136, NODE_H = 58, SCALE = 110;
 let DATA = null, current = 0, selId = null, editMode = false;
 let dirty = new Map();
 let view = {x:0, y:0, k:1};
+let _lastFitTree = null, _viewReady = false;
 let linkMode = null, linkSrc = null;
 const svg = document.getElementById('svg');
 const vp = document.getElementById('viewport');
@@ -2473,13 +2627,209 @@ function showMutex(){ return document.getElementById('showMutex').checked; }
 function applyView(){ vp.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`); }
 function resetView(){ view = {x:0,y:0,k:1}; applyView(); (typeof updateZoomLabel === 'function') && updateZoomLabel(); }
 
-async function loadData(){ const r = await fetch('/api/data'); DATA = await r.json(); dirty.clear(); linkSrc = null; selId = null; cpCache = null; COUNTRY_DATA = null; LINT_DATA = null; if(!DATA.trees || current >= DATA.trees.length) current = 0; renderAll(); applySavedSkin(); updateWelcome(); if(typeof updateSourceBox === 'function') updateSourceBox(); }
+async function loadData(){ const r = await fetch('/api/data'); DATA = await r.json(); dirty.clear(); linkSrc = null; selId = null; cpCache = null; COUNTRY_DATA = null; LINT_DATA = null; if(!DATA.trees || current >= DATA.trees.length) current = 0; renderAll(); applySavedSkin(); updateWelcome(); if(typeof renderGuide === 'function') renderGuide(); if(typeof updateSourceBox === 'function') updateSourceBox(); }
 function updateWelcome(){
   const w = document.getElementById('welcome'); if(!w) return;
   const empty = !(DATA && DATA.roots && DATA.roots.length);
   if(empty && !sessionStorage.getItem('welcomeDismissed')) w.classList.add('show');
   else w.classList.remove('show');
 }
+
+/* ---------- 引导面板：三条流程各走各的 ---------- */
+/* 每个步骤的 ok(st) 判断「这一步做完了没有」，renderGuide 找第一个没做完的显示。 */
+
+function gbStep(n, title, desc, actionHtml, cls){
+  return '<div class="gb-step' + (cls ? ' ' + cls : '') + '">' +
+         '<span class="gb-num">' + n + '</span>' +
+         '<span class="gb-txt"><b>' + escapeHtml(title) + '</b>' +
+         escapeHtml(desc) + (actionHtml || '') + '</span></div>';
+}
+
+function gbState(){
+  const roots = (DATA && DATA.roots) || [];
+  const trees = (DATA && DATA.trees) || [];
+  const cur = (trees.length && typeof current === 'number' && trees[current]) ? trees[current] : null;
+  return {
+    roots: roots,
+    trees: trees,
+    tree: cur,
+    selId: (typeof selId !== 'undefined' && selId) ? selId : '',
+    last: roots.length ? String(roots[roots.length - 1]) : '',
+    dirty: (typeof dirty !== 'undefined' && dirty) ? dirty.size : 0,
+    nFocus: (cur && cur.focuses) ? cur.focuses.length : 0
+  };
+}
+
+const FLOWS = {
+  edit: {
+    label: '做一个能进游戏的 submod',
+    steps: [
+      {t: '加载本体 mod',
+       d: '点左上「＋ 添加 mod」，选你那个大 mod 的目录——认准里面有 descriptor.mod 的那一层，不是它的上一级。选完等进度条走完。',
+       ok: s => s.roots.length > 0,
+       btn: {txt: '去添加本体', act: 'add'}},
+      {t: '准备你自己的 submod 目录',
+       d: '已经有了就直接「添加 mod」选它，没有才「新建模组」现建一个（文件夹名英文小写，⚠️ 把「创建示例国策树」的勾去掉）。两种都算过——左边「数据源」显示 2 就对了。',
+       ok: s => s.roots.length >= 2,
+       btns: [{txt: '用已有的', act: 'add'}, {txt: '新建一个', act: 'new'}]},
+      {t: '看看要改的目录归谁管',
+       d: '点左侧「🩺 诊断」，翻到「replace 断链」那一项。本体如果 replace 了某个目录，你直接往里写是不生效的——得先点「接管该目录」把它整份复制到你自己的 mod 里。',
+       ok: s => s.trees.length > 0},
+      {t: '选一棵国策树',
+       d: '左侧「国策树」列表里点一行，画布上就出来了。列表右侧标着来源，认准是本体那一层的。',
+       ok: s => !!s.tree},
+      {t: '点画布上的节点，改点东西',
+       d: '点任意一个节点，右侧弹出属性面板：名字、图标、前置、成本、效果都能改。改完节点会变成高亮，顶部「未保存」计数会加一。',
+       ok: s => !!s.selId},
+      {t: '加一个新节点（可选）',
+       d: '顶部「新建节点」，然后在画布空白处点一下。填 id（英文，别和现有的重名）、名称、图标、成本。做完连线：点「加前置」，依次点两个节点。',
+       ok: s => s.nFocus > 0 && s.selId},
+      {t: '点「保存全部」写进文件',
+       d: '顶部那个紫色的「💾 保存全部」。改动直接写进你自己的 mod 目录，本体一个字都不动。写完顶部「未保存」要变成 0 才算进去。',
+       ok: s => s.dirty === 0},
+      {t: '补中文名字和描述',
+       d: '打开「本地化」面板，会列出所有缺名字的节点。逐条填中文名和描述，否则游戏里显示的是裸 key。',
+       ok: s => s.dirty === 0 && !!s.tree},
+      {t: '跑一遍体检',
+       d: '点顶部「🩺 体检」，看有没有红色 error。有就按提示改，改完再跑一次，直到 0 error。警告可以先不管。',
+       ok: s => false},
+      {t: '装进游戏实测',
+       d: '把整个 submod 目录拷到 Documents/Paradox Interactive/Hearts of Iron IV/mod/，在启动器里同时勾上本体和它（本体在下、它在上面）。进游戏看国策树有没有你的改动。',
+       ok: s => false}
+    ]
+  },
+  new: {
+    label: '做一个全新 mod',
+    steps: [
+      {t: '新建模组',
+       d: '填文件夹名和显示名称。空目录起步，不用先有 mod。',
+       ok: s => s.roots.length > 0,
+       btn: {txt: '去新建', act: 'new'}},
+      {t: '留一棵默认国策树',
+       d: '新建时勾上「创建示例国策树」并填 TAG。没有 default = yes 的树，进游戏会直接崩。',
+       ok: s => s.trees.length > 0},
+      {t: '在树上加节点',
+       d: '左侧选那棵树，画布空白处右键或顶部「新建节点」。',
+       ok: s => !!s.tree && s.tree.focuses && s.tree.focuses.length > 0},
+      {t: '补上精神、科技、事件',
+       d: '侧栏各自的面板，加完记得保存。',
+       ok: s => false}
+    ]
+  },
+  world: {
+    label: '创造一个新世界',
+    steps: [
+      {t: '生成一套新世界',
+       d: '填输出目录和 TAG，会连同地图、州、国家、部队、国策一起生成。',
+       ok: s => s.roots.length > 0,
+       btn: {txt: '去生成', act: 'world'}},
+      {t: '这一步现在进不去游戏',
+       d: '地图文件本身合规、游戏能读到省份，但点「开始」会崩在 PHYSFS。正在修。',
+       ok: s => false}
+    ]
+  }
+};
+
+function renderGuide(){
+  const box = document.getElementById('guideBox');
+  const body = document.getElementById('gbBody');
+  if(!box || !body) return;
+  if(localStorage.getItem('guideHidden') === '1'){ box.classList.remove('show'); return; }
+  const flow = FLOWS[localStorage.getItem('workflow') || 'edit'] || FLOWS.edit;
+  const st = gbState();
+  let idx = flow.steps.findIndex(s => !s.ok(st));
+  if(idx < 0) idx = flow.steps.length - 1;
+
+  let html = '<div class="gb-flow">' + escapeHtml(flow.label) + '</div>';
+  // 当前这一步
+  const cur = flow.steps[idx];
+  let actHtml = '';
+  if(cur.btns && cur.btns.length){
+    actHtml = cur.btns.map(function(b){
+      return '<button class="gb-btn" data-act="' + b.act + '">' + escapeHtml(b.txt) + '</button>';
+    }).join(' ');
+  } else if(cur.btn){
+    actHtml = '<button class="gb-btn" data-act="' + cur.btn.act + '">' + escapeHtml(cur.btn.txt) + '</button>';
+  }
+  html += gbStep(idx + 1, cur.t, cur.d, actHtml, 'now');
+  // 后面两步灰着预览
+  for(let k = idx + 1; k < Math.min(idx + 3, flow.steps.length); k++){
+    html += gbStep(k + 1, flow.steps[k].t, flow.steps[k].d, '', 'next');
+  }
+  body.innerHTML = html;
+
+  box.classList.add('show');
+  if(window.guideApplyPos) window.guideApplyPos();
+}
+function openGuide(){
+  localStorage.removeItem('guideHidden');
+  renderGuide();
+}
+
+// v1.23.40 引导清单可拖动：位置存 localStorage，双击标题栏或点「复位」回左下角
+(function(){
+  const K = 'fe_guide_pos';
+  function apply(){
+    const box = document.getElementById('guideBox');
+    if(!box) return;
+    let p = null;
+    try{ p = JSON.parse(localStorage.getItem(K) || 'null'); }catch(e){}
+    if(!p || typeof p.x !== 'number') return;
+    const w = box.offsetWidth || 292, h = box.offsetHeight || 200;
+    box.style.left = Math.max(2, Math.min(window.innerWidth - w - 2, p.x)) + 'px';
+    box.style.top = Math.max(2, Math.min(window.innerHeight - h - 2, p.y)) + 'px';
+    box.style.bottom = 'auto';
+  }
+  function reset(){
+    const box = document.getElementById('guideBox');
+    if(!box) return;
+    box.style.left = '14px'; box.style.top = ''; box.style.bottom = '14px';
+    try{ localStorage.removeItem(K); }catch(e){}
+  }
+  let dg = null;
+  function bind(){
+    const box = document.getElementById('guideBox');
+    const head = document.getElementById('gbHead');
+    if(!box || !head || head.dataset.dragBound) return;
+    head.dataset.dragBound = '1';
+    head.addEventListener('pointerdown', function(e){
+      if(e.target.closest('button')) return;
+      const r = box.getBoundingClientRect();
+      dg = {sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top, moved: false};
+      box.classList.add('dragging');
+      try{ head.setPointerCapture(e.pointerId); }catch(err){}
+    });
+    head.addEventListener('pointermove', function(e){
+      if(!dg) return;
+      const dx = e.clientX - dg.sx, dy = e.clientY - dg.sy;
+      if(Math.abs(dx) > 3 || Math.abs(dy) > 3) dg.moved = true;
+      if(!dg.moved) return;
+      const w = box.offsetWidth, h = box.offsetHeight;
+      box.style.left = Math.max(2, Math.min(window.innerWidth - w - 2, dg.ox + dx)) + 'px';
+      box.style.top = Math.max(2, Math.min(window.innerHeight - h - 2, dg.oy + dy)) + 'px';
+      box.style.bottom = 'auto';
+    });
+    head.addEventListener('pointerup', function(){
+      if(!dg) return;
+      const moved = dg.moved; dg = null;
+      box.classList.remove('dragging');
+      if(moved){
+        const r = box.getBoundingClientRect();
+        try{ localStorage.setItem(K, JSON.stringify({x: Math.round(r.left), y: Math.round(r.top)})); }catch(err){}
+      }
+    });
+    head.addEventListener('dblclick', function(e){
+      if(e.target.closest('button')) return;
+      reset();
+    });
+    const rb = document.getElementById('gbReset');
+    if(rb) rb.onclick = reset;
+  }
+  window.guideApplyPos = apply;
+  window.guideResetPos = reset;
+  if(document.readyState !== 'loading') bind();
+  else document.addEventListener('DOMContentLoaded', bind);
+})();
 async function openLocCheck(){
   const r = await fetch('/api/missing_loc');
   const j = await r.json();
@@ -2786,6 +3136,46 @@ async function saveTreeSet(){
   status(j.msg || '', !j.ok);
   if(j.ok){ document.getElementById('treeSet').classList.remove('show'); await loadData(); }
 }
+function openWorldGen(){
+  const out = document.getElementById('wgOut');
+  if(!out.value){
+    const home = (DATA && DATA.mod_home) || '';
+    out.value = home ? (home.replace(/[\\/]+$/, '') + '\\我的新世界') : '';
+  }
+  document.getElementById('worldGen').classList.add('show');
+}
+async function doWorldCreate(){
+  const out = document.getElementById('wgOut').value.trim();
+  if(!out){ status('先填输出目录', true); return; }
+  const body = {
+    out_dir: out,
+    tag: (document.getElementById('wgTag').value.trim() || 'ZZV').toUpperCase(),
+    country_name: document.getElementById('wgName').value.trim() || '新世界',
+    n_provinces: parseInt(document.getElementById('wgProv').value, 10) || 40,
+    seed: parseInt(document.getElementById('wgSeed').value, 10) || 11,
+    n_focus: parseInt(document.getElementById('wgFocus').value, 10) || 24,
+    per_state: parseInt(document.getElementById('wgPerState').value, 10) || 8,
+    army: document.getElementById('wgArmy').checked,
+    gen_focus: document.getElementById('wgFocusOn').checked,
+    gen_event: document.getElementById('wgEvent').checked
+  };
+  document.getElementById('worldGen').classList.remove('show');
+  startLoading('正在生成新世界…');
+  updateLoading('生成地图、州、国家…');
+  try{
+    const r = await fetch('/api/world_create', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json();
+    if(j.ok){
+      updateLoading('重新加载新世界…');
+      await loadModByPath(out);
+    }else{
+      stopLoading(j.msg || '生成失败', true);
+      status(j.msg || '生成失败', true);
+    }
+  }catch(e){
+    stopLoading('生成失败：' + e.message, true);
+  }
+}
 function openNewMod(){
   const b = document.getElementById('nmBase');
   if(!b.value) b.value = (DATA && DATA.mod_home) || '';
@@ -2794,6 +3184,23 @@ function openNewMod(){
   document.getElementById('nmTreeId').value = '';
   document.getElementById('nmTag').value = '';
   document.getElementById('nmTree').checked = true;
+  // 自动填「依赖本体」：取第一个非只读的已加载 mod
+  const dep = document.getElementById('nmDep');
+  const hint = document.getElementById('nmDepHint');
+  const mine = ((DATA && DATA.roots) || []).filter(r => !r.readonly);
+  if(dep){
+    dep.value = mine.length ? (mine[0].name || mine[0].path || '') : '';
+    if(hint){
+      if(mine.length){
+        hint.style.display = 'block';
+        hint.textContent = '已填「' + dep.value + '」。建出来的是它的 submod：加载时会自动带上本体，'
+                         + '原版数据不会漏进来。想从原版开始做，把这里清空。';
+      }else{
+        hint.style.display = 'block';
+        hint.textContent = '当前没加载任何 mod，留空就是从原版开始做一个新 mod。';
+      }
+    }
+  }
   document.getElementById('newMod').classList.add('show');
 }
 async function createNewMod(){
@@ -2807,7 +3214,8 @@ async function createNewMod(){
     game_version: document.getElementById('nmGame').value.trim() || '1.19.*',
     create_tree: document.getElementById('nmTree').checked,
     tree_id: document.getElementById('nmTreeId').value.trim() || (id + '_tree'),
-    tag: document.getElementById('nmTag').value.trim().toUpperCase()
+    tag: document.getElementById('nmTag').value.trim().toUpperCase(),
+    dep: document.getElementById('nmDep') ? document.getElementById('nmDep').value.trim() : ''
   };
   const r = await fetch('/api/new_mod', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
   const j = await r.json();
@@ -3748,7 +4156,7 @@ document.addEventListener('click', e=>{
 window.addEventListener('resize', closeAiMenu);
 
 /* ---------- v0.60 数据源与加载进度 ---------- */
-let loadTimer = null, loadStartedAt = 0;
+let loadTimer = null, loadStartedAt = 0, busyTimer = null, progTimer = null;
 
 function startLoading(text){
   loadStartedAt = Date.now();
@@ -3760,23 +4168,76 @@ function startLoading(text){
     st.classList.add('busy');
     st.innerHTML = '<span class="spin"></span>' + escapeHtml(text || '加载中…') + ' <b id="loadSec">0.0s</b>';
   }
+  // 中央遮罩：延迟 400ms 出现，短任务不闪一下
+  clearTimeout(busyTimer);
+  busyTimer = setTimeout(()=>{
+    const mask = document.getElementById('busyMask');
+    const tt = document.getElementById('busyTitle');
+    const sub = document.getElementById('busySub');
+    const hint = document.getElementById('busyHint');
+    if(tt) tt.textContent = text || '正在加载…';
+    if(sub) sub.textContent = '';
+    if(hint) hint.textContent = '首次加载会比较慢，之后有缓存';
+    if(mask) mask.classList.add('show');
+  }, 400);
   clearInterval(loadTimer);
   loadTimer = setInterval(()=>{
+    const s = ((Date.now() - loadStartedAt) / 1000).toFixed(1) + 's';
     const el = document.getElementById('loadSec');
-    if(el) el.textContent = ((Date.now() - loadStartedAt) / 1000).toFixed(1) + 's';
+    if(el) el.textContent = s;
+    const bs = document.getElementById('busySec');
+    if(bs) bs.textContent = s;
   }, 100);
+  resetProgressBar();
+  clearInterval(progTimer);
+  progTimer = setInterval(pollProgress, 250);
+}
+
+// 进度条回到不定态（扫描动画）
+function resetProgressBar(){
+  const tr = document.querySelector('.busy-track');
+  if(!tr) return;
+  tr.classList.remove('det');
+  const i = tr.querySelector('i');
+  if(i) i.style.width = '';
+}
+
+// 后端 load_mod 每完成一段会更新 LOAD_PROGRESS，这里轮询把它映射成确定进度
+async function pollProgress(){
+  try{
+    const r = await fetch('/api/load_progress', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const j = await r.json();
+    if(!j || !j.active) return;
+    const tr = document.querySelector('.busy-track');
+    if(tr){
+      tr.classList.add('det');
+      const i = tr.querySelector('i');
+      if(i) i.style.width = Math.max(2, j.pct) + '%';
+    }
+    const parts = [];
+    if(j.stage) parts.push(j.stage);
+    if(j.sub) parts.push(j.sub);
+    if(parts.length) updateLoading(parts.join(' · '));
+  }catch(e){}
 }
 
 function updateLoading(text){
   const st = document.getElementById('srcState');
-  if(!st) return;
+  const sub = document.getElementById('busySub');
   const sec = ((Date.now() - loadStartedAt) / 1000).toFixed(1) + 's';
+  if(sub) sub.textContent = text || '';
+  if(!st) return;
   st.innerHTML = '<span class="spin"></span>' + escapeHtml(text) + ' <b>' + sec + '</b>';
 }
 
 function stopLoading(msg, isErr){
   aiBubbleBusy(false);
   clearInterval(loadTimer); loadTimer = null;
+  clearTimeout(busyTimer); busyTimer = null;
+  clearInterval(progTimer); progTimer = null;
+  resetProgressBar();
+  const mask = document.getElementById('busyMask');
+  if(mask) mask.classList.remove('show');
   const bar = document.getElementById('loadBar');
   if(bar) bar.classList.remove('show');
   const st = document.getElementById('srcState');
@@ -3806,10 +4267,20 @@ function updateSourceBox(){
     if(!roots.length){
       st.textContent = '还没有加载 mod；先「添加 mod」或加载原版参考';
     } else {
-      st.textContent = roots.map(r=>{
+      let txt = roots.map(r=>{
         const n = ((COUNTRY_DATA && COUNTRY_DATA.list) || []).length;
         return (r.name || r.path) + (r.readonly ? '（原版·只读）' : '');
       }).join(' ＋ ') + ' 已加载';
+      // 只挂了一个非原版 mod，且树全来自别处：它是个空壳，
+      // 现在看到的内容全是底层的，提醒一句免得误以为编辑器塞了原版进来
+      if(roots.length === 1 && !roots[0].readonly){
+        const arr = (DATA && DATA.trees) || [];
+        const mine = arr.filter(t => t.source === roots[0].name);
+        if(arr.length && !mine.length){
+          txt += ' · 里面还没有自己的内容，看到的是原版';
+        }
+      }
+      st.textContent = txt;
     }
   }
 }
@@ -4370,13 +4841,13 @@ async function copyItem(kind, obj, defId){
   if(j.ok) await loadData();
 }
 async function pickMod(){
+  // 先只选目录（系统对话框，不加遮罩），拿到路径后再走统一的加载流程
   const r = await fetch('/api/pick_mod', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
   const j = await r.json();
-  status(j.msg || '', !j.ok);
-  if(j.ok) await loadData();
+  if(!j.ok){ status(j.msg || '未选择目录', true); return; }
+  await loadModByPath(j.path);
 }
-async function loadModPath(){
-  const p = prompt('输入 mod 根目录路径（含 descriptor.mod 的那一层）：');
+async function loadModByPath(p){
   if(!p) return;
   startLoading('正在加载 mod…');
   try{
@@ -4391,6 +4862,11 @@ async function loadModPath(){
     }
     status(j.msg || '', !j.ok);
   }catch(e){ stopLoading('加载失败：' + e.message, true); }
+}
+async function loadModPath(){
+  const p = prompt('输入 mod 根目录路径（含 descriptor.mod 的那一层）：');
+  if(!p) return;
+  await loadModByPath(p);
 }
 let fpDir = '', fpSelPath = '', fpParent = '';
 async function openFolderPicker(){
@@ -4429,10 +4905,10 @@ function renderFs(j){
 async function chooseFolder(){
   const p = fpDir;
   if(!p){ status('先选一个文件夹'); return; }
-  const r = await fetch('/api/load_mod', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({path: p})});
-  const j = await r.json();
-  status(j.msg || '', !j.ok);
-  if(j.ok){ document.getElementById('folderPick').classList.remove('show'); await loadData(); }
+  // 先关掉选择器再加载：原先是在遮罩还开着的情况下同步等 /api/load_mod，
+  // 20 秒里画面停在「选择 mod 文件夹」那一页，看起来像卡死，也没有任何进度。
+  document.getElementById('folderPick').classList.remove('show');
+  await loadModByPath(p);
 }
 function treeOptions(){
   treeList.innerHTML='';
@@ -4446,7 +4922,11 @@ function treeOptions(){
 }
 function nodeById(t,id){ return t.focuses.find(f=>f.id===id); }
 function curTree(){ return DATA.trees[current]; }
-function rootOf(t){ return (DATA.roots.find(r=>t.source===r.name)||DATA.roots[0]||{}).path; }
+function rootOf(t){
+  // 树的真实所在层（后端按 _layer_dirs 的 base 记；创意工坊/原版层会自动被接管到最顶层可写 mod）
+  if(t && t.root) return t.root;
+  return (DATA.roots.find(r=>t.source===r.name)||DATA.roots[0]||{}).path;
+}
 
 function renderTree(){
   const t = curTree();
@@ -4563,14 +5043,18 @@ function endNodeDrag(){
   window.removeEventListener('mousemove', onNodeDrag);
   if(!drag) return;
   const t = curTree(); const f = drag.f;
+  let movedId = null;
   if(drag.moved && drag.last){
     let rx = Math.round(drag.last.x*2)/2, ry = Math.round(drag.last.y*2)/2;
     if(f.rel){ const p = nodeById(t, f.rel); if(p){ rx = Math.round((drag.last.x-(p.ax??p.x??0))*2)/2; ry = Math.round((drag.last.y-(p.ay??p.y??0))*2)/2; } }
     dirty.set(f.id, {x:rx, y:ry});
     f.ax = drag.last.x; f.ay = drag.last.y;
+    movedId = f.id;
     status(`已移动 ${f.id}：x=${rx}, y=${ry}（未保存）`);
   }
   drag = null; renderTree();
+  // 拖动后属性面板里的 X/Y 还是旧值，得重画一次，否则看不到新坐标
+  if(movedId && selId === movedId && panel.classList.contains('show')) showPanel();
 }
 
 function fillFxQuick(f){
@@ -4957,7 +5441,13 @@ function fitView(){
   updateZoomLabel();
 }
 function renderAll(){
-  treeOptions(); renderTree(); renderStats(); fitView(); fillIdeaDatalist(); updateBatchBar();
+  // 只有第一次加载或切换了树才自动适应屏幕；保存后刷新数据时保持当前视图不变
+  const _t0 = curTree();
+  const _tid = _t0 ? _t0.id : '';
+  const _needFit = (_tid !== _lastFitTree) || !_viewReady;
+  treeOptions(); renderTree(); renderStats();
+  if(_needFit){ fitView(); _lastFitTree = _tid; _viewReady = true; }
+  fillIdeaDatalist(); updateBatchBar();
   const t = curTree();
   const shared = t && t.id === 'shared_focuses';
   document.getElementById('sharedAddBtn').style.display = shared ? '' : 'none';
@@ -5349,8 +5839,40 @@ document.getElementById('sharedAddBtn').onclick = addShared;
 document.getElementById('sharedDelBtn').onclick = deleteShared;
 document.getElementById('equipAdd').onclick = addEquip;
 document.getElementById('equipDelete').onclick = deleteEquip;
-document.getElementById('welcomePick').onclick = openFolderPicker;
+function dismissWelcome(){
+  sessionStorage.setItem('welcomeDismissed', '1');
+  document.getElementById('welcome').classList.remove('show');
+}
+function openWelcome(){
+  sessionStorage.removeItem('welcomeDismissed');
+  document.getElementById('welcome').classList.add('show');
+}
+function setFlow(k){
+  localStorage.setItem('workflow', k);
+  if(typeof renderGuide === 'function') renderGuide();
+}
+document.getElementById('wayEdit').onclick = ()=>{ setFlow('edit'); dismissWelcome(); openFolderPicker(); };
+document.getElementById('wayNew').onclick = ()=>{ setFlow('new'); dismissWelcome(); openNewMod(); };
+document.getElementById('wayWorld').onclick = ()=>{ setFlow('world'); dismissWelcome(); openWorldGen(); };
 document.getElementById('welcomePath').onclick = loadModPath;
+document.getElementById('welcomeBtn').onclick = openWelcome;
+document.getElementById('guideBtn').onclick = openGuide;
+document.getElementById('gbClose').onclick = ()=>{ localStorage.setItem('guideHidden', '1'); document.getElementById('guideBox').classList.remove('show'); };
+// 引导面板里的按钮是动态生成的，用事件委托接
+document.getElementById('gbBody').onclick = function(e){
+  const b = e.target.closest('.gb-btn[data-act]');
+  if(!b) return;
+  const a = b.dataset.act;
+  if(a === 'add') openFolderPicker();
+  else if(a === 'new') openNewMod();
+  else if(a === 'world') openWorldGen();
+};
+document.getElementById('welcomeMore').onclick = ()=>{
+  const x = document.getElementById('welcomeExtra');
+  const b = document.getElementById('welcomeMore');
+  const on = x.classList.toggle('show');
+  b.textContent = on ? '收起说明' : '更多说明';
+};
 document.getElementById('welcomeClose').onclick = ()=>{ sessionStorage.setItem('welcomeDismissed', '1'); document.getElementById('welcome').classList.remove('show'); };
 document.getElementById('addModBtn').onclick = openFolderPicker;
 document.getElementById('unloadModBtn').onclick = unloadMod;
@@ -5361,6 +5883,17 @@ document.getElementById('newModBtn').onclick = openNewMod;
 document.getElementById('nmClose').onclick = ()=>{ document.getElementById('newMod').classList.remove('show'); };
 document.getElementById('nmCancel').onclick = ()=>{ document.getElementById('newMod').classList.remove('show'); };
 document.getElementById('nmOk').onclick = createNewMod;
+// Esc 关掉所有模态框（都挂在各自的 show 类上）
+document.addEventListener('keydown', function(e){
+  if(e.key !== 'Escape') return;
+  ['newMod', 'worldGen', 'folderPick'].forEach(function(id){
+    const el = document.getElementById(id);
+    if(el && el.classList.contains('show')) el.classList.remove('show');
+  });
+});
+document.getElementById('wgClose').onclick = ()=>{ document.getElementById('worldGen').classList.remove('show'); };
+document.getElementById('wgCancel').onclick = ()=>{ document.getElementById('worldGen').classList.remove('show'); };
+document.getElementById('wgOk').onclick = doWorldCreate;
 document.getElementById('treeSetBtn').onclick = openTreeSet;
 document.getElementById('locCheckBtn').onclick = openLocCheck;
 document.getElementById('logBtn').onclick = openLog;
@@ -6786,6 +7319,9 @@ async function mapShowGfxMissing(){
     };
   }
   window.mapBindFocusTree = ftBind;
+  // ftBind 只在 DOM 就绪时绑一次；侧栏若被重渲染，按钮会换新节点导致点击失效。
+  // 挂到 window 上，HTML 里用内联 onclick 兜底。
+  window.__ftOpen = ftOpen;
   // 这个按钮在国策树面板里，初始化函数可能早于本段执行，所以自己再绑一次
   if(document.readyState !== 'loading') ftBind();
   else document.addEventListener('DOMContentLoaded', ftBind);

@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, '.')
 import focus_editor as fe
 
-SRC = r"D:\大肥鱼工作区\HOI4 MUVLUVsub mod 制作\muvluvCN_1.19\map\provinces.bmp"
+SRC = r"D:\大肥鱼工作区\HOI4 MUVLUVsub mod 制作\mods\muvluvCN_personal\map\provinces.bmp"
 TMP = os.path.join(os.getcwd(), "_paint_test")
 os.makedirs(TMP, exist_ok=True)
 BAK = os.path.join(TMP, "provinces.bmp")

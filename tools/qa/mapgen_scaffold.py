@@ -204,6 +204,7 @@ def write_bookmarks(mod_dir, name="雪绒战役", tag="ZZZ", date="1936.1.1.12")
             '\t\tdate = %s' % date,
             '\t\tpicture = "GFX_select_date_1936"',
             '\t\tdefault_country = "%s"' % tag,
+            '\t\tfilters = { new_content continent }',
             '\t\tdefault = yes',
             '',
             '\t\t"%s" = {' % tag,
@@ -265,8 +266,12 @@ def write_localisation(mod_dir, name):
 
 
 def build(mod_dir, labels, mod_name="雪绒地图测试", tag="ZZZ", per_state=8,
-          sea_ids=None):
-    """在 mod_dir 下补齐所有能让游戏启动的文件。"""
+          sea_ids=None, n_focus=24, gen_focus=True, gen_event=True):
+    """在 mod_dir 下补齐所有能让游戏启动的文件。
+
+    `gen_focus` / `n_focus`：A2 起默认生成一棵真国策树（带 default = yes），
+    关掉就退回 A1 的单节点占位。`gen_event` 同理（开局弹一个事件）。
+    """
     made = []
     if not mod_dir:
         return {"ok": False, "msg": "没给目录", "made": made}
@@ -296,9 +301,47 @@ def build(mod_dir, labels, mod_name="雪绒地图测试", tag="ZZZ", per_state=8
         made.append(write_bookmarks(mod_dir, mod_name, tag))
     except Exception:
         pass
+    # 国家领袖：common/characters 被整目录屏蔽，不写就没有领袖，
+    # 选国家界面的「选择国家」会点了没反应
+    leader_loc = []
+    try:
+        import world_leader
+        lr = world_leader.write(mod_dir, tag,
+                               leader_name=(mod_name or "新世界") + "领袖")
+        leader_loc = lr["loc"]
+        made.append(lr["path"])
+    except Exception:
+        pass
+
+    # A2：真国策树 + 真开局事件（先算好，下面当占位内容写进去）
+    focus_text, focus_loc, ev_text, oa_text, ev_loc = None, [], None, None, []
+    if gen_focus:
+        try:
+            import focus_gen
+            fr = focus_gen.build(tag=tag, n_focus=n_focus)
+            focus_text, focus_loc = fr["text"], fr["loc"]
+            made.append("国策树 × %d 节点" % len(fr["nodes"]))
+        except Exception:
+            pass
+    if gen_event:
+        try:
+            import world_events
+            er = world_events.build(tag=tag)
+            ev_text, oa_text, ev_loc = er["events"], er["on_actions"], er["loc"]
+            made.append("开局事件 " + er["event_id"])
+        except Exception:
+            pass
+
     # 被 replace 的每个目录都必须有东西，尤其 national_focus 要带 default = yes
     try:
-        made.extend(world_stubs.write_all(mod_dir, tag))
+        ov = {}
+        if focus_text:
+            ov["common/national_focus"] = focus_text
+        if ev_text:
+            ov["events"] = ev_text
+        if oa_text:
+            ov["common/on_actions"] = oa_text
+        made.extend(world_stubs.write_all(mod_dir, tag, overrides=ov))
     except Exception as e:
         return {"ok": False, "states": ns, "made": made,
                 "msg": "写占位失败：%s" % e}
@@ -307,6 +350,28 @@ def build(mod_dir, labels, mod_name="雪绒地图测试", tag="ZZZ", per_state=8
         import mapgen_write as _mgw
         _mgw.write_supply_graph(os.path.join(mod_dir, "map"), smap)
         made.append("map/supplyareas + supply_nodes.txt")
+    except Exception:
+        pass
+
+    # buildings.txt 要按州摆落点，同样得等州建完
+    try:
+        import mapgen_write as _mgw
+        cen = mgx.centroids(labels)
+        cen = {int(k): (float(v[0]), float(v[1])) for k, v in cen.items()
+               if int(k) > 0}
+        nb = _mgw.write_buildings(os.path.join(mod_dir, "map"), cen, smap)
+        made.append("map/buildings.txt × %d 行" % nb)
+    except Exception:
+        pass
+
+    # 世界本地化：国名 / 州名 / 国策名 / 事件文本
+    try:
+        import world_loc
+        entries = (world_loc.country_entries(tag, mod_name)
+                   + world_loc.state_entries([s for s, _p in smap])
+                   + focus_loc + ev_loc + leader_loc)
+        n_loc = world_loc.write(mod_dir, entries)
+        made.append("本地化 × %d 条" % n_loc)
     except Exception:
         pass
 

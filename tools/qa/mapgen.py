@@ -162,9 +162,18 @@ def generate(source="procedural", out_dir=None, width=1024, height=512,
     say("分配了 %d 个唯一颜色" % len(colors))
 
     # 陆省按质心纬度分洲（continent.txt 的 ID 顺序 = 这里的 1..7）
-    conts = {}
+    # 质心另有两个用途：unitstacks / buildings / weatherpositions 三张坐标表都要它，
+    # 所以这里无条件算一次（早前只在分洲的 try 里算，失败就没有）。
     try:
         cen = mgx.centroids(labels)
+        cen = {int(k): (round(float(v[0]), 2), round(float(v[1]), 2))
+               for k, v in cen.items() if int(k) > 0}
+        say("  质心 %d 个省" % len(cen))
+    except Exception as e:
+        cen = {}
+        say("  质心计算失败：%s" % str(e)[:60])
+    conts = {}
+    try:
         for pid in range(1, n + 1):
             y = cen.get(pid, (0.0, 0.0))[1]
             band = int(y / max(1.0, float(labels.shape[0])) * 7) + 1
@@ -226,6 +235,15 @@ def generate(source="procedural", out_dir=None, width=1024, height=512,
 
     say("写空文件…")
     mgw.write_empty_texts(map_dir, size=size)
+    # 三张坐标表必须按自己的图重写（原版坐标是 5632×2048 空间，在我们 1024×512
+    # 的图上每一个点都越界）。州号要等建完州才有，所以 buildings 这一步先不写，
+    # 由 scaffold / world_create 拿着真实州表再补。
+    try:
+        mp = mgw.write_map_positions(map_dir, cen, size=size)
+        say("  坐标表：unitstacks %d 行 / weather %d 行"
+            % (mp["unitstacks"], mp["weather"]))
+    except Exception as e:
+        say("  坐标表失败：%s" % str(e)[:60])
     say("按地理位置聚类…")
     try:
         nreg = int(n_regions) if n_regions else max(1, (n + 59) // 60)
@@ -270,4 +288,5 @@ def generate(source="procedural", out_dir=None, width=1024, height=512,
     say("完成：%d 个省，%dx%d" % (n, size[0], size[1]))
     return {"ok": True, "province_count": n, "width": size[0],
             "height": size[1], "map_dir": map_dir, "log": out,
+            "centroids": cen,
             "msg": "已生成 %d 个省的地图（%dx%d）" % (n, size[0], size[1])}

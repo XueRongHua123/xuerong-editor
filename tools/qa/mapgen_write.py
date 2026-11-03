@@ -411,20 +411,27 @@ def write_empty_texts(out_root, size=(1024, 512)):
     adjacencies.csv 只留表头：原版那些行按省号连海陆，换地图后省号全废。
     weatherpositions.txt 不能是空文件 —— 引擎要求至少各有一条 small / large，
     否则加载期崩；坐标放在地图中心附近就行。
+
+    **不要写这六个文件**（2026-11-03 修正）：
+        positions.txt / buildings.txt / cities.txt /
+        railways.txt / unitstacks.txt / adjacency_rules.txt
+
+    它们都**不在 replace_path 列表里**，走的是同名覆盖 ——
+    写 0 字节等于把原版同名文件整份清空。实测后果：部队图标、港口、机场、
+    城市标签全都不显示（即便崩溃修好也看不见）。
+    不写 = 原版那份继续生效，这是当时的正确选择。
+    真要让位置准确，后面得按省中心重新生成 positions.txt，那是另一件事。
     """
     w, h = size
     wp = ("1;%.2f;10.00;%.2f;small\n"
           "1;%.2f;10.00;%.2f;large\n") % (w / 2.0, h / 2.0, w / 2.0, h / 2.0)
     written = []
     for rel, content in (
-        ("railways.txt", ""),
-        ("buildings.txt", ""),
-        ("cities.txt", ""),
+        # supply_nodes.txt 先占个空文件，建完州之后由 write_supply_graph 重写
         ("supply_nodes.txt", ""),
-        ("positions.txt", ""),
-        ("unitstacks.txt", ""),
+        # adjacencies 只留表头：原版那些行按原版省号连海陆，换图后全废
         ("adjacencies.csv", ADJ_HEADER),
-        ("adjacency_rules.txt", ""),
+        # weatherpositions 不能空：引擎要求 small / large 各一条
         ("weatherpositions.txt", wp),
     ):
         p = os.path.join(out_root, rel)
@@ -432,6 +439,97 @@ def write_empty_texts(out_root, size=(1024, 512)):
             io.open(p, "w", encoding="utf-8", newline="").write(content)
             written.append(rel)
     return written
+
+
+# ==================== 三张「坐标表」 ====================
+# unitstacks.txt / buildings.txt / weatherpositions.txt 的坐标是**地图像素坐标**，
+# 不是归一化值：原版地图 5632×2048 里 unitstacks 的 x 最大 5628.60、y 最大 2043.80，
+# 正好贴到右下角；ES 的地图 4608×2816 里最大值 4604.44 / 2813.00，同样贴边。
+# 也就是说这三个文件必须**跟着自己的地图尺寸重写**。
+#
+# 我们原来是「不写」，让原版那份生效 —— 等于拿 x=3429 去一张 1024 宽的地图上找位置。
+# 三个文件都按省质心重写，z / 旋转 / 缩放只影响观感，给个合理常数即可。
+
+
+def write_unitstacks(map_dir, centroids):
+    """map/unitstacks.txt：部队图标在地图上的落点。
+
+    格式 `省号;type;x;y;z;rot;scale`（分号表格，不是键值块）。
+    原版每个省都有若干行（陆上有陆军、海上有舰队），type 恒 0、z≈10、scale 0.3~0.9。
+    """
+    lines = []
+    for pid in sorted(centroids):
+        if int(pid) <= 0:
+            continue                      # 省 0 是占位省，任何列表里都不该出现
+        cx, cy = centroids[pid]
+        lines.append("%d;0;%.2f;10.00;%.2f;0.00;0.50" % (int(pid), cx, cy))
+    _write_text(os.path.join(map_dir, "unitstacks.txt"),
+                "".join(ln + "\n" for ln in lines))
+    return len(lines)
+
+
+def write_buildings(map_dir, centroids, states, per_state=3):
+    """map/buildings.txt：建筑模型在地图上的落点。
+
+    格式 `省号;建筑类型;x;y;z;rot;?`。原版里 `supply_node` 也在这一层写
+    （10154 条），所以补给节点的**视觉落点**是从这里来的；补给节点的
+    **归属**在 supply_nodes.txt。
+
+    每个州取第一个省，摆三个模型：军工厂、民用厂、补给节点。
+    真实建筑数量在 history/states 里，这里只管「看得见」。
+    """
+    lines = []
+    for _sid, pids in states or ():
+        pids = [p for p in pids if p in centroids and int(p) > 0]
+        if not pids:
+            continue
+        pid = int(pids[0])
+        cx, cy = centroids[pid]
+        specs = (("arms_factory", 11.00, 0.00, 0.00),
+                 ("industrial_complex", 11.00, 8.00, 8.00),
+                 ("supply_node", 10.00, -8.00, 6.00))[:max(0, int(per_state))]
+        for name, z, dx, dy in specs:
+            lines.append("%d;%s;%.2f;%.2f;%.2f;0.00;0"
+                         % (pid, name, cx + dx, z, cy + dy))
+    _write_text(os.path.join(map_dir, "buildings.txt"),
+                "".join(ln + "\n" for ln in lines))
+    return len(lines)
+
+
+def write_weatherpositions(map_dir, centroids, size=None):
+    """map/weatherpositions.txt：每个省的天气采样点。
+
+    格式 `省号;x;y;z;small|large`，原版**每省两条**（small / large 各一）。
+    以前只写了省 1 的两行，其余 39 个陆省没有天气点。
+    """
+    hi_y = (float(size[1]) - 1.0) if size else None
+    lines = []
+    for pid in sorted(centroids):
+        if int(pid) <= 0:
+            continue
+        cx, cy = centroids[pid]
+        ly = (cy + 4.0) if hi_y is None else min(cy + 4.0, hi_y)
+        lines.append("%d;%.2f;10.00;%.2f;small" % (int(pid), cx, cy))
+        lines.append("%d;%.2f;10.00;%.2f;large" % (int(pid), cx, ly))
+    _write_text(os.path.join(map_dir, "weatherpositions.txt"),
+                "".join(ln + "\n" for ln in lines))
+    return len(lines)
+
+
+def write_map_positions(map_dir, centroids, states=None, size=None):
+    """一次写完这三张坐标表。states 给了才写 buildings。"""
+    if not centroids:
+        return {"unitstacks": 0, "buildings": 0, "weather": 0}
+    os.makedirs(map_dir, exist_ok=True)
+    return {
+        "unitstacks": write_unitstacks(map_dir, centroids),
+        "buildings": write_buildings(map_dir, centroids, states) if states else 0,
+        "weather": write_weatherpositions(map_dir, centroids, size),
+    }
+
+
+def _write_text(path, text):
+    io.open(path, "w", encoding="utf-8", newline="").write(text)
 
 
 WEATHER_TEMPLATE = (

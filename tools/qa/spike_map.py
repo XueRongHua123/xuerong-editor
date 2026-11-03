@@ -8,7 +8,7 @@ import os
 import sys
 import time
 
-MOD = sys.argv[1] if len(sys.argv) > 1 else r"D:\大肥鱼工作区\HOI4 MUVLUVsub mod 制作\muvluvCN_1.19"
+MOD = sys.argv[1] if len(sys.argv) > 1 else r"D:\大肥鱼工作区\HOI4 MUVLUVsub mod 制作\mods\muvluvCN_personal"
 GAME = r"E:\SteamLibrary\steamapps\common\Hearts of Iron IV"
 
 

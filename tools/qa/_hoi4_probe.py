@@ -18,10 +18,16 @@
   # 恢复 dlc_load.json 到备份
   python qa/_hoi4_probe.py --restore
 
-判定
-----
-  ALIVE  进程活到 timeout（能进主菜单，至少没在加载期崩）
-  DIED   进程提前退出（崩溃），打印 game.log 尾部与新崩溃目录
+判定（2026-11-02 深夜改口径：原来的 ALIVE 是假阳性）
+-----------------------------------------------------
+  GAME_OK  进程活着，且 game.log 出现 `Launching SINGLEPLAYER-game`
+           —— 这是「真的进游戏」的唯一硬信号
+  DIED     进程提前退出，或 crashes/ 下多出新目录（附 exception.txt 首行）
+  STUCK    进程活着但始终没有 Launching 那一行（加载到前端就停了）
+
+为什么改：旧口径「活到 timeout 就算 ALIVE」测的其实是「能不能加载到主菜单」。
+手动点「开始」后会崩在 `Launching SINGLEPLAYER-game` 之后，而旧探针照样报 ALIVE。
+现在三种结果分开报，别再合并。
 
 注意
 ----
@@ -161,6 +167,7 @@ def _settle(limit=30):
 
 
 def launch(timeout=45, tag="probe"):
+    """起游戏并判定。返回 dict，verdict ∈ {GAME_OK, DIED, STUCK}。"""
     if not _settle():
         _die("hoi4 关不掉，本轮放弃")
     before = set(_new_crash_dirs([]))
@@ -193,8 +200,16 @@ def launch(timeout=45, tag="probe"):
         lines = io.open(log, encoding="utf-8", errors="replace").read().splitlines()
     newc = _new_crash_dirs(before)
     tail = [ln for ln in lines if ln.strip()][-4:]
+    launched = any("Launching SINGLEPLAYER-game" in ln for ln in lines)
+    if newc or not alive:
+        verdict = "DIED"
+    elif launched:
+        verdict = "GAME_OK"
+    else:
+        verdict = "STUCK"
     return {"alive": alive, "secs": round(died if died else timeout, 1),
-            "tail": tail, "crashes": newc, "tag": tag}
+            "tail": tail, "crashes": newc, "tag": tag,
+            "launched": launched, "verdict": verdict}
 
 
 def restore():
@@ -230,7 +245,8 @@ def main():
         print("装好 %d 个文件，%d 条 replace_path → %s" % (n, nr, tgt))
         print("descriptor 头: %s" % " | ".join(other[:4]))
     r = launch(a.timeout, a.tag)
-    print("结果: %s  %.1fs" % ("ALIVE" if r["alive"] else "DIED", r["secs"]))
+    print("结果: %s  %.1fs  (launching=%s)" % (
+        r.get("verdict", "?"), r["secs"], r.get("launched")))
     for ln in r["tail"]:
         print("  log| " + ln)
     for c in r["crashes"]:

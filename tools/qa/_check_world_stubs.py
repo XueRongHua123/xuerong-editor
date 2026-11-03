@@ -18,6 +18,23 @@ import shutil
 import sys
 import tempfile
 
+# 第 7 组要 import mapgen_write（依赖 numpy / PIL）。默认的 python 是 3.13 精简版，
+# 没装 numpy；找到一个装了的解释器就自我重启一次，免得上手先踩环境坑。
+try:
+    import numpy  # noqa: F401
+except Exception:
+    import subprocess
+    for _cand in (r"C:\Users\33206\AppData\Local\Programs\Python\Python312\python.exe",
+                  r"C:\Users\33206\AppData\Local\Programs\Python\Python311\python.exe"):
+        if not os.path.isfile(_cand):
+            continue
+        try:
+            _r = subprocess.run([_cand, os.path.abspath(__file__)] + sys.argv[1:])
+            sys.exit(_r.returncode)
+        except Exception:
+            continue
+    print("警告：找不到带 numpy 的 Python，第 7 组会跳过")
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import world_stubs  # noqa: E402
@@ -56,7 +73,8 @@ def main():
         world_stubs.write_all(d, "ZZV")
         probs = world_stubs.check(d)
         check("check() 空", not probs, str(probs[:2]))
-        nf = os.path.join(d, "common", "national_focus", world_stubs.STUB_NAME)
+        nf = os.path.join(d, "common", "national_focus",
+                      world_stubs.stub_name("common/national_focus"))
         raw = io.open(nf, encoding="utf-8").read()
         check("国策树带 default = yes", "default = yes" in raw)
         check("国策树 id 用 tag 参数", "zz_editor_tree" in raw and "ZZV" in raw)
@@ -75,6 +93,83 @@ def main():
         hit = [p for p in probs if p["dir"] == "common/ideas"
                and p["level"] == "error"]
         check("报出空目录", bool(hit), str(probs[:2]))
+        print("[5] A2 内容：国策树 / 事件 / 本地化")
+        import focus_gen
+        import world_events
+        import world_loc
+        fr = focus_gen.build(tag="ZZV", n_focus=24)
+        check("国策树 ≥15 节点", len(fr["nodes"]) >= 15, str(len(fr["nodes"])))
+        check("国策树自检为空", not focus_gen.check(fr["text"], "ZZV"),
+              str(focus_gen.check(fr["text"], "ZZV")))
+        check("国策树带 default = yes", "default = yes" in fr["text"])
+        pre = [n for n in fr["nodes"] if n["prereq"]]
+        check("有前置关系", len(pre) >= len(fr["nodes"]) - 3, str(len(pre)))
+        ids = [n["id"] for n in fr["nodes"]]
+        check("节点 id 唯一", len(ids) == len(set(ids)))
+        check("图标全是 GFX_goal_/GFX_focus_research",
+              all(n["icon"].startswith(("GFX_goal_", "GFX_focus_research"))
+                  for n in fr["nodes"]))
+        check("每层 y 不重叠",
+              len({(n["x"], n["y"]) for n in fr["nodes"]}) == len(fr["nodes"]))
+        er = world_events.build(tag="ZZV")
+        check("事件有 namespace", "add_namespace" in er["events"])
+        check("on_startup 指明 tag", "ZZV = {" in er["on_actions"])
+        n = world_loc.write(d, fr["loc"] + er["loc"]
+                            + world_loc.country_entries("ZZV", "新世界"))
+        raw = io.open(os.path.join(d, "localisation", "simp_chinese",
+                                   "zz_editor_world_l_simp_chinese.yml"),
+                      encoding="utf-8-sig").read()
+        check("本地化写入且是中文", n > 40 and "稳固根基" in raw, str(n))
+        check("本地化带 BOM", io.open(os.path.join(
+            d, "localisation", "simp_chinese",
+            "zz_editor_world_l_simp_chinese.yml"), "rb").read(3) == b"\xef\xbb\xbf")
+        print("[6] 不再给同名覆盖的 map 文件写 0 字节占位")
+        src = io.open(os.path.join(HERE, "mapgen_write.py"),
+                      encoding="utf-8").read()
+        body = src[src.index("def write_empty_texts"):]
+        body = body[:body.index("return written")]
+        # 只认「写成元组项」的情况，别被 docstring 里那句「不要写这六个」误伤
+        bad = [f for f in ("positions.txt", "buildings.txt", "cities.txt",
+                           "railways.txt", "unitstacks.txt",
+                           "adjacency_rules.txt")
+               if ('("%s",' % f) in body]
+        check("六个同名覆盖文件已不写", not bad, str(bad))
+        check("仍写 adjacencies.csv / weatherpositions",
+              "adjacencies.csv" in body and "weatherpositions.txt" in body)
+
+        print("[7] 三张坐标表按自己的地图写，且坐标不越界")
+        import mapgen_write as mgw
+        md = os.path.join(d, "map")
+        os.makedirs(md, exist_ok=True)
+        cen = {1: (10.0, 20.0), 2: (100.0, 50.0), 3: (203.0, 111.0)}
+        states = [(1, [1, 2]), (2, [3])]
+        mp = mgw.write_map_positions(md, cen, states=states, size=(256, 128))
+        check("unitstacks 每省一行", mp["unitstacks"] == len(cen), str(mp))
+        check("weather 每省两行（small+large）", mp["weather"] == 2 * len(cen), str(mp))
+        check("buildings 每州三行", mp["buildings"] == 3 * len(states), str(mp))
+        for fn, ix, iy, hi_x, hi_y in (
+                ("unitstacks.txt", 2, 4, 255.0, 127.0),
+                ("buildings.txt", 2, 4, 255.0, 127.0),
+                ("weatherpositions.txt", 1, 3, 255.0, 127.0)):
+            bad = []
+            for ln in io.open(os.path.join(md, fn), encoding="utf-8"):
+                f = ln.strip().split(";")
+                if len(f) < 5:
+                    bad.append("列数 " + ln.strip())
+                    continue
+                try:
+                    x, y = float(f[ix]), float(f[iy])
+                except Exception:
+                    bad.append("非数值 " + ln.strip())
+                    continue
+                if not (0 <= x <= hi_x and 0 <= y <= hi_y):
+                    bad.append("越界 %.1f,%.1f" % (x, y))
+            check("%s 坐标都在图内" % fn, not bad, str(bad[:2]))
+        # 省 0 是占位省，任何坐标表里都不该出现
+        for fn in ("unitstacks.txt", "weatherpositions.txt"):
+            raw = io.open(os.path.join(md, fn), encoding="utf-8").read()
+            check("%s 里没有省 0" % fn,
+                  not any(ln.startswith("0;") for ln in raw.splitlines()))
     finally:
         shutil.rmtree(d, ignore_errors=True)
 

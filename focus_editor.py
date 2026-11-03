@@ -442,9 +442,20 @@ def _layer_dirs(sub, root):
 
     老的 loader 都是「扫 root 下一个目录」，加载纯 submod 时父 mod 的同类文件读不到。
     全部改用它之后，即使 ROOTS 只有 submod，也能沿 mod_layers 读到父 mod 与原版。"""
+    layers = mod_layers(root) or []
+    # 某层声明了 replace_path 时，该目录只从那一层及其后读取，下层（含原版）全部屏蔽
+    try:
+        _owner = _replace_owner(root, sub)
+    except Exception:
+        _owner = None
+    if _owner:
+        try:
+            layers = layers[layers.index(_owner):]
+        except ValueError:
+            pass
     out = []
     seen = set()
-    for base in reversed(mod_layers(root) or []):
+    for base in reversed(layers):
         if not base:
             continue
         d = os.path.join(base, sub.replace("/", os.sep))
@@ -458,22 +469,53 @@ def _layer_dirs(sub, root):
     return out
 
 
+LOAD_PROGRESS = {"active": False, "stage": "", "sub": "", "pct": 0, "t": 0.0}
+
+def _lp(stage, sub="", pct=0):
+    """上报加载阶段。前端轮询 /api/load_progress 读这个，做确定性进度条。"""
+    LOAD_PROGRESS["active"] = True
+    LOAD_PROGRESS["stage"] = stage
+    LOAD_PROGRESS["sub"] = sub
+    LOAD_PROGRESS["pct"] = max(0, min(100, int(pct)))
+    LOAD_PROGRESS["t"] = time.time()
+
+def _lp_done():
+    LOAD_PROGRESS["active"] = False
+    LOAD_PROGRESS["stage"] = ""
+    LOAD_PROGRESS["sub"] = ""
+    LOAD_PROGRESS["pct"] = 100
+
 def load_mod(root):
     root = os.path.abspath(root)
     name = os.path.basename(root.rstrip("\\/")) or root
     count = 0
     _nf_pairs = []
+    _lp("扫描文件", os.path.basename(root), 2)
     for _b, _d in _layer_dirs("common/national_focus", root):
         _src = os.path.basename(_b.rstrip("\\/")) or _b
         for _f in (sorted(f for f in os.listdir(_d) if f.endswith(".txt")) if os.path.isdir(_d) else []):
             _nf_pairs.append((_src, _d, _f))
-    for name, nf, fn in _nf_pairs:
+    _n_all = max(1, len(_nf_pairs))
+    # _layer_dirs 是按「越靠前越优先」排的（顶层在前）；但同名树是后赋值覆盖先赋值，
+    # 所以要反过来读：底层先读、顶层后读，顶层才能真正盖住底下那一份。
+    _nf_pairs.reverse()
+    for _i, (name, nf, fn) in enumerate(_nf_pairs):
+        if _i % 4 == 0:
+            _lp("解析国策树", "%d / %d 个文件" % (_i + 1, _n_all), 4 + int(_i * 54.0 / _n_all))
+        # 文件真正属于哪一层：nf 是 <层>/common/national_focus，去掉两级就是层根。
+        # 不能直接用函数参数 root——多层叠加时同名的文件会从不同层读到，
+        # 每棵树必须记住自己那一层，否则保存时会写进错的那层（找到的 id 也不对）。
+        try:
+            _lay = os.path.dirname(os.path.dirname(os.path.abspath(nf)))
+        except Exception:
+            _lay = root
         text = strip_comments(io.open(os.path.join(nf, fn), encoding="utf-8", errors="replace").read())
         rel = os.path.join("common", "national_focus", fn)
         for start, end, body in find_blocks(text, "shared_focus"):
             node = parse_focus_like(body, rel, name)
             if node:
                 node["shared"] = True
+                node["root"] = _lay
                 SHARED_FOCUSES.append(node)
         for start, end, body in find_blocks(text, "focus_tree"):
             items = top_items(body)
@@ -491,16 +533,18 @@ def load_mod(root):
                 elif k == "focus" and b:
                     node = parse_focus_like(v, os.path.join("common","national_focus",fn), name)
                     if node:
+                        node["root"] = _lay
                         focuses.append(node)
             if tid:
                 if tid in TREES:
                     TREE_ORDER.remove(tid)
-                TREES[tid] = {"id": tid, "file": os.path.join("common","national_focus",fn), "source": name, "root": root,
+                TREES[tid] = {"id": tid, "file": os.path.join("common","national_focus",fn), "source": name, "root": _lay,
                               "focuses": focuses, "shared": shared_refs,
                               "default": t_default, "country_raw": t_country}
                 TREE_ORDER.append(tid)
                 count += 1
     # 本地化
+    _lp("解析本地化", "8052 条文本", 59)
     # 先英文后中文：显示优先使用中文
     for lang in ("english", "simp_chinese"):
         d = os.path.join(root, "localisation", lang)
@@ -515,14 +559,17 @@ def load_mod(root):
                     m = line_re.match(ln)
                     if m:
                         LOC[m.group(1)] = m.group(2)
+    _lp("国家精神与科技", "", 61)
     load_ideas(root)
     load_equipment(root)
     load_modules(root)
     load_orgs(root)
     load_techs(root)
+    _lp("事件、国家、州", "", 92)
     load_events(root)
     load_countries(root)
     load_states(root)
+    _lp("收尾", "", 96)
     return count
 
 def analyze(tree):
@@ -609,7 +656,9 @@ def reload_data():
     total = 0
     for r in ROOTS:
         total += load_mod(r)
+    _lp("关联国家", "", 96)
     link_countries()
+    _lp_done()
     return total
 
 IDEAS = {}
@@ -3877,6 +3926,32 @@ def _find_mod_by_name(name, extra_roots=()):
 _LAYERS_CACHE = {}
 
 
+def _mod_dep_chain(r, depth=3):
+    """从一个 mod 往上走 dependencies，返回 [最父, ..., 自己]（不含原版）。
+
+    只走第一条能定位到的父依赖——和 mod_layers 单 root 分支的行为一致。
+    """
+    chain = []
+    cur = r
+    guard = 0
+    while cur and guard < depth:
+        guard += 1
+        ab = os.path.abspath(cur)
+        if ab in chain:
+            break
+        chain.append(ab)
+        desc = _mod_descriptor(ab)
+        nxt = None
+        for dep in desc["deps"]:
+            p = _find_mod_by_name(dep, extra_roots=[r])
+            if p and os.path.abspath(p) not in chain:
+                nxt = p
+                break
+        cur = nxt
+    chain.reverse()
+    return chain
+
+
 def mod_layers(root=None, depth=3):
     """返回叠加链，从最父到最子：[原版, 父 mod, 子 mod]
     HOI4 语义：后加载的覆盖先加载的；replace_path 的目录是整体替换。"""
@@ -3891,14 +3966,25 @@ def mod_layers(root=None, depth=3):
     # playset 语义：启动时给了多个 --mod（按启动器里的加载顺序），就按它们的顺序叠加，
     # 后面的覆盖前面的。这比只靠 descriptor 的 dependencies 更忠实于启动器的实际行为
     # （很多 mod 根本不写 dependencies）。
+    # 但每个 root 的 dependencies 仍然要展开并前置——否则「先加父 mod 再加子 mod」
+    # 时子 mod 依赖的中间层会丢，链会断开成 [原版, 父, 子]，中间那层的数据全读不到。
     if len(ROOTS) > 1:
-        chain = []
+        chain, tails = [], []
         for _r in ROOTS:
-            _ab = os.path.abspath(_r)
-            if _ab not in chain:
-                chain.append(_ab)
+            d = _mod_dep_chain(_r, depth)
+            if not d:
+                continue
+            tails.append(d[-1])
+            for ab in d[:-1]:
+                if ab not in chain:
+                    chain.append(ab)
+        for ab in tails:
+            if ab not in chain:
+                chain.append(ab)
         if root and os.path.abspath(root) not in chain:
-            chain.append(os.path.abspath(root))
+            for ab in _mod_dep_chain(root, depth):
+                if ab not in chain:
+                    chain.append(ab)
         if GAME and os.path.abspath(GAME) not in chain:
             chain.insert(0, os.path.abspath(GAME))
         try:
@@ -7150,18 +7236,70 @@ def country_history_create(root, tag, capital=1, ruling_party="neutrality",
             "msg": "已建 %s 的国家历史（首都省 %d）" % (tag, cap)}
 
 
+def _centroids_from_map(map_dir):
+    """从 map/definition.csv + provinces.bmp 反算每省像素质心。
+
+    `world_create` 正常走 mapgen.generate，那边会直接把 centroids 返回；
+    这个函数只是兜底：手工改过图、或从别的工具生成的 mod 也能补坐标表。
+    """
+    cen = {}
+    map_dir = os.path.abspath(map_dir)
+    csvp = os.path.join(map_dir, "definition.csv")
+    provp = os.path.join(map_dir, "provinces.bmp")
+    if not (os.path.isfile(csvp) and os.path.isfile(provp)):
+        return cen
+    try:
+        import numpy as np
+        from PIL import Image
+    except Exception:
+        return cen
+    rgb2pid = {}
+    for line in io.open(csvp, encoding="utf-8", errors="replace"):
+        p = line.strip().split(";")
+        if len(p) < 4:
+            continue
+        try:
+            rgb2pid[(int(p[1]), int(p[2]), int(p[3]))] = int(p[0])
+        except Exception:
+            continue
+    try:
+        im = Image.open(provp).convert("RGB")
+    except Exception:
+        return cen
+    a = np.asarray(im, dtype=np.int32)
+    h, w = a.shape[:2]
+    keys = (a[:, :, 0] << 16) | (a[:, :, 1] << 8) | a[:, :, 2]
+    flat = keys.reshape(-1)
+    uniq, inv, cnt = np.unique(flat, return_inverse=True, return_counts=True)
+    ys, xs = np.mgrid[0:h, 0:w]
+    sx = np.bincount(inv, weights=xs.reshape(-1), minlength=len(uniq))
+    sy = np.bincount(inv, weights=ys.reshape(-1), minlength=len(uniq))
+    for i, k in enumerate(uniq):
+        k = int(k)
+        pid = rgb2pid.get(((k >> 16) & 255, (k >> 8) & 255, k & 255))
+        if not pid or pid <= 0 or cnt[i] <= 0:
+            continue
+        cen[pid] = (round(sx[i] / cnt[i], 2), round(sy[i] / cnt[i], 2))
+    return cen
+
+
 def world_create(out_dir, source="procedural", width=1024, height=512,
                  n_provinces=40, min_size=300, seed=11, src_path=None,
                  sea_level=0.42, balance=True, min_province_px=800,
                  n_regions=None, n_supply=None,
                  tag="ZZV", country_name="新世界", color=None,
-                 per_state=8, mod_name=None, army=True):
+                 per_state=8, mod_name=None, army=True,
+                 n_focus=24, focus_shape="tree", gen_focus=True,
+                 gen_event=True, unit_name=None):
     """一键建世界：地图 → tag → 州 → 国家历史 → 军队 → 本地化 → 剧本。
 
     每一步都调用编辑器已有的函数（map_generate / country_tag_add /
     state_create / country_history_create / template_add / unit_add /
-    loc_generate / bookmark_add），不自己拼文件。任何一步失败都会记进 steps
-    并终止后续步骤，避免在半成品上继续叠加。
+    loc_generate / bookmark_add / focus_gen / world_events / world_loc），
+    不自己拼文件。任何一步失败都会记进 steps 并终止后续步骤，避免在半成品上继续叠加。
+
+    A2 起多了三个参数：`n_focus`（国策节点数）、`focus_shape`（tree / chain）、
+    `gen_focus` / `gen_event`（要不要真内容，关掉就是 A1 的空占位）。
 
     返回 {"ok", "steps": [{step, ok, msg}], "out_dir", "provinces", "states"}
     """
@@ -7207,9 +7345,11 @@ def world_create(out_dir, source="procedural", width=1024, height=512,
     try:
         load_mod(out_dir)
         _ensure_prov_rgb(out_dir)   # 懒加载，不主动触发就一直是空的
+        _lp_done()
         steps.append({"step": "重载地图", "ok": True,
                       "msg": "%d 个省" % len(PROV_RGB)})
     except Exception as e:
+        _lp_done()
         steps.append({"step": "重载地图", "ok": False, "msg": str(e)})
         return done()
 
@@ -7276,7 +7416,11 @@ def world_create(out_dir, source="procedural", width=1024, height=512,
             tres = template_add("%s_Infantry" % tag, "infantry",
                                 root=out_dir, tag=tag)
             if rec("师团模板", tres):
+                # A2-5 方案 B：直接给固定番号。番号组（division_names_group）
+                # 需要 common/units/names_divisions 里有对应条目，那一步还没做，
+                # 不写名字的话界面上就是一串空白。
                 rec("开局部队", unit_add(capital, "%s_Infantry" % tag,
+                                         name=unit_name or "第 1 步兵师",
                                          root=out_dir, tag=tag))
         except Exception as e:
             steps.append({"step": "军队", "ok": False, "msg": str(e)})
@@ -7295,7 +7439,51 @@ def world_create(out_dir, source="procedural", width=1024, height=512,
     except Exception as e:
         steps.append({"step": "剧本", "ok": False, "msg": str(e)})
 
-    # 9) 被 replace 的目录逐个补占位。
+    # 8.5) 国家领袖：common/characters 被整目录屏蔽，不写就没有领袖，
+    #      「选择国家」按钮会点了没反应（详见 qa/world_leader.py 开头）
+    leader_loc = []
+    try:
+        import world_leader
+        lr = world_leader.write(out_dir, tag, leader_name=(country_name or "新世界") + "领袖")
+        leader_loc = lr["loc"]
+        lk = world_leader.link_history(out_dir, tag, cid=lr.get("id"))
+        steps.append({"step": "国家领袖", "ok": True,
+                      "msg": "%s；%s" % (lr["path"], lk.get("msg") or "")})
+    except Exception as e:
+        steps.append({"step": "国家领袖", "ok": False, "msg": str(e)})
+
+    # 9) 国策树（A2-1/A2-2）：一棵 15–30 节点的真树 + 中文名
+    focus_text, focus_loc = None, []
+    if gen_focus:
+        try:
+            import sys as _sys
+            _qa = _qa_dir()
+            if _qa not in _sys.path:
+                _sys.path.insert(0, _qa)
+            import focus_gen
+            fr = focus_gen.build(tag=tag, n_focus=n_focus, shape=focus_shape)
+            bad = focus_gen.check(fr["text"], tag)
+            focus_text, focus_loc = fr["text"], fr["loc"]
+            steps.append({"step": "国策树", "ok": not bad,
+                          "msg": "%d 个节点 / %d 层%s" % (
+                              len(fr["nodes"]), len(fr["layers"]),
+                              "" if not bad else "：" + bad[0])})
+        except Exception as e:
+            steps.append({"step": "国策树", "ok": False, "msg": str(e)})
+
+    # 10) 开局事件（A2-3）：一条 on_startup 触发的国家事件
+    ev_text, oa_text, ev_loc = None, None, []
+    if gen_event:
+        try:
+            import world_events
+            er = world_events.build(tag=tag)
+            ev_text, oa_text, ev_loc = er["events"], er["on_actions"], er["loc"]
+            steps.append({"step": "开局事件", "ok": True,
+                          "msg": er["event_id"]})
+        except Exception as e:
+            steps.append({"step": "开局事件", "ok": False, "msg": str(e)})
+
+    # 11) 被 replace 的目录逐个补占位。
     #    这一步是「能加载」和「能进游戏」的分界：descriptor 里 50 条 replace_path
     #    声明了 50 个只从本 mod 读的目录，缺一个就有一个目录读空。
     #    最要命的是 common/national_focus —— 没有 default = yes 的树必崩，
@@ -7306,7 +7494,14 @@ def world_create(out_dir, source="procedural", width=1024, height=512,
         if _qa not in _sys.path:
             _sys.path.insert(0, _qa)
         import world_stubs
-        made = world_stubs.write_all(out_dir, tag)
+        ov = {}
+        if focus_text:
+            ov["common/national_focus"] = focus_text
+        if ev_text:
+            ov["events"] = ev_text
+        if oa_text:
+            ov["common/on_actions"] = oa_text
+        made = world_stubs.write_all(out_dir, tag, overrides=ov)
         bad = [p for p in world_stubs.check(out_dir, dirs=world_stubs.REPLACE_DIRS)
                if p["level"] == "error"]
         steps.append({"step": "目录占位", "ok": not bad,
@@ -7325,7 +7520,44 @@ def world_create(out_dir, source="procedural", width=1024, height=512,
     except Exception as e:
         steps.append({"step": "补给图", "ok": False, "msg": str(e)})
 
-    return done({"provinces": len(land), "states": made_states, "tag": tag})
+    # 12) 地标落点：unitstacks / buildings / weatherpositions
+    #     这三张表的坐标是**地图像素坐标**，原版那份是 5632×2048 空间的，
+    #     在我们 1024×512 的图上每个点都越界。必须按省质心重写。
+    try:
+        import mapgen_write as _mgw
+        cen = (r or {}).get("centroids") or {}
+        if not cen:
+            cen = _centroids_from_map(os.path.join(out_dir, "map"))
+        _sz = ((r or {}).get("width"), (r or {}).get("height"))
+        mp = _mgw.write_map_positions(os.path.join(out_dir, "map"), cen,
+                                      states=state_map,
+                                      size=_sz if all(_sz) else None)
+        steps.append({"step": "地标落点", "ok": bool(cen),
+                      "msg": "unitstacks %d / buildings %d / weather %d"
+                             % (mp["unitstacks"], mp["buildings"], mp["weather"])})
+    except Exception as e:
+        steps.append({"step": "地标落点", "ok": False, "msg": str(e)})
+
+    # 13) 世界本地化（A2-2 的国策名 + 国名 + 州名 + 事件文本）
+    try:
+        import world_loc
+        entries = []
+        entries += world_loc.country_entries(
+            tag, country_name or "新世界",
+            desc="%s，一个刚刚被造出来的国家。" % (country_name or "新世界"),
+            adjective=(country_name or "新世界"))
+        entries += world_loc.state_entries([s for s, _p in state_map])
+        entries += focus_loc
+        entries += ev_loc
+        entries += leader_loc
+        n_loc = world_loc.write(out_dir, entries)
+        steps.append({"step": "世界本地化", "ok": n_loc >= 0,
+                      "msg": "%d 条中文" % n_loc})
+    except Exception as e:
+        steps.append({"step": "世界本地化", "ok": False, "msg": str(e)})
+
+    return done({"provinces": len(land), "states": made_states, "tag": tag,
+                 "focus_nodes": len(focus_loc) // 2 if focus_loc else 0})
 
 
 def country_tag_delete(root, tag):
@@ -8796,8 +9028,16 @@ def _bookmark_date(date):
 
 
 def _bookmark_country_block(tag, ideology="neutrality"):
-    return ('\t\t"%s" = {\n'
-            '\t\t\thistory = "%s_DESC"\n'
+    """剧本里的「可选国家」条目。
+
+    国家 tag 必须写成**裸键**（`ZZV = { ... }`），不能加引号。
+    原版 blitzkrieg.txt / the_gathering_storm.txt 都是裸键；写成 `"ZZV" = {`
+    解析出来是个字符串键而不是国家作用域，于是**选国家界面里一个可选国家都没有**：
+    地图在、日期在、剧本名也在，就是没有国家可以点，「选择国家」按钮也不出现。
+    （2026-11-03 实测踩到，卡了半晚的自动点击其实就是卡在这个空列表上。）
+    """
+    return ('\t\t%s = {\n'
+            '\t\t\thistory = %s_DESC\n'
             '\t\t\tideology = %s\n'
             '\t\t\tideas = {\n'
             '\t\t\t}\n'
@@ -8909,6 +9149,7 @@ def bookmark_add(root, name, date, desc=None, picture=None, default_country=None
              '\t\tdate = %s' % date,
              '\t\tpicture = "%s"' % (picture or "GFX_select_date_1936"),
              '\t\tdefault_country = "%s"' % tag,
+             '\t\tfilters = { new_content continent }',
              '\t\tdefault = yes',
              '']
     for c in clist:
@@ -12642,12 +12883,16 @@ def focus_tree_graph(tid):
         fid = f.get("id")
         if not fid:
             continue
+        # 优先用 resolve_positions() 算好的绝对坐标（relative_position_id 链已展开）；
+        # 直接取 x/y 拿到的是相对偏移，预览会因此把节点挤成一条线。
         try:
-            x = int(float(f.get("x") or 0))
+            _ax = f.get("ax")
+            x = round(float(_ax if _ax is not None else (f.get("x") or 0)), 2)
         except Exception:
             x = 0
         try:
-            y = int(float(f.get("y") or 0))
+            _ay = f.get("ay")
+            y = round(float(_ay if _ay is not None else (f.get("y") or 0)), 2)
         except Exception:
             y = 0
         node = {
@@ -15900,11 +16145,13 @@ def data_payload():
             f.pop("select_effect", None)
             f.pop("iconPng", None)
         trees.append({"id": tid, "file": t["file"], "source": t["source"],
+                      "root": t.get("root", ""),
                       "default": t.get("default", ""), "country_raw": t.get("country_raw", ""),
                       "focuses": t["focuses"], "shared": t["shared"],
                       "analysis": analyze(t)})
     if SHARED_FOCUSES:
         trees.append({"id": "shared_focuses", "file": "", "source": "shared",
+                      "root": "",
                       "default": "", "country_raw": "",
                       "focuses": SHARED_FOCUSES, "shared": [],
                       "analysis": analyze({"focuses": SHARED_FOCUSES})})
@@ -17029,16 +17276,62 @@ def is_under_game(p):
     except Exception:
         return False
 
+
+def _is_readonly_root(p):
+    """原版目录和创意工坊目录都不该被写。
+
+    创意工坊路径形如 <Steam>/steamapps/workshop/content/<appid>/<modid>，
+    Steam 会在校验时把它改回去，写进去等于白改，还会污染订阅内容。
+    """
+    ab = os.path.abspath(p or "")
+    if not ab:
+        return False
+    if is_under_game(ab):
+        return True
+    return "/steamapps/workshop/" in ab.replace("\\", "/").lower()
+
+
+def _writable_top():
+    """最顶层可写的 mod 目录（不是原版、不是创意工坊）。"""
+    try:
+        for r in reversed(list(ROOTS)):
+            rab = os.path.abspath(r)
+            if rab and not _is_readonly_root(rab):
+                return rab
+    except Exception:
+        pass
+    return ""
+
+
+def _adopt_file(dst_root, src_root, rel):
+    """把 src_root/rel 复制到 dst_root/rel（目标已存在就不动）。"""
+    if not dst_root or not src_root or not rel:
+        return False
+    try:
+        s = os.path.join(src_root, rel)
+        d = os.path.join(dst_root, rel)
+        if os.path.exists(d) or not os.path.isfile(s):
+            return False
+        dd = os.path.dirname(d)
+        if dd and not os.path.isdir(dd):
+            os.makedirs(dd)
+        shutil.copy2(s, d)
+        return True
+    except Exception:
+        return False
+
 def load_vanilla():
     if not os.path.isdir(GAME):
         return False, "没有找到游戏目录"
     if GAME not in ROOTS:
         ROOTS.append(GAME)
     n = load_mod(GAME)
+    _lp("构建图标索引", "", 98)
     try:
         build_icons(ROOTS, GAME)
     except Exception as e:
         print("图标构建失败:", e)
+    _lp_done()
     return True, "已加载原版参考（只读），共 %d 棵树" % n
 
 def list_backups(root, rel):
@@ -17619,10 +17912,25 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send({"ok": False, "msg": "请求体不是合法 JSON"}, 400)
                 return
         ro = body.get("root") or body.get("base") or ""
-        # 只读保护针对"写文件"的接口；加载/卸载原版参考不改磁盘，必须放行
-        if ro and is_under_game(ro) and self.path not in ("/api/load_vanilla", "/api/unload_mod"):
-            self._send({"ok": False, "msg": "原版目录只读：请先复制到自己的模组再修改"})
-            return
+        # 只读保护针对"写文件"的接口；加载/卸载原版参考不改磁盘，必须放行。
+        # 原版目录和创意工坊目录都算只读——但不再直接拒绝，而是自动接管到最顶层可写的 mod：
+        # 把要改的那个文件复制过去（同名覆盖），其余文件仍走叠加链读原层。
+        # 只读保护只针对"写文件"的接口。加载/卸载只读不写，必须放行，
+        # 否则连创意工坊的 mod 都加载不进来。
+        _READONLY_OK = ("/api/load_vanilla", "/api/unload_mod", "/api/load_mod",
+                        "/api/load_mod_root", "/api/load_progress", "/api/pick_mod")
+        if ro and _is_readonly_root(ro) and self.path not in _READONLY_OK:
+            _top = _writable_top()
+            if not _top:
+                self._send({"ok": False, "msg": "没有可写的模组目录：请先新建或加载一个自己的 mod"})
+                return
+            _rel = body.get("rel") or body.get("file") or ""
+            _adopted = _adopt_file(_top, ro, _rel)
+            body["root"] = _top
+            body["base"] = _top
+            ro = _top
+            if _rel:
+                body["_adopted"] = _adopted
         if self.path == "/api/save":
             root = body.get("root")
             rel = body.get("file")
@@ -17763,13 +18071,21 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path == "/api/delete_idea":
             ok, msg = delete_idea(body.get("root"), body.get("file"), body.get("id"))
             self._send({"ok": ok, "msg": msg})
+        elif self.path == "/api/load_progress":
+            d = dict(LOAD_PROGRESS)
+            # 保护：超过 10 秒没更新，认定这轮加载已经结束（防止某处忘了 _lp_done）
+            if d.get("active") and time.time() - (d.get("t") or 0) > 10:
+                d["active"] = False
+            self._send(d)
         elif self.path == "/api/pick_mod":
             ds = detect_mods()
             if not ds:
                 self._send({"ok": False, "msg": "未选择目录"})
             else:
-                ok, msg = load_mod_root(ds[0])
-                self._send({"ok": ok, "msg": msg})
+                # 只负责选目录并把路径交回去，实际加载由前端再调 /api/load_mod。
+                # 原先这里一并 load_mod_root()，导致「选完文件夹」到「加载完」之间
+                # 一个请求堵 20 秒，前端拿不到任何中间状态，看起来像卡死。
+                self._send({"ok": True, "path": ds[0], "msg": "已选择：" + os.path.basename(ds[0])})
         elif self.path == "/api/state_refine":
             self._send(state_refine_apply(body.get("sid"), body.get("k"),
                                           body.get("root")))
@@ -17943,7 +18259,12 @@ class Handler(SimpleHTTPRequestHandler):
                 color=body.get("color") or None,
                 per_state=body.get("per_state") or 8,
                 mod_name=body.get("mod_name") or None,
-                army=body.get("army", True)))
+                army=body.get("army", True),
+                n_focus=body.get("n_focus") or 24,
+                focus_shape=body.get("focus_shape") or "tree",
+                gen_focus=body.get("gen_focus", True),
+                gen_event=body.get("gen_event", True),
+                unit_name=body.get("unit_name") or None))
         elif self.path == "/api/country_tag_refs":
             self._send(country_tag_refs(body.get("root") or None, body.get("tag")))
         elif self.path == "/api/country_starter":
@@ -18127,7 +18448,8 @@ class Handler(SimpleHTTPRequestHandler):
                                  body.get("version", "0.1.0"),
                                  body.get("game_version", "1.19.*"),
                                  body.get("tree_id", ""), body.get("tag", ""),
-                                 bool(body.get("create_tree", True)))
+                                 bool(body.get("create_tree", True)),
+                                 body.get("dep", ""))
             root = os.path.join(os.path.abspath(base), body.get("id") or "")
             if ok:
                 ok2, msg2 = load_mod_root(root)
@@ -18298,7 +18620,7 @@ def mod_home():
     return os.path.join(os.path.expanduser("~"), "Documents", "Paradox Interactive", "Hearts of Iron IV", "mod")
 
 def create_mod(base, mod_id, name, version="0.1.0", game_version="1.19.*",
-               tree_id="", tag="", create_tree=True):
+               tree_id="", tag="", create_tree=True, dep=""):
     if not re.match(r'^[A-Za-z0-9_]+$', mod_id or ""):
         return False, "模组文件夹名只能包含字母、数字、下划线"
     base = os.path.abspath(base or mod_home())
@@ -18315,10 +18637,24 @@ def create_mod(base, mod_id, name, version="0.1.0", game_version="1.19.*",
             return False, "国策树 ID 只能包含字母、数字、下划线"
         if not re.match(r'^[A-Z][A-Z0-9]{1,5}$', tag or ""):
             return False, "国家 TAG 格式不正确（例如 GER、UNI）"
+    # dep：做 submod 时依赖的本体。给了就在 descriptor 里写 dependencies，
+    # 这样只加载本 mod 也能让 mod_layers 自动把本体补进叠加链——本体的
+    # replace_path 才会生效，原版的数据才不会漏进来。
+    # 做「从原版开始的新 mod」时留空，链里只有原版，行为不变。
+    dep_name = ""
+    if dep:
+        _dp = os.path.abspath(str(dep))
+        if os.path.isdir(_dp):
+            dep_name = (_mod_descriptor(_dp).get("name") or
+                        os.path.basename(_dp.rstrip("\\/")))
+        else:
+            dep_name = str(dep).strip()
     try:
         os.makedirs(root)
         desc = ['version="%s"' % version, 'tags={', '\t"Alternative History"', '}',
                 'name="%s"' % name, 'supported_version="%s"' % game_version]
+        if dep_name:
+            desc += ['dependencies={', '\t"%s"' % dep_name, '}']
         io.open(os.path.join(root, "descriptor.mod"), "w", encoding="utf-8", newline="").write("\r\n".join(desc) + "\r\n")
         # 启动器 .mod 文件
         if os.path.abspath(base) == os.path.abspath(mod_home()):
@@ -18373,11 +18709,14 @@ def load_mod_root(path):
         return False, "这个目录已经加载过了"
     ROOTS.append(path)
     n = load_mod(path)
+    _lp("关联国家", "", 96)
     link_countries()
+    _lp("构建图标索引", "", 98)
     try:
         build_icons(ROOTS, GAME)
     except Exception as e:
         print("图标构建失败:", e)
+    _lp_done()
     return True, "已加载 %s（%d 棵树）" % (os.path.basename(path), n)
 
 def main():
@@ -18399,6 +18738,7 @@ def main():
     refresh_start_date(ROOTS)
     reload_data()
     link_countries()
+    _lp_done()
     print("开局日期:", START_DATE_TEXT, "| STATES:", len(STATES))
     if ROOTS:
         build_icons(ROOTS, GAME)

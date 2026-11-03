@@ -118,21 +118,39 @@ REPLACE_DIRS = (
 
 # 需要写「块名 = { }」的目录。写成裸注释也行，但块名能让解析器明确读到空集合，
 # 语义上更接近「这一类数据存在且为空」。
+# 需要写「块名 = { }」的目录 —— **块名必须和原版文件的顶层写法一致**，
+# 猜错不会崩，但会刷 `Unexpected token: xxx`（实测踩过 raids / abilities /
+# autonomous_states / decisions 四处）。
+#
+# 只有这些目录真的有统一顶层块；其余目录是「一条一个块」的裸写法
+# （operations、bop、dynamic_modifiers、decisions 的类别、autonomous_states 的
+# autonomy_state 都是这种），空目录只能写成注释，不能编个块名出来。
 BLOCK_STUBS = {
-    "common/abilities": "abilities",
-    "common/autonomous_states": "autonomous_states",
+    "common/abilities": "ability",              # 单数！abilities 会报 Unexpected token
     "common/opinion_modifiers": "opinion_modifiers",
     "common/ideas": "ideas",
     "common/on_actions": "on_actions",
-    "common/operations": "operations",
-    "common/raids": "raids",
-    "common/bop": "bop",
-    "common/dynamic_modifiers": "dynamic_modifiers",
-    "common/decisions": "decisions",
-    "common/decisions/categories": "decision_categories",
+    "common/raids": "types",                    # 突袭定义文件的顶层是 types
+    "common/raids/categories": "categories",
 }
 
 STUB_NAME = "zz_editor_stub.txt"
+
+# 有真内容的目录用更具体的文件名：一棵 24 个节点的国策树叫「stub」会误导后来人
+_NAME_BY_DIR = {
+    "common/national_focus": "zz_editor_focus.txt",
+    "common/on_actions": "zz_editor_on_actions.txt",
+    "events": "zz_editor_events.txt",
+    "common/ai_strategy": "zz_editor_ai_strategy.txt",
+    # 注意：common/bookmarks 不能放进来。剧本是 bookmark_add 写的
+    # zz_editor_bookmarks.txt，占位若用同名会把剧本整份覆盖掉（实测过一次：
+    # 世界生成完只剩一句「占位」注释，游戏里没有可选的剧本）。
+}
+
+
+def stub_name(sub):
+    """某个目录里该用的文件名。"""
+    return _NAME_BY_DIR.get(sub, STUB_NAME)
 
 
 def focus_tree_stub(tag="ZZV", tree_id="zz_editor_tree"):
@@ -168,10 +186,34 @@ def focus_tree_stub(tag="ZZV", tree_id="zz_editor_tree"):
         '}\n') % (tree_id, tag, tree_id)
 
 
+def ai_strategy_stub(tag="ZZV"):
+    """最低限度的 AI 行为：把一部分兵力作为守备铺开。
+
+    注意 `type = defend` **不是合法值** —— 原版 `common/ai_strategy` 里从来没有这个
+    type（合法的有 role_ratio / unit_ratio / protect / area_priority / front 等）。
+    写错的 type 不会崩，但会刷 `Invalid ai strategy type`，而且完全没有效果。
+    这里用 `role_ratio / garrison`：原版 ENG 等文件就是这么写的。
+    """
+    return (
+        "# 让 AI 把一部分师当作守备铺到本土，而不是全堆在首都。\n"
+        "zz_editor_home_defense = {\n"
+        "\tallowed = {\n\t\talways = yes\n\t}\n"
+        "\tenable = {\n\t\talways = yes\n\t}\n"
+        "\tabort_when_not_enabled = yes\n"
+        "\tai_strategy = {\n"
+        "\t\ttype = role_ratio\n"
+        "\t\tid = garrison\n"
+        "\t\tvalue = 0.5\n"
+        "\t}\n"
+        "}\n")
+
+
 def _text_for(sub, tag):
     """一个目录该写什么内容。"""
     if sub == "common/national_focus":
         return focus_tree_stub(tag)
+    if sub == "common/ai_strategy":
+        return ai_strategy_stub(tag)
     if sub == "events":
         return "# 本项目暂时没有事件\n"
     blk = BLOCK_STUBS.get(sub)
@@ -185,13 +227,20 @@ def _write(path, text):
     io.open(path, "w", encoding="utf-8", newline="").write(text)
 
 
-def write_all(mod_dir, tag="ZZV", dirs=None):
-    """给每个目录写占位文件，返回相对路径列表。"""
+def write_all(mod_dir, tag="ZZV", dirs=None, overrides=None):
+    """给每个目录写占位文件，返回相对路径列表。
+
+    overrides 用来把「占位」换成真内容：{目录: 文本}。
+    world_create 用它塞真国策树、真事件、真 on_actions。
+    """
     made = []
+    ov = overrides or {}
     for sub in (dirs or REPLACE_DIRS):
-        p = os.path.join(mod_dir, sub.replace("/", os.sep), STUB_NAME)
-        _write(p, _text_for(sub, tag))
-        made.append(sub + "/" + STUB_NAME)
+        fn = stub_name(sub)
+        p = os.path.join(mod_dir, sub.replace("/", os.sep), fn)
+        text = ov.get(sub)
+        _write(p, text if text is not None else _text_for(sub, tag))
+        made.append(sub + "/" + fn)
     return made
 
 
