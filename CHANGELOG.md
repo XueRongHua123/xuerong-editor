@@ -8,7 +8,7 @@
 重跑 `python work/tools/gen_changelog.py` 会按 `qa/release_notes_v*.md` 重新生成；
 「未发布」那段是手工维护的，脚本会原样保留。
 
-共 159 个已发布版本，最新 v1.23.42。
+共 161 个已发布版本，最新 v1.23.44。
 
 ## 未发布（开发中）
 
@@ -21,6 +21,8 @@
 
 | 版本 | 摘要 |
 |---|---|
+| [v1.23.44](work/qa/release_notes_v123440.md) | 这三个 bug 是同一族：mapgen 里有一批写法是 arr[labels == 0] = 海底的东西，但我们的海是真省（id 从 n+1 开始），labels 里根本没有 … |
+| [v1.23.43](work/qa/release_notes_v123430.md) | common/ 下那批共享国策（common_refugee_tech_sharing、common_adopt_powered_suits、common_experience… |
 | [v1.23.42](work/qa/release_notes_v123420.md) | 修复一批「改了不生效」的问题，根因是树被记到了错误的层。 |
 | [v1.23.41](work/qa/release_notes_v123410.md) | 修了一个加载链的 bug：先加父 mod 再加子 mod 时，子 mod 依赖的中间层会整层丢失。 |
 | [v1.23.40](work/qa/release_notes_v123400.md) | 本次更新集中在第一次用的人怎么上手，以及四个实际使用中撞出来的 bug。 |
