@@ -855,6 +855,14 @@
   .src-home-link{display:block;margin-top:2px;font-size:10.5px;color:var(--muted);text-align:left;padding:0}
   .src-home-link:hover{color:var(--accent)}
   .src-state.busy{color:var(--accent)}
+  /* v1.23.45 跟随启动器 + 自动带进来的层 */
+  .src-opt{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--muted);
+    margin-top:6px;cursor:pointer;user-select:none}
+  .src-opt input{margin:0;width:12px;height:12px;cursor:pointer;accent-color:var(--accent)}
+  .src-opt:hover{color:var(--text)}
+  .src-opt-hint{font-size:10px;color:var(--accent);line-height:1.4;margin-top:2px}
+  .src-auto{display:block;margin-top:3px;font-size:10px;line-height:1.45;opacity:.75;cursor:help}
+  .src-auto b{font-weight:600;color:color-mix(in srgb,var(--accent) 70%,var(--muted))}
   .spin{display:inline-block;width:9px;height:9px;margin-right:6px;vertical-align:-1px;
     border:2px solid color-mix(in srgb,var(--accent) 30%,transparent);border-top-color:var(--accent);
     border-radius:50%;animation:spin .8s linear infinite}
@@ -1027,6 +1035,8 @@ window.onerror = function(m, s, l, c){
         <button class="src-btn" id="newModBtn"><b>🆕 新建模组</b><i>生成能直接玩的空壳</i></button>
       </div>
       <div id="srcState" class="src-state">还没有加载 mod</div>
+      <label class="src-opt"><input type="checkbox" id="optFollow" checked> 跟随启动器加载依赖</label>
+      <div id="optHint" class="src-opt-hint"></div>
       <button class="linkbtn src-home-link" id="welcomeBtn">🏠 打开欢迎页</button>
       <button class="linkbtn src-home-link" id="guideBtn">❓ 打开引导</button>
     </div>
@@ -2627,7 +2637,7 @@ function showMutex(){ return document.getElementById('showMutex').checked; }
 function applyView(){ vp.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`); }
 function resetView(){ view = {x:0,y:0,k:1}; applyView(); (typeof updateZoomLabel === 'function') && updateZoomLabel(); }
 
-async function loadData(){ const r = await fetch('/api/data'); DATA = await r.json(); dirty.clear(); linkSrc = null; selId = null; cpCache = null; COUNTRY_DATA = null; LINT_DATA = null; if(!DATA.trees || current >= DATA.trees.length) current = 0; renderAll(); applySavedSkin(); updateWelcome(); if(typeof renderGuide === 'function') renderGuide(); if(typeof updateSourceBox === 'function') updateSourceBox(); }
+async function loadData(){ const r = await fetch('/api/data'); DATA = await r.json(); dirty.clear(); linkSrc = null; selId = null; cpCache = null; COUNTRY_DATA = null; LINT_DATA = null; if(!DATA.trees || current >= DATA.trees.length) current = 0; renderAll(); applySavedSkin(); updateWelcome(); if(typeof renderGuide === 'function') renderGuide(); if(typeof updateSourceBox === 'function') updateSourceBox(); if(typeof bindOptions === 'function') bindOptions(); if(typeof loadOptions === 'function') loadOptions(); }
 function updateWelcome(){
   const w = document.getElementById('welcome'); if(!w) return;
   const empty = !(DATA && DATA.roots && DATA.roots.length);
@@ -4280,9 +4290,48 @@ function updateSourceBox(){
           txt += ' · 里面还没有自己的内容，看到的是原版';
         }
       }
-      st.textContent = txt;
+      // v1.23.45：把「自动带进来的层」也列出来，不然用户只看到自己点的那一个，
+      // 会以为科技/装备没读到父 mod。
+      const lay = ((DATA && DATA.layers) || []).filter(l => l.auto && !l.readonly);
+      let html = '<span>' + escapeHtml(txt) + '</span>';
+      if(lay.length){
+        const names = lay.map(l => l.name).filter(Boolean);
+        const tip = lay.map(l => (l.name || '') + '：' + (l.path || '')).join('\n');
+        html += '<span class="src-auto" title="' + escapeHtml(tip) + '">自动带上：<b>'
+              + escapeHtml(names.join('、')) + '</b></span>';
+      }
+      st.innerHTML = html;
     }
   }
+}
+
+/* ---------- v1.23.45 跟随启动器的开关 ---------- */
+async function loadOptions(){
+  const cb = document.getElementById('optFollow');
+  if(!cb) return;
+  try{
+    const r = await fetch('/api/options', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const j = await r.json();
+    cb.checked = !!j.follow_launcher;
+  }catch(e){}
+}
+
+function bindOptions(){
+  const cb = document.getElementById('optFollow');
+  if(!cb || cb.__bound) return;
+  cb.__bound = true;
+  cb.onchange = async function(){
+    const on = this.checked;
+    try{
+      await fetch('/api/options', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({follow_launcher: on})});
+    }catch(e){}
+    const hint = document.getElementById('optHint');
+    if(hint){
+      hint.textContent = (on ? '已开启跟随启动器' : '已关闭跟随启动器') + ' · 重新加载 mod 后生效';
+      setTimeout(function(){ if(hint.textContent) hint.textContent = ''; }, 6000);
+    }
+  };
 }
 
 async function loadVanillaWithProgress(){

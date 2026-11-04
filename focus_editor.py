@@ -3890,37 +3890,260 @@ def _mod_descriptor(root):
     return info
 
 
-def _find_mod_by_name(name, extra_roots=()):
-    """按 mod 名（descriptor 里的 name）在已知位置找目录"""
+# ---- v1.23.45 跟随启动器加载依赖 -----------------------------------------
+#
+# 玩家在启动器里勾选的顺序写在 dlc_load.json 的 enabled_mods 里，**游戏就是按这个
+# 顺序叠加的**；descriptor 的 dependencies 只是启动器用来提示「你缺前置」的元数据，
+# 不进加载链。以前只跟 dependencies，于是「A 依赖 B，但 B 自己也被启用」这种链
+# 永远丢中间层 —— CNsub 带不进来就是这个原因。
+#
+# 开关默认打开；关掉就退回只跟 dependencies 的老行为。
+
+_OPT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "cache", "options.json")
+OPTIONS = {"follow_launcher": True}
+
+
+def _load_options():
+    try:
+        if os.path.isfile(_OPT_FILE):
+            j = json.loads(io.open(_OPT_FILE, encoding="utf-8-sig",
+                                   errors="replace").read())
+            for k in list(OPTIONS):
+                if k in j:
+                    OPTIONS[k] = bool(j[k])
+    except Exception:
+        pass
+
+
+def _save_options():
+    try:
+        _atomic_write(_OPT_FILE, json.dumps(OPTIONS, ensure_ascii=False,
+                                            indent=1).encode("utf-8"))
+    except Exception:
+        pass
+
+
+def pdx_user_dir():
+    """Documents/Paradox Interactive/Hearts of Iron IV。
+
+    优先找真的存在的那个（Documents 被 OneDrive 重定向时 ~/Documents 可能是空的），
+    都不存在才返回默认路径。
+    """
+    home = os.path.expanduser("~")
+    docs = [os.path.join(home, "Documents"),
+            os.path.join(home, "OneDrive", "Documents")]
+    up = os.environ.get("USERPROFILE")
+    if up:
+        docs.append(os.path.join(up, "Documents"))
+    for d in docs:
+        p = os.path.join(d, "Paradox Interactive", "Hearts of Iron IV")
+        if os.path.isdir(p):
+            return p
+    return os.path.join(home, "Documents", "Paradox Interactive", "Hearts of Iron IV")
+
+
+def _resolve_mod_path(raw, base):
+    """把 .mod 里的 path= 解析成真实目录。
+
+    三种写法都要认：
+      绝对路径        E:/SteamLibrary/steamapps/workshop/content/394360/2800380626
+      相对用户目录    mod/xxx            （本地 mod）
+      相对游戏目录    mod/xxx            （老式安装）
+    """
+    p = (raw or "").strip().replace("\\", "/")
+    if not p:
+        return None
     cands = []
-    # 1) 已加载的 roots
-    for r in list(ROOTS) + list(extra_roots):
-        if not r:
+    if os.path.isabs(p) or re.match(r"^[A-Za-z]:/", p):
+        cands.append(p.replace("/", os.sep))
+    else:
+        cands.append(os.path.join(base, p.replace("/", os.sep)))
+        cands.append(os.path.join(base, "mod", os.path.basename(p.rstrip("/"))))
+        if GAME:
+            cands.append(os.path.join(GAME, p.replace("/", os.sep)))
+    for c in cands:
+        try:
+            if os.path.isdir(c):
+                return os.path.abspath(c)
+        except Exception:
             continue
-        cands.append(os.path.abspath(r))
-    # 2) workshop 目录
-    ws = r"E:\SteamLibrary\steamapps\workshop\content\394360"
-    if os.path.isdir(ws):
-        for d in os.listdir(ws):
-            p = os.path.join(ws, d)
-            if os.path.isdir(p):
-                cands.append(p)
-    # 3) 常见 mod 目录
-    for base in (r"E:\HOI4\mod", os.path.join(os.path.expanduser("~"), "Documents", "Paradox Interactive",
-                                                 "Hearts of Iron IV", "mod")):
-        if os.path.isdir(base):
+    return None
+
+
+def _steam_libraries():
+    """Steam 库根目录列表。从注册表拿 Steam 安装位置，再解析 libraryfolders.vdf。
+
+    不写死盘符：别人的机器、游戏装到别的盘都要能用。
+    """
+    roots = []
+    steam = ""
+    try:
+        import winreg
+        for hive, key in ((winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam"),
+                          (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam")):
+            try:
+                k = winreg.OpenKey(hive, key)
+            except Exception:
+                continue
+            for name in ("SteamPath", "InstallPath"):
+                try:
+                    v = winreg.QueryValueEx(k, name)[0]
+                except Exception:
+                    continue
+                if v and os.path.isdir(v):
+                    steam = v
+                    break
+            if steam:
+                break
+    except Exception:
+        steam = ""
+    # 游戏目录本身也能反推出一个库（--game 指到别的库时最可靠）
+    if GAME:
+        parts = os.path.abspath(GAME).replace("\\", "/").split("/")
+        low = [x.lower() for x in parts]
+        if "steamapps" in low:
+            lib = "/".join(parts[:low.index("steamapps")])
+            if lib and lib not in roots:
+                roots.append(lib.replace("/", os.sep))
+    vdf = os.path.join(steam, "steamapps", "libraryfolders.vdf") if steam else ""
+    if vdf and os.path.isfile(vdf):
+        try:
+            txt = io.open(vdf, encoding="utf-8", errors="replace").read()
+            for m in re.finditer(r'"path"\s+"([^"]+)"', txt):
+                lib = m.group(1).replace("\\\\", "\\")
+                if os.path.isdir(lib) and lib not in roots:
+                    roots.append(lib)
+        except Exception:
+            pass
+    return roots
+
+
+_SEARCH_BASES_CACHE = {}
+
+
+def _mod_search_bases():
+    """可能存放 mod 的目录（本地 mod 目录 + 各 Steam 库的 workshop/394360）。"""
+    key = GAME or ""
+    hit = _SEARCH_BASES_CACHE.get(key)
+    if hit:
+        return list(hit)
+    out = []
+    local = os.path.join(pdx_user_dir(), "mod")
+    if os.path.isdir(local):
+        out.append(os.path.abspath(local))
+    for lib in _steam_libraries():
+        ws = os.path.join(lib, "steamapps", "workshop", "content", "394360")
+        if os.path.isdir(ws) and os.path.abspath(ws) not in out:
+            out.append(os.path.abspath(ws))
+    _SEARCH_BASES_CACHE[key] = list(out)
+    return out
+
+
+_MOD_ORDER_CACHE = {}
+
+
+def _enabled_mod_order():
+    """启动器里勾选的 mod 目录，按实际加载顺序。
+
+    读 dlc_load.json 的 enabled_mods，每项是 mod/<名字>.mod，那个文件里写着 path=。
+    拿不到就返回空列表，调用方自己兜底。
+    """
+    if not OPTIONS.get("follow_launcher", True):
+        return []
+    base = pdx_user_dir()
+    jf = os.path.join(base, "dlc_load.json")
+    if not os.path.isfile(jf):
+        return []
+    try:
+        st = os.stat(jf)
+        sig = (st.st_mtime, st.st_size)
+    except Exception:
+        sig = None
+    hit = _MOD_ORDER_CACHE.get("k")
+    if hit is not None and hit[0] == sig:
+        return list(hit[1])
+    out = []
+    try:
+        j = json.loads(io.open(jf, encoding="utf-8-sig", errors="replace").read())
+    except Exception:
+        return out
+    for item in (j.get("enabled_mods") or []):
+        if not isinstance(item, str) or not item.strip():
+            continue
+        rel = item.replace("\\", "/")
+        fn = os.path.join(base, rel.replace("/", os.sep))
+        if not os.path.isfile(fn):
+            continue
+        raw = None
+        try:
+            txt = io.open(fn, encoding="utf-8-sig", errors="replace").read()
+            m = re.search(r'(?m)^\s*path\s*=\s*"([^"]+)"', txt)
+            if m:
+                raw = m.group(1)
+        except Exception:
+            raw = None
+        if not raw:
+            # 没有 path= 时按文件名猜：mod/ugc_2800380626.mod → workshop/394360/2800380626
+            stem = os.path.splitext(os.path.basename(rel))[0]
+            mid = re.sub(r"^ugc_", "", stem)
+            for b in _mod_search_bases():
+                c = os.path.join(b, mid)
+                if os.path.isdir(c):
+                    raw = c
+                    break
+        p = _resolve_mod_path(raw, base) if raw else None
+        if p and p not in out:
+            out.append(p)
+    _MOD_ORDER_CACHE["k"] = (sig, list(out))
+    return out
+
+
+def _find_mod_by_name(name, extra_roots=()):
+    """按 mod 名（descriptor 里的 name）找目录。
+
+    查找顺序：已加载的 root → 启动器里启用的（最可靠，游戏就是这么认的）→
+    扫本地 mod 目录与各 Steam 库的 workshop。**不写死盘符。**
+    """
+    want = (name or "").strip().lower()
+    if not want:
+        return None
+    cands = []
+    for r in list(ROOTS) + list(extra_roots):
+        if r:
+            cands.append(os.path.abspath(r))
+    cands.extend(_enabled_mod_order())
+    for base in _mod_search_bases():
+        try:
             for d in os.listdir(base):
                 p = os.path.join(base, d)
                 if os.path.isdir(p):
                     cands.append(p)
+        except Exception:
+            continue
+    seen = set()
     for p in cands:
+        if p in seen:
+            continue
+        seen.add(p)
         d = _mod_descriptor(p)
-        if d["name"] and d["name"].lower() == name.lower():
+        if d["name"] and d["name"].strip().lower() == want:
             return p
         # 也允许目录名直接等于 mod 名
-        if os.path.basename(p.rstrip("\\/")).lower() == name.lower():
+        if os.path.basename(p.rstrip("\\/")).lower() == want:
             return p
     return None
+
+
+def _mod_display_name(p):
+    """界面上显示用的名字：descriptor 的 name，拿不到就用目录名。"""
+    try:
+        n = (_mod_descriptor(p) or {}).get("name") or ""
+        if n.strip():
+            return n.strip()
+    except Exception:
+        pass
+    return os.path.basename(os.path.abspath(p).rstrip("\\/")) or p
 
 
 _LAYERS_CACHE = {}
@@ -3957,7 +4180,8 @@ def mod_layers(root=None, depth=3):
     HOI4 语义：后加载的覆盖先加载的；replace_path 的目录是整体替换。"""
     root = _map_pick(root)
     try:
-        _ck = (os.path.abspath(root or ""), tuple(os.path.abspath(r) for r in ROOTS))
+        _ck = (os.path.abspath(root or ""), tuple(os.path.abspath(r) for r in ROOTS),
+               bool(OPTIONS.get("follow_launcher", True)))
         _hit = _LAYERS_CACHE.get(_ck)
         if _hit:
             return list(_hit)
@@ -3994,14 +4218,43 @@ def mod_layers(root=None, depth=3):
             pass
         return chain
 
-    chain = []
+    # v1.23.45：先按**启动器里的真实加载顺序**铺一层底，再用 dependencies 补漏。
+    #
+    # 游戏只认 dlc_load.json 的顺序，dependencies 不进加载链。所以：
+    #   · 自己在启动器里 → 排在自己前面的那些 mod 都是前置
+    #   · 自己不在启动器里（本地新做的 submod）→ 已启用的整套都是它的底
+    # 只跟 dependencies 会丢中间层（CNsub 就是被这么丢掉的）。
+    base_chain = []
+    _ab_root = os.path.abspath(root) if root else ""
+    # 原版（游戏目录）不能挂 mod 前缀，否则「只看原版」会变成「原版 + 一堆 mod」
+    _is_vanilla = bool(_ab_root and GAME and
+                       os.path.abspath(_ab_root) == os.path.abspath(GAME))
+    if _ab_root and not _is_vanilla:
+        # 注意：这里要**保留自己**再切片。先把自己剔掉会让 `in _order` 永远为假，
+        # 于是「排在自己前面」退化成「全部已启用」——雪绒拓展就会跑到 CNsub 前面。
+        _order = []
+        for p in _enabled_mod_order():
+            try:
+                ap = os.path.abspath(p)
+            except Exception:
+                continue
+            if ap not in _order:
+                _order.append(ap)
+        if _order:
+            if _ab_root in _order:
+                base_chain = _order[:_order.index(_ab_root)]
+            else:
+                base_chain = list(_order)
+
+    # dependencies：从自己往上走（child → parent），走完反过来就是父在前
+    dep_chain = []
     cur = root
     guard = 0
     while cur and guard < depth:
         guard += 1
         ab = os.path.abspath(cur)
-        if ab not in chain:
-            chain.append(ab)
+        if ab not in dep_chain:
+            dep_chain.append(ab)
         desc = _mod_descriptor(ab)
         if not desc["deps"]:
             break
@@ -4009,11 +4262,21 @@ def mod_layers(root=None, depth=3):
         nxt = None
         for dep in desc["deps"]:
             p = _find_mod_by_name(dep, extra_roots=[root] if root else [])
-            if p and os.path.abspath(p) not in chain:
+            if p and os.path.abspath(p) not in dep_chain:
                 nxt = p
                 break
         cur = nxt
-    chain.reverse()          # 父在前
+    dep_chain.reverse()
+
+    chain = list(base_chain)
+    for ab in dep_chain:
+        if ab not in chain:
+            chain.append(ab)
+    # 自己是最后一层（最子上层），必须排在末尾
+    if _ab_root:
+        if _ab_root in chain:
+            chain.remove(_ab_root)
+        chain.append(_ab_root)
     if GAME and os.path.abspath(GAME) not in chain:
         chain.insert(0, os.path.abspath(GAME))
     try:
@@ -16132,6 +16395,32 @@ def _eq_view(e):
                                  or LOC.get(s["slot"], s["slot"]))) for s in e.get("slots", [])]
     return d
 
+def _payload_layers():
+    """给前端的完整叠加链：谁被真正读到了、哪些是自动带进来的。"""
+    try:
+        if not ROOTS:
+            return []
+        manual = set()
+        for r in ROOTS:
+            try:
+                manual.add(os.path.abspath(r))
+            except Exception:
+                pass
+        out = []
+        for r in mod_layers(ROOTS[-1]):
+            try:
+                ab = os.path.abspath(r)
+            except Exception:
+                continue
+            out.append({"name": _mod_display_name(ab),
+                        "path": ab,
+                        "readonly": is_under_game(ab),
+                        "auto": ab not in manual})
+        return out
+    except Exception:
+        return []
+
+
 def data_payload():
     expand_shared_trees()
     trees = []
@@ -16165,7 +16454,12 @@ def data_payload():
             "mascots": MASCOTS,
             "mod_home": mod_home(),
             "roots": [{"name": os.path.basename(r.rstrip("\\/")) or r, "path": r,
-                       "readonly": is_under_game(r)} for r in ROOTS]}
+                       "readonly": is_under_game(r),
+                       "auto": False} for r in ROOTS],
+            # v1.23.45：完整叠加链。roots 只有用户手动加的，layers 里才是真正读到的所有层。
+            # auto=True 表示「自动带进来的」（启动器启用 / dependencies 补的），
+            # 前端把它淡一点显示，用户才知道数据是从哪来的。
+            "layers": _payload_layers()}
 
 # ---------------- 写回 ----------------
 def backup(path):
@@ -17931,6 +18225,16 @@ class Handler(SimpleHTTPRequestHandler):
             ro = _top
             if _rel:
                 body["_adopted"] = _adopted
+        if self.path == "/api/options":
+            # v1.23.45：跟随启动器的开关。改完要重新 load_mod 才生效——
+            # 这里只把缓存清掉，不自动重载（会打断用户正在编辑的东西）。
+            if "follow_launcher" in body:
+                OPTIONS["follow_launcher"] = bool(body["follow_launcher"])
+                _save_options()
+                _LAYERS_CACHE.clear()
+                _MOD_ORDER_CACHE.clear()
+            self._send(dict(OPTIONS))
+            return
         if self.path == "/api/save":
             root = body.get("root")
             rel = body.get("file")
@@ -18721,6 +19025,7 @@ def load_mod_root(path):
 
 def main():
     global GAME
+    _load_options()
     ap = argparse.ArgumentParser()
     ap.add_argument("--mod", action="append", default=None)
     ap.add_argument("--game", default=DEFAULT_GAME)
