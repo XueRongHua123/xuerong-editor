@@ -469,6 +469,36 @@ def _layer_dirs(sub, root):
     return out
 
 
+def _chain_layers(root):
+    """一个 mod 的完整叠加链目录，从最父（含原版）到最子。
+
+    和 _layer_dirs 的区别：那个按子目录名找并处理 replace_path，
+    这个返回整条链本身，给「不知道要找哪个子目录」的场景用
+    （图标索引、本地化语言目录、events 这种整目录扫描）。
+
+    顺序是「父 → 子」：后读的覆盖先读的，和 HOI4 语义一致。
+    """
+    try:
+        L = mod_layers(root)
+    except Exception:
+        L = []
+    if not L:
+        L = [root]
+    out, seen = [], set()
+    for ab in L:
+        if not ab:
+            continue
+        try:
+            a = os.path.abspath(ab)
+        except Exception:
+            continue
+        if a in seen:
+            continue
+        seen.add(a)
+        out.append(a)
+    return out
+
+
 LOAD_PROGRESS = {"active": False, "stage": "", "sub": "", "pct": 0, "t": 0.0}
 
 def _lp(stage, sub="", pct=0):
@@ -545,20 +575,21 @@ def load_mod(root):
                 count += 1
     # 本地化
     _lp("解析本地化", "8052 条文本", 59)
-    # 先英文后中文：显示优先使用中文
+    # 先英文后中文：显示优先使用中文。语言内部按叠加链「父 → 子」读，子覆盖父。
+    line_re = re.compile(r'^\s*([A-Za-z0-9_.\-]+):\d*\s+"(.*)"\s*$')
     for lang in ("english", "simp_chinese"):
-        d = os.path.join(root, "localisation", lang)
-        if not os.path.isdir(d):
-            continue
-        line_re = re.compile(r'^\s*([A-Za-z0-9_.\-]+):\d*\s+"(.*)"\s*$')
-        for dirpath, _, files in os.walk(d):
-            for fn in files:
-                if not fn.endswith(".yml"):
-                    continue
-                for ln in io.open(os.path.join(dirpath, fn), encoding="utf-8-sig", errors="replace").read().splitlines():
-                    m = line_re.match(ln)
-                    if m:
-                        LOC[m.group(1)] = m.group(2)
+        for ab in _chain_layers(root):
+            d = os.path.join(ab, "localisation", lang)
+            if not os.path.isdir(d):
+                continue
+            for dirpath, _, files in os.walk(d):
+                for fn in files:
+                    if not fn.endswith(".yml"):
+                        continue
+                    for ln in io.open(os.path.join(dirpath, fn), encoding="utf-8-sig", errors="replace").read().splitlines():
+                        m = line_re.match(ln)
+                        if m:
+                            LOC[m.group(1)] = m.group(2)
     _lp("国家精神与科技", "", 61)
     load_ideas(root)
     load_equipment(root)
@@ -4152,27 +4183,33 @@ _LAYERS_CACHE = {}
 def _mod_dep_chain(r, depth=3):
     """从一个 mod 往上走 dependencies，返回 [最父, ..., 自己]（不含原版）。
 
-    只走第一条能定位到的父依赖——和 mod_layers 单 root 分支的行为一致。
+    **所有**能定位到的父依赖都收进来，不只第一条。
+    只跟第一条会丢层：雪绒拓展依赖 muvluvCN + muvluvCNsub，关掉「跟随启动器」时
+    以前只找到 CN，链变成 [原版, CN, 雪绒拓展]，少了 CNsub。
+
+    walk 递归完父依赖之后才 append 自己，所以结果天然是「所有祖先在前，自己在最后」。
+    带 seen 防环（mod 之间互相 dependencies 的情况真的存在）。
     """
-    chain = []
-    cur = r
-    guard = 0
-    while cur and guard < depth:
-        guard += 1
+    order = []
+    seen = set()
+
+    def walk(cur, d):
+        if d <= 0 or not cur:
+            return
         ab = os.path.abspath(cur)
-        if ab in chain:
-            break
-        chain.append(ab)
+        if ab in seen:
+            return
+        seen.add(ab)
         desc = _mod_descriptor(ab)
-        nxt = None
         for dep in desc["deps"]:
             p = _find_mod_by_name(dep, extra_roots=[r])
-            if p and os.path.abspath(p) not in chain:
-                nxt = p
-                break
-        cur = nxt
-    chain.reverse()
-    return chain
+            if p:
+                walk(p, d - 1)
+        if ab not in order:
+            order.append(ab)
+
+    walk(r, depth)
+    return order
 
 
 def mod_layers(root=None, depth=3):
@@ -4246,27 +4283,10 @@ def mod_layers(root=None, depth=3):
             else:
                 base_chain = list(_order)
 
-    # dependencies：从自己往上走（child → parent），走完反过来就是父在前
-    dep_chain = []
-    cur = root
-    guard = 0
-    while cur and guard < depth:
-        guard += 1
-        ab = os.path.abspath(cur)
-        if ab not in dep_chain:
-            dep_chain.append(ab)
-        desc = _mod_descriptor(ab)
-        if not desc["deps"]:
-            break
-        # 取第一个能定位到的父依赖
-        nxt = None
-        for dep in desc["deps"]:
-            p = _find_mod_by_name(dep, extra_roots=[root] if root else [])
-            if p and os.path.abspath(p) not in dep_chain:
-                nxt = p
-                break
-        cur = nxt
-    dep_chain.reverse()
+    # dependencies：把图谱里**所有**能定位到的祖先都收进来（父在前），不只第一条。
+    # 以前这里是内联的一份「只取第一条」的循环，跟 _mod_dep_chain 重复且不同步——
+    # 改 _mod_dep_chain 时单 root 分支完全不受影响，雪绒拓展就一直少一层 CNsub。
+    dep_chain = _mod_dep_chain(root, depth) if root else []
 
     chain = list(base_chain)
     for ab in dep_chain:
@@ -16240,27 +16260,29 @@ def lint_project(limit=1500):
                       "ideas": len(IDEAS), "events": len(EVENTS), "techs": len(TECHS)}}
 
 def load_events(root):
-    name = os.path.basename(root.rstrip("\\/")) or root
-    d = os.path.join(root, "events")
-    if not os.path.isdir(d):
-        return 0
+    # 整条链都读（父 → 子），同名事件由子层覆盖。只读 root 会丢掉父 mod 的事件。
     n = 0
-    for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
-        rel = os.path.join("events", fn)
-        text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
-        nsm = re.search(r'add_namespace\s*=\s*(\w+)', text)
-        ns = nsm.group(1) if nsm else ""
-        for k, v, b in top_items(text):
-            if not b or not k.endswith("_event"):
-                continue
-            m = re.search(r'(?m)^\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', v)
-            if not m:
-                continue
-            eid = m.group(1)
-            EVENTS[eid] = {"id": eid, "file": rel, "source": name, "type": k, "ns": ns,
-                           "title": LOC.get(eid + ".t", ""),
-                           "raw": "%s = {\n%s\n}" % (k, v.strip())}
-            n += 1
+    for ab in _chain_layers(root):
+        d = os.path.join(ab, "events")
+        if not os.path.isdir(d):
+            continue
+        name = os.path.basename(ab.rstrip("\\/")) or ab
+        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+            rel = os.path.join("events", fn)
+            text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
+            nsm = re.search(r'add_namespace\s*=\s*(\w+)', text)
+            ns = nsm.group(1) if nsm else ""
+            for k, v, b in top_items(text):
+                if not b or not k.endswith("_event"):
+                    continue
+                m = re.search(r'(?m)^\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', v)
+                if not m:
+                    continue
+                eid = m.group(1)
+                EVENTS[eid] = {"id": eid, "file": rel, "source": name, "type": k, "ns": ns,
+                               "title": LOC.get(eid + ".t", ""),
+                               "raw": "%s = {\n%s\n}" % (k, v.strip())}
+                n += 1
     return n
 
 def item_raw(kind, iid):
@@ -16281,11 +16303,28 @@ def icon_png(gfx):
         return None
     tex, frames = ent
     rel = tex.replace("/", os.sep)
-    cands = [os.path.join(r, rel) for r in ROOTS] + [os.path.join(GAME, rel)]
+    # 找**实际生效的那份**：子 mod 覆盖父 mod，所以按链倒着找（子优先）。
+    # 和 build_icons 的读取顺序相反——那边是「后读覆盖先读」，这边是「先找到就用」。
+    cands = []
+    _seen_i = set()
+    for r in ROOTS:
+        for ab in reversed(_chain_layers(r)):
+            p = os.path.join(ab, rel)
+            if p not in _seen_i:
+                _seen_i.add(p)
+                cands.append(p)
+    if GAME:
+        p = os.path.join(GAME, rel)
+        if p not in _seen_i:
+            _seen_i.add(p)
+            cands.append(p)
     dlc = os.path.join(GAME, "dlc")
     if os.path.isdir(dlc):
         for x in os.listdir(dlc):
-            cands.append(os.path.join(dlc, x, rel))
+            p = os.path.join(dlc, x, rel)
+            if p not in _seen_i:
+                _seen_i.add(p)
+                cands.append(p)
     src = next((c for c in cands if os.path.exists(c)), None)
     if not src:
         return None
@@ -16339,7 +16378,10 @@ def find_usages(iid):
     return out[:500]
 
 def load_orgs(root):
-    bases = [root] if os.path.abspath(root) == os.path.abspath(GAME) else [root, GAME]
+    # 整条链（父 → 子）；以前只有 [root, GAME]，中间层的 MIO 全丢
+    bases = _chain_layers(root)
+    if GAME and os.path.abspath(GAME) not in bases:
+        bases.append(os.path.abspath(GAME))
     n = 0
     for base in bases:
         d = os.path.join(base, "common", "military_industrial_organization", "organizations")
@@ -16354,7 +16396,10 @@ def load_orgs(root):
     return n
 
 def load_modules(root):
-    bases = [root] if os.path.abspath(root) == os.path.abspath(GAME) else [root, GAME]
+    # 整条链（父 → 子）；以前只有 [root, GAME]，中间层的装备模块全丢
+    bases = _chain_layers(root)
+    if GAME and os.path.abspath(GAME) not in bases:
+        bases.append(os.path.abspath(GAME))
     n = 0
     for base_root in bases:
         d = os.path.join(base_root, "common", "units", "equipment", "modules")
@@ -16395,6 +16440,18 @@ def _eq_view(e):
                                  or LOC.get(s["slot"], s["slot"]))) for s in e.get("slots", [])]
     return d
 
+def _readonly_flag(p):
+    """侧栏的「只读」标记：原版目录 + 创意工坊目录。
+
+    只判 is_under_game 会把 workshop 的 mod 显示成可写 —— 实际写进去会被 Steam
+    校验改回去，所以必须标只读。真正的写保护在 _is_readonly_root 里（同一套判断）。
+    """
+    try:
+        return bool(_is_readonly_root(p))
+    except Exception:
+        return is_under_game(p)
+
+
 def _payload_layers():
     """给前端的完整叠加链：谁被真正读到了、哪些是自动带进来的。"""
     try:
@@ -16414,7 +16471,7 @@ def _payload_layers():
                 continue
             out.append({"name": _mod_display_name(ab),
                         "path": ab,
-                        "readonly": is_under_game(ab),
+                        "readonly": _readonly_flag(ab),
                         "auto": ab not in manual})
         return out
     except Exception:
@@ -16454,7 +16511,7 @@ def data_payload():
             "mascots": MASCOTS,
             "mod_home": mod_home(),
             "roots": [{"name": os.path.basename(r.rstrip("\\/")) or r, "path": r,
-                       "readonly": is_under_game(r),
+                       "readonly": _readonly_flag(r),
                        "auto": False} for r in ROOTS],
             # v1.23.45：完整叠加链。roots 只有用户手动加的，layers 里才是真正读到的所有层。
             # auto=True 表示「自动带进来的」（启动器启用 / dependencies 补的），
@@ -16712,26 +16769,48 @@ def build_icons(roots, game):
     global ICONS, SPRITE_MAP, TECH_ICONS
     sprite_map = {}
     dirs = []
-    for r in roots:
-        d = os.path.join(r, "interface")
-        if os.path.isdir(d):
-            dirs.append(d)
-    base = os.path.join(game, "interface")
-    if os.path.isdir(base):
-        dirs.append(base)
+    seen = set()
+
+    # v1.23.46：sprite 索引必须扫**整条叠加链**。
+    # 只扫 ROOTS 的话，子 mod 自己没有 interface/ 时 sprite_map 就是空的，
+    # 于是每个国策节点都变成破图（KaiserReich 子 mod 实测 230 棵树、3253 个图标、
+    # SPRITE_MAP 0 条）。
+    #
+    # 读取顺序（后读覆盖先读）：DLC → 原版 → 父 mod → 子 mod。
+    # `_chain_layers` 已经把原版排在最前，所以 DLC 单独补在更前面。
     dlc = os.path.join(game, "dlc")
     if os.path.isdir(dlc):
-        for x in os.listdir(dlc):
+        for x in sorted(os.listdir(dlc)):
             p = os.path.join(dlc, x, "interface")
             if os.path.isdir(p):
-                dirs.append(p)
+                ap = os.path.abspath(p)
+                if ap not in seen:
+                    seen.add(ap)
+                    dirs.append(p)
+    for r in roots:
+        for ab in _chain_layers(r):
+            d = os.path.join(ab, "interface")
+            if os.path.isdir(d):
+                ap = os.path.abspath(d)
+                if ap not in seen:
+                    seen.add(ap)
+                    dirs.append(d)
+    base = os.path.join(game, "interface")
+    if os.path.isdir(base):
+        ap = os.path.abspath(base)
+        if ap not in seen:
+            seen.add(ap)
+            dirs.append(base)
     for d in dirs:
-        for fn in os.listdir(d):
-            if fn.endswith(".gfx"):
-                try:
-                    sprite_map.update(parse_gfx_file(os.path.join(d, fn)))
-                except Exception:
-                    pass
+        # **必须递归**：HOI4 会加载 interface/ 子目录里的 .gfx，Kaiserreich 的国策图标
+        # 全在 interface/kaiserreich/goals.gfx，只 listdir 顶层的话 3000 多个图标一个都读不到。
+        for dirpath, _subdirs, _files in os.walk(d):
+            for fn in sorted(_files):
+                if fn.lower().endswith(".gfx"):
+                    try:
+                        sprite_map.update(parse_gfx_file(os.path.join(dirpath, fn)))
+                    except Exception:
+                        pass
     from PIL import Image
     SPRITE_MAP = sprite_map
     used = set()

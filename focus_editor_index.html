@@ -2637,7 +2637,7 @@ function showMutex(){ return document.getElementById('showMutex').checked; }
 function applyView(){ vp.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`); }
 function resetView(){ view = {x:0,y:0,k:1}; applyView(); (typeof updateZoomLabel === 'function') && updateZoomLabel(); }
 
-async function loadData(){ const r = await fetch('/api/data'); DATA = await r.json(); dirty.clear(); linkSrc = null; selId = null; cpCache = null; COUNTRY_DATA = null; LINT_DATA = null; if(!DATA.trees || current >= DATA.trees.length) current = 0; renderAll(); applySavedSkin(); updateWelcome(); if(typeof renderGuide === 'function') renderGuide(); if(typeof updateSourceBox === 'function') updateSourceBox(); if(typeof bindOptions === 'function') bindOptions(); if(typeof loadOptions === 'function') loadOptions(); }
+async function loadData(){ const r = await fetch('/api/data'); DATA = await r.json(); dirty.clear(); linkSrc = null; selId = null; cpCache = null; COUNTRY_DATA = null; LINT_DATA = null; if(!DATA.trees || current >= DATA.trees.length) current = 0; renderAll(); applySavedSkin(); updateWelcome(); if(typeof renderGuide === 'function') renderGuide(); if(typeof updateSourceBox === 'function') updateSourceBox(); if(typeof bindOptions === 'function') bindOptions(); if(typeof loadOptions === 'function') loadOptions(); const _fp=document.getElementById('ftPick'); if(_fp){ delete _fp.dataset.loaded; _fp.innerHTML=''; } const _fsvg=document.getElementById('ftSvg'); if(_fsvg) _fsvg.innerHTML=''; const _finfo=document.getElementById('ftInfo'); if(_finfo) _finfo.textContent=''; }
 function updateWelcome(){
   const w = document.getElementById('welcome'); if(!w) return;
   const empty = !(DATA && DATA.roots && DATA.roots.length);
