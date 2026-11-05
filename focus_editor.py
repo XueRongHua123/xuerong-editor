@@ -873,9 +873,13 @@ def load_techs(root):
     for _b, _d in _layer_dirs("common/technologies", root):
         if not os.path.isdir(_d):
             continue
+        # v1.24.1：source 必须记「这个文件在哪一层」，不是「当前加载的 mod 叫什么」。
+        # 原来整个 TECHS 都标成 root 的名字，770 个科技全说自己是 XRT1，
+        # 哪怕数据一个字都没改过——列表标来源就会标出一片假的。
+        _src = os.path.basename((_b or "").rstrip("\\/")) or (_b or name)
         for _f in sorted(f for f in os.listdir(_d) if f.endswith(".txt")):
-            _tech_files.append((_d, _f))
-    for d, fn in _tech_files:
+            _tech_files.append((_src, _d, _f))
+    for src, d, fn in _tech_files:
         rel = os.path.join("common", "technologies", fn)
         text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
         macros = {}
@@ -925,7 +929,7 @@ def load_techs(root):
                         pb = tv.find('{', pm.start())
                         pe = brace_match(tv, pb)
                         pre += re.findall(r'[A-Za-z][A-Za-z0-9_]*', tv[pb + 1:pe - 1])
-                    TECHS[tid] = {"id": tid, "file": rel, "source": name,
+                    TECHS[tid] = {"id": tid, "file": rel, "source": src,
                                   "name": LOC.get(tid, tid),
                                   "year": yr.group(1) if yr else "",
                                   "path": fname,
@@ -1137,7 +1141,16 @@ def _start_date_for(root):
     if key in _START_DATE_CACHE:
         return _START_DATE_CACHE[key]
     dates = []
-    for base in (root, GAME):
+    # 走叠加链，从子 mod 往原版找：第一个有 bookmarks 的层生效。
+    # 不能只查 (root, GAME)——submod 通常没有自己的 bookmarks，
+    # 开局日期在父 mod 里（MUVLUV 是 1999.8.7，回退 1936 会让所有日期块失效）。
+    try:
+        _layers = mod_layers(root) or []
+    except Exception:
+        _layers = []
+    if not _layers:
+        _layers = [root, GAME]
+    for base in reversed(_layers):
         d = os.path.join(base or "", "common", "bookmarks")
         if not os.path.isdir(d):
             continue
@@ -1446,6 +1459,10 @@ def states_payload():
             "category": s.get("category", ""),
             "provinces": s.get("province_count", 0),
             "buildings": sum(s.get("buildings", {}).values()),
+            # v1.24.2：州列表标来源用。source 是「这个州文件在哪一层」
+            # （load_states 里按实际路径反推的），file 用来 hover 提示。
+            "source": s.get("source", ""),
+            "file": s.get("file", ""),
         })
     return {"count": len(items), "list": items}
 
@@ -1811,6 +1828,8 @@ def state_detail(sid, full=False):
         "name": LOC.get(s.get("name", ""), s.get("name", "")),
         "raw_name": s.get("name", ""),
         "file": s.get("file", ""), "root": root,
+        # v1.24.2：州面板的来源提示用（entry_source 拿它定位层，找不到再按文件猜）
+        "source": s.get("source", ""),
         "writable": bool(root) and not is_under_game(root),
         "owner": owner,
         "owner_name": LOC.get(owner, ""),
@@ -4510,14 +4529,20 @@ def _mod_descriptor(root):
 #
 # 玩家在启动器里勾选的顺序写在 dlc_load.json 的 enabled_mods 里，**游戏就是按这个
 # 顺序叠加的**；descriptor 的 dependencies 只是启动器用来提示「你缺前置」的元数据，
-# 不进加载链。以前只跟 dependencies，于是「A 依赖 B，但 B 自己也被启用」这种链
-# 永远丢中间层 —— CNsub 带不进来就是这个原因。
+# 不进加载链。
 #
-# 开关默认打开；关掉就退回只跟 dependencies 的老行为。
+# 两个开关分开（v1.24.0）：
+#   follow_deps     → 递归展开 descriptor 的 dependencies。用户写 dependencies 就是
+#                     声明「我需要这些」，默认开。
+#   follow_launcher → 把启动器里排在自己前面的 mod 也铺进来。这是一个更大的集合，
+#                     可能包含音乐包/界面 mod 之类跟当前编辑无关的东西，默认**关**。
+#
+# 老配置 {"follow_launcher": x} 读进来时 follow_deps 保持默认 True，
+# 于是自动迁移成 {"follow_deps": True, "follow_launcher": x}，行为不突变。
 
 _OPT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          "cache", "options.json")
-OPTIONS = {"follow_launcher": True}
+OPTIONS = {"follow_deps": True, "follow_launcher": False}
 
 
 def _load_options():
@@ -4664,9 +4689,11 @@ def _enabled_mod_order():
 
     读 dlc_load.json 的 enabled_mods，每项是 mod/<名字>.mod，那个文件里写着 path=。
     拿不到就返回空列表，调用方自己兜底。
+
+    **不受 follow_launcher 开关影响**：这个函数只负责「启动器里有哪些 mod、什么顺序」，
+    至于要不要把它们铺进叠加链，由 mod_layers 决定。`_find_mod_by_name` 也靠它找目录，
+    那里关掉开关就没法按名字找到 mod 了。
     """
-    if not OPTIONS.get("follow_launcher", True):
-        return []
     base = pdx_user_dir()
     jf = os.path.join(base, "dlc_load.json")
     if not os.path.isfile(jf):
@@ -4803,7 +4830,8 @@ def mod_layers(root=None, depth=3):
     root = _map_pick(root)
     try:
         _ck = (os.path.abspath(root or ""), tuple(os.path.abspath(r) for r in ROOTS),
-               bool(OPTIONS.get("follow_launcher", True)))
+               bool(OPTIONS.get("follow_deps", True)),
+               bool(OPTIONS.get("follow_launcher", False)))
         _hit = _LAYERS_CACHE.get(_ck)
         if _hit:
             return list(_hit)
@@ -4816,8 +4844,9 @@ def mod_layers(root=None, depth=3):
     # 时子 mod 依赖的中间层会丢，链会断开成 [原版, 父, 子]，中间那层的数据全读不到。
     if len(ROOTS) > 1:
         chain, tails = [], []
+        _fdep = OPTIONS.get("follow_deps", True)
         for _r in ROOTS:
-            d = _mod_dep_chain(_r, depth)
+            d = _mod_dep_chain(_r, depth) if _fdep else [os.path.abspath(_r)]
             if not d:
                 continue
             tails.append(d[-1])
@@ -4851,7 +4880,7 @@ def mod_layers(root=None, depth=3):
     # 原版（游戏目录）不能挂 mod 前缀，否则「只看原版」会变成「原版 + 一堆 mod」
     _is_vanilla = bool(_ab_root and GAME and
                        os.path.abspath(_ab_root) == os.path.abspath(GAME))
-    if _ab_root and not _is_vanilla:
+    if _ab_root and not _is_vanilla and OPTIONS.get("follow_launcher", False):
         # 注意：这里要**保留自己**再切片。先把自己剔掉会让 `in _order` 永远为假，
         # 于是「排在自己前面」退化成「全部已启用」——雪绒拓展就会跑到 CNsub 前面。
         _order = []
@@ -4871,7 +4900,8 @@ def mod_layers(root=None, depth=3):
     # dependencies：把图谱里**所有**能定位到的祖先都收进来（父在前），不只第一条。
     # 以前这里是内联的一份「只取第一条」的循环，跟 _mod_dep_chain 重复且不同步——
     # 改 _mod_dep_chain 时单 root 分支完全不受影响，雪绒拓展就一直少一层 CNsub。
-    dep_chain = _mod_dep_chain(root, depth) if root else []
+    dep_chain = (_mod_dep_chain(root, depth)
+                 if (root and OPTIONS.get("follow_deps", True)) else [])
 
     chain = list(base_chain)
     for ab in dep_chain:
@@ -17378,8 +17408,84 @@ def _readonly_flag(p):
         return is_under_game(p)
 
 
+# ---------- v1.24.0 层间同名文件统计 ----------
+_SHADOW_CACHE = {"k": None, "v": {}}
+_SHADOW_DIRS = ("common/national_focus", "common/ideas", "common/technologies",
+                "common/characters", "events", "history/states", "history/countries")
+
+
+def layer_shadow_stats():
+    """每一层「压住」了下面哪些文件。
+
+    返回 {层的绝对路径: [被它覆盖的相对路径, ...]}。
+    HOI4 的规则是同名文件后加载的赢，所以从链尾（最上层）往下扫，
+    第二次见到的同名文件就是被覆盖的。
+    """
+    layers = mod_layers(None) or []
+    key = (tuple(os.path.abspath(r) for r in layers),
+           bool(OPTIONS.get("follow_deps", True)),
+           bool(OPTIONS.get("follow_launcher", False)))
+    if _SHADOW_CACHE.get("k") == key:
+        return _SHADOW_CACHE["v"]
+    seen = {}
+    shadow = {}
+    for r in reversed(layers):
+        try:
+            ab = os.path.abspath(r)
+        except Exception:
+            continue
+        for rel in _SHADOW_DIRS:
+            d = os.path.join(r, rel.replace("/", os.sep))
+            if not os.path.isdir(d):
+                continue
+            try:
+                names = sorted(os.listdir(d))
+            except Exception:
+                continue
+            for fn in names:
+                if not fn.lower().endswith(".txt"):
+                    continue
+                key = rel + "/" + fn
+                if key in seen:
+                    top = seen[key]
+                    if top != ab:
+                        shadow.setdefault(top, []).append(key)
+                else:
+                    seen[key] = ab
+    # 只留前 40 条，避免侧栏 hover 里堆几百行
+    out = {k: sorted(v)[:40] for k, v in shadow.items()}
+    _SHADOW_CACHE["k"] = key
+    _SHADOW_CACHE["v"] = out
+    return out
+
+
+def _deps_hint():
+    """关掉「带上依赖」时，如果当前 mod 声明了依赖，给一句提醒。
+
+    用户最常见的情况：只加载了子 mod，看到的却是残缺的原版数据，
+    却不知道是因为它的父 mod 没被带进来。
+    """
+    if not ROOTS or OPTIONS.get("follow_deps", True):
+        return ""
+    try:
+        deps = _mod_descriptor(ROOTS[-1]).get("deps") or []
+    except Exception:
+        deps = []
+    if not deps:
+        return ""
+    return ("这个 mod 声明了 %d 个依赖（%s），但「带上依赖的 mod」没开，"
+            "现在看到的数据可能不完整" % (len(deps), "、".join(deps[:3])))
+
+
 def _payload_layers():
-    """给前端的完整叠加链：谁被真正读到了、哪些是自动带进来的。"""
+    """给前端的完整叠加链：谁被真正读到了、以及**为什么在这**。
+
+    reason 四种：
+      game      游戏本体（只读，不可卸载）
+      manual    用户点「添加 mod」显式加载的
+      dep       因为 descriptor 的 dependencies 被带上来的
+      launcher  因为「同时读启动器已启用列表」被带上来的
+    """
     try:
         if not ROOTS:
             return []
@@ -17389,16 +17495,53 @@ def _payload_layers():
                 manual.add(os.path.abspath(r))
             except Exception:
                 pass
+        root = ROOTS[-1]
+        try:
+            ab_root = os.path.abspath(root)
+        except Exception:
+            ab_root = ""
+        dep_set = set()
+        if OPTIONS.get("follow_deps", True):
+            # 自己 + 其他显式加载的 root 的依赖祖先都算 dep
+            for _r in (ROOTS or []):
+                try:
+                    dep_set |= {os.path.abspath(x) for x in _mod_dep_chain(_r)[:-1]}
+                except Exception:
+                    pass
+        launch_set = set()
+        if OPTIONS.get("follow_launcher", False):
+            try:
+                order = [os.path.abspath(x) for x in _enabled_mod_order()]
+                # 只算排在自己前面的；自己不在启动器里就整套都算底
+                launch_set = (set(order[:order.index(ab_root)])
+                              if ab_root in order else set(order))
+            except Exception:
+                launch_set = set()
         out = []
-        for r in mod_layers(ROOTS[-1]):
+        for r in mod_layers(root):
             try:
                 ab = os.path.abspath(r)
             except Exception:
                 continue
+            if GAME and ab == os.path.abspath(GAME):
+                reason = "game"
+            elif ab in manual:
+                reason = "manual"
+            elif ab in dep_set:
+                reason = "dep"
+            elif ab in launch_set:
+                reason = "launcher"
+            else:
+                reason = "auto"
             out.append({"name": _mod_display_name(ab),
                         "path": ab,
                         "readonly": _readonly_flag(ab),
-                        "auto": ab not in manual})
+                        # game=True 是游戏本体那层。前端靠它排除「自动带上」里的原版——
+                        # 不能用 readonly 排除，创意工坊目录也是 readonly，
+                        # 那样父 mod（CN/CNsub）会被一起滤掉。
+                        "game": bool(GAME) and ab == os.path.abspath(GAME),
+                        "auto": ab not in manual,
+                        "reason": reason})
         return out
     except Exception:
         return []
@@ -17442,7 +17585,9 @@ def data_payload():
             # v1.23.45：完整叠加链。roots 只有用户手动加的，layers 里才是真正读到的所有层。
             # auto=True 表示「自动带进来的」（启动器启用 / dependencies 补的），
             # 前端把它淡一点显示，用户才知道数据是从哪来的。
-            "layers": _payload_layers()}
+            "layers": _payload_layers(),
+            "layer_shadow": layer_shadow_stats(),
+            "deps_hint": _deps_hint()}
 
 # ---------------- 写回 ----------------
 def backup(path):
@@ -17531,7 +17676,15 @@ def set_raw_block(block, key, content):
     return block.rstrip() + "\n\t" + newb + "\n"
 
 def save_focus(root, rel, fid, fields):
+    # v1.24.1：参数缺失时原来会在 os.path.join 里抛 TypeError，
+    # 一路冒到 socketserver，前端只看到「连接被断」。这里先拦住。
+    if not root or not rel:
+        return False, "参数不完整：缺少 root 或 file"
+    if not fid:
+        return False, "参数不完整：缺少节点 id"
     path = os.path.join(root, rel)
+    if not os.path.isfile(path):
+        return False, "找不到文件：%s" % rel
     raw = io.open(path, encoding="utf-8", errors="replace", newline="").read()
     text = raw
     # 找 focus 块
@@ -17644,6 +17797,10 @@ def save_loc(root, entries):
     return True, "本地化已保存"
 
 def add_tree(root, tree_id):
+    if not root:
+        return False, "参数不完整：缺少 root"
+    if not tree_id:
+        return False, "参数不完整：缺少树 id"
     d = os.path.join(root, "common", "national_focus")
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, "zz_focus_editor_trees.txt")
@@ -17659,7 +17816,11 @@ def add_tree(root, tree_id):
     return True, "已新建树 " + tree_id
 
 def delete_tree(root, file, tree_id):
+    if not root or not file:
+        return False, "参数不完整：缺少 root 或 file"
     path = os.path.join(root, file)
+    if not os.path.isfile(path):
+        return False, "找不到文件：%s" % file
     text = io.open(path, encoding="utf-8", errors="replace", newline="").read()
     for m in re.finditer(r'(?m)^\s*focus_tree\s*=\s*\{', text):
         b = text.find('{', m.end() - 1)
@@ -17778,7 +17939,13 @@ def _find_tree_span(text, tree_id):
     return None
 
 def add_focus(root, rel, tree_id, fid, x, y, cost=5, icon="GFX_goal_generic_national_unity"):
+    if not root or not rel:
+        return False, "参数不完整：缺少 root 或 file"
+    if not fid:
+        return False, "参数不完整：缺少节点 id"
     path = os.path.join(root, rel)
+    if not os.path.isfile(path):
+        return False, "找不到文件：%s" % rel
     text = io.open(path, encoding="utf-8", errors="replace", newline="").read()
     if re.search(r'(?m)^\s*id\s*=\s*"?%s"?' % re.escape(fid), strip_comments(text)):
         return False, "ID 已存在: " + fid
@@ -17797,7 +17964,13 @@ def add_focus(root, rel, tree_id, fid, x, y, cost=5, icon="GFX_goal_generic_nati
     return True, "已新建 " + fid
 
 def delete_focus(root, rel, fid):
+    if not root or not rel:
+        return False, "参数不完整：缺少 root 或 file"
+    if not fid:
+        return False, "参数不完整：缺少节点 id"
     path = os.path.join(root, rel)
+    if not os.path.isfile(path):
+        return False, "找不到文件：%s" % rel
     text = io.open(path, encoding="utf-8", errors="replace", newline="").read()
     spans = []
     for m in re.finditer(r'(?m)^\s*(?:focus|shared_focus)\s*=\s*\{', text):
@@ -18590,6 +18763,45 @@ def _is_readonly_root(p):
     return "/steamapps/workshop/" in ab.replace("\\", "/").lower()
 
 
+def entry_source(root, file, layer=None):
+    """一条内容到底「从哪层读、保存时会写到哪」。
+
+    R3-2：接管提示前移。以前用户点开来自创意工坊层的节点，面板和写在可写层的
+    一模一样，直到点保存才看到「已复制到 XRT1」。这个接口在打开编辑器的那一刻
+    就把答案问出来。
+
+    layer 优先：列表项自带 source（loader 按真实所在层记的），比「按文件存在性
+    从上往下猜」准——同一个文件名在几层都有时，生效的是顶层，但 loader 读到的
+    就是顶层那份，两者一致；万一不一致（缓存等），以 source 为准。
+    """
+    root = root or (ROOTS[-1] if ROOTS else "")
+    rel = (file or "").replace("\\", "/").lstrip("/")
+    if not rel:
+        return {"ok": False, "msg": "参数不完整：缺少 file"}
+    layers = [x for x in (mod_layers(root) or []) if x]
+
+    def _hit(base):
+        ro = _readonly_flag(base)
+        top = _writable_top() if ro else ""
+        return {"ok": True, "file": rel,
+                "layer": os.path.basename(base.rstrip("\\/")) or base,
+                "layer_path": base,
+                "readonly": bool(ro),
+                "game": bool(GAME) and os.path.abspath(base) == os.path.abspath(GAME),
+                "adopt_to": (os.path.basename(top.rstrip("\\/")) or top) if (ro and top) else ""}
+
+    if layer:
+        for base in layers:
+            if (os.path.basename(base.rstrip("\\/")) or base) == layer:
+                return _hit(base)
+        # source 说的层不在当前链里（可能是刚卸载的层），退回按文件找
+    for base in reversed(layers):
+        if os.path.isfile(os.path.join(base, rel.replace("/", os.sep))):
+            return _hit(base)
+    return {"ok": False, "code": "FILE_NOT_FOUND",
+            "msg": "加载链里没有这个文件：%s" % rel}
+
+
 def _writable_top():
     """最顶层可写的 mod 目录（不是原版、不是创意工坊）。"""
     try:
@@ -18920,6 +19132,30 @@ def delete_event(root, rel, eid):
 # ---------------- HTTP 服务 ----------------
 INDEX = os.path.join(RES_DIR, "focus_editor_index.html")
 
+# ---------- v1.24.0 错误码 ----------
+# 529 个失败分支不可能逐个改。在 _send 出口按文案归类，前端拿 code 翻成人话；
+# 需要精确控制的分支可以自己带 code（带了就不覆盖）。
+ERR_RULES = (
+    (r"未找到树|没有这棵树|找不到这棵|树.*不存在|没有树", "TREE_NOT_FOUND"),
+    (r"写回后校验", "SAVE_VERIFY_FAILED"),
+    (r"找不到可写的\s*mod|没有可写的模组|没有可写的 mod|可写的目录", "NO_WRITABLE_MOD"),
+    (r"只读|原版目录", "READONLY"),
+    (r"找不到来源文件|找不到文件|文件不存在|不存在：|没有这个文件", "FILE_NOT_FOUND"),
+    (r"没有这个州|州不存在|没有这个省", "STATE_NOT_FOUND"),
+    (r"没给 tag|没有这个国家|找不到国家|tag 不存在|不是有效 tag", "COUNTRY_NOT_FOUND"),
+    (r"参数不完整|参数不合法|不合法|必须是|不能为空|越界|超出", "BAD_PARAM"),
+    (r"读取失败|解析失败|读图失败|解析不了|不是合法 JSON", "READ_FAILED"),
+    (r"写不进去|写入失败|保存失败|复制来源失败|建不出来", "WRITE_FAILED"),
+)
+
+
+def classify_error(msg):
+    for pat, code in ERR_RULES:
+        if re.search(pat, msg or ""):
+            return code
+    return "UNKNOWN"
+
+
 def _lang(path):
     m = re.search(r"[?&]lang=(zh|en|ja)\b", path or "")
     return m.group(1) if m else "zh"
@@ -18929,6 +19165,24 @@ class Handler(SimpleHTTPRequestHandler):
         pass
 
     def _send(self, obj, code=200, ctype="application/json; charset=utf-8"):
+        # v1.24.1：防重发。崩溃兜底层和内层都会调 _send，一个请求只能回一次；
+        # 多发一次的后果是浏览器把第二次响应当成下一个请求的响应，整条连接错位。
+        if getattr(self, "_sent", False):
+            return
+        self._sent = True
+        # v1.24.0：失败统一补一个机器可读的 code，前端才能查表给人话解释
+        if isinstance(obj, dict) and obj.get("ok") is False and not obj.get("code"):
+            obj = dict(obj)
+            obj["code"] = classify_error(obj.get("msg") or "")
+        # v1.24.1：自动接管了文件（只读层 → 可写层）就把这件事写进 msg
+        if isinstance(obj, dict) and obj.get("ok") and getattr(self, "_adopted_to", ""):
+            obj = dict(obj)
+            _m = obj.get("msg") or "已保存"
+            if getattr(self, "_adopted_copied", False):
+                obj["msg"] = "%s（文件已复制到 %s，原层未改动）" % (_m, self._adopted_to)
+            else:
+                obj["msg"] = "%s（写的是 %s 里的副本，原层未改动）" % (_m, self._adopted_to)
+            obj["adopted_to"] = self._adopted_to
         body = obj if isinstance(obj, bytes) else json.dumps(obj, ensure_ascii=False).encode("utf-8")
         hdrs = []
         if len(body) > 50000 and "application/json" in ctype and "gzip" in (self.headers.get("Accept-Encoding") or ""):
@@ -18971,6 +19225,27 @@ class Handler(SimpleHTTPRequestHandler):
         self.close_connection = True
 
     def do_GET(self):
+        # v1.24.1：请求处理里任何一处抛异常，原来都是「连接被断」——前端只看得到
+        # 网络层错误，看不到 code。这里兜住，至少回一个能读的错误。
+        try:
+            self.do_GET_impl()
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            self.close_connection = True
+        except Exception as e:
+            import traceback
+            try:
+                sys.stderr.write("[do_GET] %s\n%s\n" % (e, traceback.format_exc()))
+                sys.stderr.flush()
+            except Exception:
+                pass
+            if not getattr(self, "_sent", False):
+                try:
+                    self._send({"ok": False, "code": "INTERNAL",
+                                "msg": "服务器内部错误：%s" % (e,)}, 500)
+                except Exception:
+                    self.close_connection = True
+
+    def do_GET_impl(self):
         path_only = self.path.split("?")[0]
         if path_only == "/" or path_only.startswith("/index"):
             lang = _lang(self.path)
@@ -19213,6 +19488,27 @@ class Handler(SimpleHTTPRequestHandler):
             self._send({"err": "not found"}, 404)
 
     def do_POST(self):
+        # v1.24.1：同 do_GET。这里是重点——参数缺失、路径拼不出来这类 TypeError
+        # 原来直接冒到 socketserver，浏览器只收到「连接被断」。
+        try:
+            self.do_POST_impl()
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            self.close_connection = True
+        except Exception as e:
+            import traceback
+            try:
+                sys.stderr.write("[do_POST] %s\n%s\n" % (e, traceback.format_exc()))
+                sys.stderr.flush()
+            except Exception:
+                pass
+            if not getattr(self, "_sent", False):
+                try:
+                    self._send({"ok": False, "code": "INTERNAL",
+                                "msg": "服务器内部错误：%s" % (e,)}, 500)
+                except Exception:
+                    self.close_connection = True
+
+    def do_POST_impl(self):
         n = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(n) or b"{}"
         try:
@@ -19229,8 +19525,12 @@ class Handler(SimpleHTTPRequestHandler):
         # 把要改的那个文件复制过去（同名覆盖），其余文件仍走叠加链读原层。
         # 只读保护只针对"写文件"的接口。加载/卸载只读不写，必须放行，
         # 否则连创意工坊的 mod 都加载不进来。
+        # entry_source 必须放行：它是「问这条会写到哪」的只读查询，
+        # 不放行的话，查询本身就会触发接管、把文件复制进可写层——
+        # R3 实测：点开州/科技面板各问一次，XRT1 里就多了 1-Corsica.txt 和 MVLV_UNI.txt。
         _READONLY_OK = ("/api/load_vanilla", "/api/unload_mod", "/api/load_mod",
-                        "/api/load_mod_root", "/api/load_progress", "/api/pick_mod")
+                        "/api/load_mod_root", "/api/load_progress", "/api/pick_mod",
+                        "/api/entry_source")
         if ro and _is_readonly_root(ro) and self.path not in _READONLY_OK:
             _top = _writable_top()
             if not _top:
@@ -19243,15 +19543,31 @@ class Handler(SimpleHTTPRequestHandler):
             ro = _top
             if _rel:
                 body["_adopted"] = _adopted
+            # v1.24.1：磁盘上确实发生了「往你的 mod 里塞文件」这件事，必须让用户看见。
+            # 复制成功和「副本早就存在」都要告知——两种情况下写的都不是他指的那一层。
+            try:
+                self._adopted_to = os.path.basename(_top.rstrip("\\/")) or _top
+                self._adopted_copied = bool(_adopted)
+            except Exception:
+                pass
         if self.path == "/api/options":
-            # v1.23.45：跟随启动器的开关。改完要重新 load_mod 才生效——
+            # v1.24.0：两个独立开关。改完要重新 load_mod 才生效——
             # 这里只把缓存清掉，不自动重载（会打断用户正在编辑的东西）。
-            if "follow_launcher" in body:
-                OPTIONS["follow_launcher"] = bool(body["follow_launcher"])
+            _changed = False
+            for _k in ("follow_deps", "follow_launcher"):
+                if _k in body:
+                    OPTIONS[_k] = bool(body[_k])
+                    _changed = True
+            if _changed:
                 _save_options()
                 _LAYERS_CACHE.clear()
                 _MOD_ORDER_CACHE.clear()
             self._send(dict(OPTIONS))
+            return
+        if self.path == "/api/entry_source":
+            # v1.24.2：打开编辑器那一刻问「这条会写到哪」，接管提示前移
+            self._send(entry_source(body.get("root"), body.get("file") or body.get("rel"),
+                                    body.get("layer")))
             return
         if self.path == "/api/save":
             root = body.get("root")
@@ -20068,7 +20384,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mod", action="append", default=None)
     ap.add_argument("--game", default=DEFAULT_GAME)
-    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--port", type=int, default=8766)
     args = ap.parse_args()
     GAME = args.game
     roots = args.mod or playset_load_saved()   # 没传 --mod 时用上次保存的播放集

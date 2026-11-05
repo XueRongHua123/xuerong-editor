@@ -26,6 +26,30 @@
   .mf-tip{font-size:11px;color:var(--text);line-height:1.5;padding:4px 2px 2px;min-height:28px}
   #mascotImg{width:100%;display:block;border-radius:8px}
   #main{flex:1;position:relative;overflow:hidden}
+  /* v1.24.1 常驻引导条：画布顶部、工具栏之下。回答「走到哪了」；
+     左下角 #guideBox 回答「这一步具体怎么做」，两者互补不重复。 */
+  #stepBar{position:absolute;top:56px;left:10px;right:calc(var(--pane-r,356px) + 18px);z-index:4;
+    background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);
+    border-radius:10px;padding:7px 26px 8px 11px;font-size:12px;display:flex;flex-direction:column;gap:5px;
+    box-shadow:0 6px 18px rgba(0,0,0,.18)}
+  #stepBar.all{border-color:color-mix(in srgb,var(--accent-2) 55%,var(--line))}
+  .sb-row{display:flex;align-items:center;gap:1px;flex-wrap:wrap}
+  .sb-step{display:flex;align-items:center;gap:5px;color:var(--muted);padding:1px 5px 1px 1px;border-radius:6px}
+  .sb-step i{width:16px;height:16px;border-radius:50%;border:1px solid var(--line2);
+    display:inline-flex;align-items:center;justify-content:center;font-size:9.5px;font-style:normal;flex:0 0 auto}
+  .sb-step.done{opacity:.55}
+  .sb-step.done i{background:color-mix(in srgb,var(--accent-2) 70%,transparent);border-color:transparent;color:#10140f}
+  .sb-step.cur{color:var(--text);font-weight:600}
+  .sb-step.cur i{background:var(--accent);border-color:var(--accent);color:#141716}
+  .sb-arw{color:var(--line2);font-size:10px;padding:0 1px;user-select:none}
+  .sb-desc{color:var(--muted);font-size:11px;line-height:1.5}
+  .sb-x{position:absolute;top:4px;right:5px;background:none;border:none;color:var(--muted);
+    cursor:pointer;font-size:13px;line-height:1;padding:3px 5px;border-radius:5px}
+  .sb-x:hover{color:var(--text);background:var(--panel2)}
+  #sbDot{position:absolute;top:56px;left:10px;z-index:4;width:22px;height:22px;border-radius:50%;
+    background:var(--panel);border:1px solid var(--line2);color:var(--muted);cursor:pointer;
+    font-size:11px;line-height:1;display:none;place-items:center;padding:0}
+  #sbDot:hover{color:var(--text);border-color:var(--accent)}
   #svg{width:100%;height:100%;display:block;background:radial-gradient(circle at 1px 1px,var(--panel2) 1px,transparent 0) 0 0/24px 24px,var(--input);cursor:default}
   .node.multi rect{stroke:var(--accent);stroke-width:2.4}
   .node.dirty rect{stroke:var(--accent);stroke-dasharray:4 3}
@@ -57,6 +81,17 @@
   #equipModal textarea{font-family:Consolas,monospace;line-height:1.55}
   #equipList div{padding:5px 8px;border-radius:6px;cursor:pointer;font-size:12px}
   #equipList div:hover{background:var(--panel2)}
+  .src-hint{font-size:10.5px;color:var(--muted);margin:-1px 0 7px;line-height:1.45}
+  .src-hint.ro{color:#c98f5a}
+  /* v1.24.2 州列表的来源标签：平时不占视线，hover/选中才亮 */
+  .cm-row .st-src{opacity:0;transition:opacity .12s}
+  .cm-row:hover .st-src,.cm-row.on .st-src{opacity:1}
+  #equipList .lr,#techList .lr,#eventList .lr,#ideaList .lr{display:flex;align-items:center;gap:6px;min-width:0}
+  .lr-id{flex:0 1 auto;font-family:Consolas,monospace;font-size:11.5px;color:var(--muted);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lr-nm{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lr-src{flex:0 0 auto;font-size:9.5px;color:var(--muted);padding:1px 5px;border:1px solid var(--line2);
+    border-radius:8px;white-space:nowrap;max-width:126px;overflow:hidden;text-overflow:ellipsis}
   #techModal input[type=text],#techModal textarea{width:100%;box-sizing:border-box;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px 8px;font-size:13px;margin:2px 0 8px}
   #techModal textarea{font-family:Consolas,monospace;line-height:1.55}
   #techList div{padding:5px 8px;border-radius:6px;cursor:pointer;font-size:12px}
@@ -102,6 +137,16 @@
   #status{position:absolute;bottom:10px;left:10px;right:10px;background:#141a21ee;border:1px solid var(--panel2);
     border-radius:6px;padding:6px 10px;font-size:12px;color:var(--text);display:none;z-index:95}
   #status.show{display:block}
+  /* v1.24.0 错误卡片：三行（发生什么 / 为什么 / 怎么办） */
+  #errBar{position:fixed;left:50%;bottom:52px;z-index:200;width:min(640px,calc(100% - 40px));
+    transform:translateX(-50%) translateY(14px);opacity:0;pointer-events:none;
+    background:var(--panel);border:1px solid #a05c5c;border-radius:12px;padding:12px 14px;
+    box-shadow:var(--shadow);transition:opacity .16s,transform .16s}
+  #errBar.show{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
+  #errBar b{display:block;font-size:13px;color:var(--text);margin-bottom:3px}
+  #errBar .err-why{display:block;font-size:10.5px;color:var(--muted);line-height:1.55;margin-bottom:9px}
+  #errBar .err-why em{font-style:normal;opacity:.7}
+  #errBar .err-acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
   #welcome{position:fixed;inset:0;z-index:80;background:rgba(10,12,13,.8);display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
   #welcome.show{display:flex}
   .welcome-card{display:flex;max-width:900px;width:calc(100% - 80px);background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.55)}
@@ -287,6 +332,8 @@
     --r-sm:8px;--r-md:10px;--r-lg:16px;
     --shadow:0 18px 50px rgba(0,0,0,.42);
     --node:#252a27;--svg:#181c1a;
+    /* v1.24.0 统一三栏：左列表 / 中主体 / 右属性 */
+    --pane-l:288px;--pane-r:356px;
   }
   body.theme-paper{
     --bg:#f3f1ea;--panel:#fbfaf6;--panel2:#f0ede4;--input:#ffffff;
@@ -904,6 +951,32 @@
   .src-opt input{margin:0;width:12px;height:12px;cursor:pointer;accent-color:var(--accent)}
   .src-opt:hover{color:var(--text)}
   .src-opt-hint{font-size:10px;color:var(--accent);line-height:1.4;margin-top:2px}
+  /* v1.24.0 加载链 */
+  .src-chain{margin-top:8px;display:flex;flex-direction:column;gap:1px;max-height:188px;overflow:auto}
+  .src-row{display:flex;align-items:center;gap:6px;font-size:10.5px;line-height:1.55;padding:2px 4px;border-radius:5px}
+  .src-row:hover{background:var(--panel2)}
+  .src-dot{width:6px;height:6px;border-radius:50%;flex:0 0 auto;background:var(--muted)}
+  .src-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+  .src-tag{flex:0 0 auto;font-size:9px;padding:0 5px;border-radius:8px;border:1px solid var(--line2);color:var(--muted)}
+  .src-row.src-dep .src-dot{background:#7fa6c9}
+  .src-row.src-dep .src-tag{color:#7fa6c9;border-color:#7fa6c966}
+  .src-row.src-launcher .src-dot{background:#c98f5a}
+  .src-row.src-launcher .src-tag{color:#c98f5a;border-color:#c98f5a66}
+  .src-row.src-manual .src-dot{background:var(--accent-2)}
+  .src-row.src-manual .src-tag{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent-2) 45%,transparent)}
+  #contentList .ct-item{display:flex;align-items:center;gap:8px;justify-content:space-between}
+  .ct-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ct-src{flex:0 0 auto;font-size:9px;color:var(--muted);border:1px solid var(--line2);
+    border-radius:8px;padding:0 5px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .src-warn{flex:0 0 auto;font-size:9px;color:#c98f5a;cursor:help;opacity:.9}
+  .src-x{flex:0 0 auto;border:0;background:none;color:var(--muted);cursor:pointer;font-size:13px;padding:0 2px;line-height:1}
+  .src-x:hover{color:var(--accent)}
+  .src-cover{margin-top:6px;font-size:9.5px;color:var(--muted);line-height:1.55;word-break:break-word}
+  .src-cover b{color:var(--accent);font-weight:600}
+  .src-opts{margin-top:8px;padding-top:6px;border-top:1px dashed var(--line)}
+  .src-opts .src-opt{display:block;margin-top:5px;line-height:1.35;font-size:10.5px}
+  .src-opts .src-opt input{margin:0 5px 0 0;vertical-align:-2px}
+  .src-opts .src-opt small{display:block;margin-left:17px;font-size:9px;color:var(--muted);opacity:.72;line-height:1.4}
   .src-auto{display:block;margin-top:3px;font-size:10px;line-height:1.45;opacity:.75;cursor:help}
   .src-auto b{font-weight:600;color:color-mix(in srgb,var(--accent) 70%,var(--muted))}
   .spin{display:inline-block;width:9px;height:9px;margin-right:6px;vertical-align:-1px;
@@ -981,7 +1054,16 @@
   .cm-head b{color:var(--accent);font-size:14px;letter-spacing:.4px;flex:0 0 auto}
   .cm-head input{flex:1;max-width:320px;margin:0!important}
   .cm-body{display:flex;flex:1;min-height:0}
-  .cm-list{width:300px;border-right:1px solid var(--line);overflow:auto;padding:6px;flex:0 0 auto}
+  /* v1.24.0：.pane3 = 列表 | 主体 | 属性。宽度和国策树（#side 288 / #panel 356）一致 */
+  .cm-body.pane3{display:flex}
+  .cm-side{width:var(--pane-r,356px);flex:0 0 auto;border-left:1px solid var(--line);
+    overflow:auto;padding:12px 14px 22px;background:color-mix(in srgb,var(--panel) 55%,transparent)}
+  .cm-side .cm-sec:first-child{margin-top:0}
+  .cm-side .cm-grid{grid-template-columns:1fr 1fr}
+  .cm-side .st-grid{grid-template-columns:1fr}
+  .cm-side .dp-acts .btn{padding:5px 14px;font-size:11.5px}
+  .cm-side .cm-sec{margin-top:12px}
+  .cm-list{width:var(--pane-l,288px);border-right:1px solid var(--line);overflow:auto;padding:6px;flex:0 0 auto}
   .cm-row{padding:7px 9px;border-radius:8px;cursor:pointer;border-left:2px solid transparent;display:flex;gap:8px;align-items:center}
   .cm-row:hover{background:var(--panel2)}
   .cm-row.on{background:var(--panel2);border-left-color:var(--accent)}
@@ -1078,10 +1160,20 @@ window.onerror = function(m, s, l, c){
         <button class="src-btn" id="newModBtn"><b>🆕 新建模组</b><i>生成能直接玩的空壳</i></button>
       </div>
       <div id="srcState" class="src-state">还没有加载 mod</div>
-      <label class="src-opt"><input type="checkbox" id="optFollow" checked> 跟随启动器加载依赖</label>
+      <div id="srcChain" class="src-chain"></div>
+      <div id="srcCover" class="src-cover"></div>
+      <div class="src-opts">
+        <label class="src-opt"><input type="checkbox" id="optDep" checked>带上依赖的 mod
+          <small>descriptor.mod 里的 dependencies，默认开</small></label>
+        <label class="src-opt"><input type="checkbox" id="optLaunch">同时读启动器已启用的 mod
+          <small>来自 dlc_load.json，可能含音乐/界面包之类无关的 mod</small></label>
+      </div>
       <div id="optHint" class="src-opt-hint"></div>
       <button class="linkbtn src-home-link" id="welcomeBtn">🏠 打开欢迎页</button>
-      <button class="linkbtn src-home-link" id="guideBtn">❓ 打开引导</button>
+      <label class="src-opt"><input type="checkbox" id="ckStepBar" checked>顶部引导条
+        <small>画布上方四步：加载 mod → 选树 → 改节点 → 保存</small></label>
+      <label class="src-opt"><input type="checkbox" id="ckGuide" checked>左下角「下一步」
+        <small>当前这步的详细说明，可拖动</small></label>
     </div>
     <details open>
       <summary>国策树</summary>
@@ -1148,7 +1240,7 @@ window.onerror = function(m, s, l, c){
       <button class="btn" id="copyTreeBtn">📋 复制树</button>
       <button class="btn" id="delTreeBtn">🗑 删除树</button>
       <span class="tb-sep"></span>
-      <button class="btn" id="saveAll">💾 保存全部</button>
+      <button class="btn" id="saveAll" title="保存所有未写盘的改动（Ctrl+S）">💾 保存</button>
       <button class="btn" id="verBadge" title="检查更新" style="font-size:11px;opacity:.75">v—</button>
       <button class="btn" id="exportBtn">📦 导出覆盖包</button>
       <button class="btn" id="undoBtn" title="撤销 (Ctrl+Z)">↶ 撤销</button>
@@ -1188,6 +1280,12 @@ window.onerror = function(m, s, l, c){
       <span class="tb-sep"></span>
       <button class="btn" id="cmdBtn" title="命令面板 (Ctrl+K)：搜索命令、焦点、精神、装备、科技、事件">⌘ 命令</button>
     </div>
+    <div id="stepBar">
+      <button class="sb-x" id="sbClose" title="关掉（之后侧栏的「下一步」还能打开）">×</button>
+      <div class="sb-row" id="sbRow"></div>
+      <div class="sb-desc" id="sbDesc"></div>
+    </div>
+    <button id="sbDot" title="展开引导条">?</button>
     <svg id="svg"><g id="viewport"></g></svg>
     <div class="panel" id="panel"></div>
     <div id="status"></div>
@@ -1207,9 +1305,10 @@ window.onerror = function(m, s, l, c){
           <span id="stateCount" style="font-size:11px;color:var(--muted)"></span>
           <button class="btn" id="stateClose" style="margin-left:auto">关闭</button>
         </div>
-        <div class="cm-body">
+        <div class="cm-body pane3">
           <div id="stateList" class="cm-list"></div>
           <div id="stateBody" class="cm-detail"></div>
+          <div id="stateSide" class="cm-side"></div>
         </div>
       </div>
     </div>
@@ -2215,6 +2314,7 @@ window.onerror = function(m, s, l, c){
         </div>
         <div style="flex:1;display:flex;flex-direction:column;min-height:0">
           <div id="ideaTitle" style="color:#ffd479;margin-bottom:4px"></div>
+          <div class="src-hint" id="ideaSrc"></div>
           <div class="k">中文名称 / 描述</div>
           <input type="text" id="ideaNameZ">
           <textarea id="ideaDescZ" style="height:50px"></textarea>
@@ -2295,6 +2395,7 @@ window.onerror = function(m, s, l, c){
     </div>
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       <div id="equipTitle" style="color:#ffd479;margin-bottom:4px"></div>
+      <div class="src-hint" id="equipSrc"></div>
       <div class="k">中文名称 / 描述</div>
       <input type="text" id="equipNameZ">
       <textarea id="equipDescZ" style="height:44px"></textarea>
@@ -2337,6 +2438,7 @@ window.onerror = function(m, s, l, c){
     </div>
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       <div id="techTitle" style="color:#ffd479;margin-bottom:4px"></div>
+      <div class="src-hint" id="techSrc"></div>
       <div class="k">中文名称 / 描述</div>
       <input type="text" id="techNameZ"><textarea id="techDescZ" style="height:44px"></textarea>
       <div class="k">日本語 名前 / 説明</div>
@@ -2382,6 +2484,7 @@ window.onerror = function(m, s, l, c){
     </div>
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       <div id="eventTitle" style="color:#ffd479;margin-bottom:4px"></div>
+      <div class="src-hint" id="eventSrc"></div>
       <div class="k">中文标题 / 描述</div>
       <input type="text" id="eventNameZ"><textarea id="eventDescZ" style="height:44px"></textarea>
       <div class="k">日本語 タイトル / 説明</div>
@@ -2709,11 +2812,88 @@ const statusEl = document.getElementById('status');
 function status(msg, isErr){ msg = locMsg(msg); statusEl.textContent = msg; statusEl.className = 'show' + (isErr?' warn':'');
   clearTimeout(statusEl._t); statusEl._t = setTimeout(()=>statusEl.classList.remove('show'), 6000); }
 function escapeHtml(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* ---------- v1.24.0 错误说人话 ----------
+   后端在 _send 出口给每个 ok:false 补了 code；这里查表渲染成三行：
+   第一行「发生了什么」，第二行「为什么」，第三行「怎么办（按钮）」。 */
+const ERR_TEXT = {
+  TREE_NOT_FOUND: {title:'找不到这棵国策树',
+    why:'当前加载的 mod 里没有这个 id 的树。可能它来自没加载的 mod，或者 id 拼错了。',
+    actions:[['重新加载数据', function(){ loadData(); }]]},
+  SAVE_VERIFY_FAILED: {title:'这个节点没能保存',
+    why:'文件里没找到刚写进去的内容，可能是文件格式特殊（用了 macro 或非标准写法）。',
+    actions:[['再试一次', function(){ saveAll(); }]]},
+  NO_WRITABLE_MOD: {title:'没有可写的地方',
+    why:'现在只加载了原版 / 创意工坊目录（只读）。要改东西得先有一个属于你自己的 mod。',
+    actions:[['新建一个 mod', function(){ if(typeof openNewMod === 'function') openNewMod(); }]]},
+  READONLY: {title:'这里是只读的',
+    why:'原版和创意工坊目录不能改。编辑器会把要改的文件复制到你自己的 mod，前提是那个 mod 已经存在。',
+    actions:[['新建一个 mod', function(){ if(typeof openNewMod === 'function') openNewMod(); }]]},
+  FILE_NOT_FOUND: {title:'找不到对应的文件',
+    why:'这个条目记的来源文件不在磁盘上，可能被删了或者换了路径。',
+    actions:[['重新加载数据', function(){ loadData(); }]]},
+  STATE_NOT_FOUND: {title:'找不到这个州',
+    why:'州 id 不在当前地图的 definition 里。可能是别的 mod 的州，或者州被换过了。',
+    actions:[['重新加载数据', function(){ loadData(); }]]},
+  COUNTRY_NOT_FOUND: {title:'找不到这个国家',
+    why:'tag 不在当前加载链的国家列表里。检查拼写，或确认它属于哪个 mod。',
+    actions:[]},
+  BAD_PARAM: {title:'填的内容不合法',
+    why:'有字段为空、类型不对或者超出允许范围。下面括号里是后端原话。',
+    actions:[]},
+  READ_FAILED: {title:'读不出来',
+    why:'文件在，但解析失败。常见原因是编码不是 UTF-8，或者文件正被别的程序占用。',
+    actions:[]},
+  WRITE_FAILED: {title:'写不进去',
+    why:'文件被占用、目录只读，或者磁盘满了。',
+    actions:[]},
+  INTERNAL: {title:'服务器内部出错',
+    why:'这是编辑器的 bug，不是你填错了。操作的参数可能不完整，或者这个文件用了编辑器没预料到的写法。服务端日志里有完整调用栈（stderr 里搜 [do_POST]）。',
+    actions:[]},
+  UNKNOWN: {title:'操作没成功',
+    why:'没有更具体的原因，下面是后端原话。',
+    actions:[]}
+};
+
+function showError(j){
+  const code = (j && j.code) || 'UNKNOWN';
+  const e = ERR_TEXT[code] || ERR_TEXT.UNKNOWN;
+  let el = document.getElementById('errBar');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'errBar';
+    document.body.appendChild(el);
+  }
+  const detail = (j && (j.detail || j.msg)) || '';
+  el.innerHTML = '<b>' + escapeHtml(e.title) + '</b>' +
+    '<span class="err-why">' + escapeHtml(e.why) +
+      (detail ? '<br><em>后端原话：' + escapeHtml(detail) + '</em>' : '') + '</span>' +
+    '<div class="err-acts">' +
+      e.actions.map(function(a, i){
+        return '<button class="btn" data-ea="' + i + '">' + escapeHtml(a[0]) + '</button>';
+      }).join('') +
+      '<button class="btn" data-ea="close">关闭</button></div>';
+  el.querySelectorAll('[data-ea]').forEach(function(b){
+    b.onclick = function(){
+      const k = b.dataset.ea;
+      if(k === 'close'){ el.classList.remove('show'); return; }
+      const a = e.actions[Number(k)];
+      el.classList.remove('show');
+      if(a && typeof a[1] === 'function') a[1]();
+    };
+  });
+  el.classList.add('show');
+  clearTimeout(el._t);
+  // 保存校验失败这类「要用户看一眼」的多留一会儿，其余 12 秒自动收
+  el._t = setTimeout(function(){ el.classList.remove('show'); },
+                     code === 'SAVE_VERIFY_FAILED' ? 20000 : 12000);
+}
 function showMutex(){ return document.getElementById('showMutex').checked; }
 function applyView(){ vp.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`); }
 function resetView(){ view = {x:0,y:0,k:1}; applyView(); (typeof updateZoomLabel === 'function') && updateZoomLabel(); }
 
-async function loadData(){ const r = await fetch('/api/data'); DATA = await r.json(); dirty.clear(); linkSrc = null; selId = null; cpCache = null; COUNTRY_DATA = null; LINT_DATA = null; if(!DATA.trees || current >= DATA.trees.length) current = 0; renderAll(); applySavedSkin(); updateWelcome(); if(typeof renderGuide === 'function') renderGuide(); if(typeof updateSourceBox === 'function') updateSourceBox(); if(typeof bindOptions === 'function') bindOptions(); if(typeof loadOptions === 'function') loadOptions(); const _fp=document.getElementById('ftPick'); if(_fp){ delete _fp.dataset.loaded; _fp.innerHTML=''; } const _fsvg=document.getElementById('ftSvg'); if(_fsvg) _fsvg.innerHTML=''; const _finfo=document.getElementById('ftInfo'); if(_finfo) _finfo.textContent=''; }
+async function loadData(){ const r = await fetch('/api/data'); DATA = await r.json(); dirty.clear(); linkSrc = null; selId = null; cpCache = null; COUNTRY_DATA = null; LINT_DATA = null; if(!DATA.trees || current >= DATA.trees.length) current = 0; renderAll(); applySavedSkin(); updateWelcome(); if(typeof renderGuide === 'function') renderGuide(); if(typeof updateSourceBox === 'function') updateSourceBox(); if(typeof bindOptions === 'function') bindOptions(); if(typeof bindStepBar === 'function'){ bindStepBar(); renderStepBar(); }
+  if(typeof bindGuideToggles === 'function') bindGuideToggles(); if(typeof loadOptions === 'function') loadOptions(); const _fp=document.getElementById('ftPick'); if(_fp){ delete _fp.dataset.loaded; _fp.innerHTML=''; } const _fsvg=document.getElementById('ftSvg'); if(_fsvg) _fsvg.innerHTML=''; const _finfo=document.getElementById('ftInfo'); if(_finfo) _finfo.textContent=''; }
 function updateWelcome(){
   const w = document.getElementById('welcome'); if(!w) return;
   const empty = !(DATA && DATA.roots && DATA.roots.length);
@@ -2744,6 +2924,134 @@ function gbState(){
     dirty: (typeof dirty !== 'undefined' && dirty) ? dirty.size : 0,
     nFocus: (cur && cur.focuses) ? cur.focuses.length : 0
   };
+}
+
+/* ---------- v1.24.1 常驻引导条（画布顶部） ----------
+   只回答「走到哪了」，具体怎么做还是看左下角 #guideBox（两套不重复）。
+   四步的判定全部复用 gbState()，各步独立判断——不要求「前一步做完」才点亮下一步，
+   因为熟手可能直接点节点，硬卡顺序只会让人烦。 */
+const STEP_LABELS = ['加载 mod', '选一棵树', '改个节点', '保存'];
+const STEP_DESCS = [
+  '点左上「＋ 添加 mod」，选里面有 descriptor.mod 的那一层（不是它的上一级）。',
+  '在左侧「国策树」列表里点一棵，画布上会显示它的节点。',
+  '点画布上任意节点，右侧属性面板能改名字、成本、前置、图标。',
+  '改完点顶部「💾 保存」或按 Ctrl+S。'
+];
+let treePicked = false;   // ② 用户主动点过树列表（只看「有没有树」会把 ② 直接判成完成）
+let nodePicked = false;   // ③ 点过节点。必须粘住：loadData 会把 selId 清空，
+                          //    保存完不算「没改过」，不然刚存完又跳回「改个节点」
+let savedOnce  = false;   // ④ 成功保存过一次
+
+function stepState(){
+  const s = gbState();
+  return {
+    s: s,
+    done: [
+      s.roots.length > 0,
+      treePicked || !!s.selId,
+      nodePicked || !!s.selId,
+      savedOnce && s.dirty === 0
+    ]
+  };
+}
+
+function renderStepBar(){
+  const bar = document.getElementById('stepBar');
+  if(!bar) return;
+  const dot = document.getElementById('sbDot');
+  if(localStorage.getItem('stepBarHidden') === '1'){
+    bar.style.display = 'none';
+    if(dot) dot.style.display = 'grid';
+    return;
+  }
+  bar.style.display = '';
+  if(dot) dot.style.display = 'none';
+  // 工具栏会随窗口宽度换行（1080 下是两行），写死 top:56 会被按钮盖住。
+  // 这里按工具栏实际底边算位置，贴着它下面放。
+  try{
+    const tb = document.querySelector('#main .toolbar');
+    const main = document.getElementById('main');
+    if(tb && main){
+      const mr = main.getBoundingClientRect(), tr = tb.getBoundingClientRect();
+      bar.style.top = Math.round(tr.bottom - mr.top + 6) + 'px';
+      if(dot) dot.style.top = bar.style.top;
+    }
+  }catch(e){}
+
+  const {s, done} = stepState();
+  const row = document.getElementById('sbRow');
+  const desc = document.getElementById('sbDesc');
+  const allDone = done.every(Boolean);
+  let cur = done.indexOf(false);
+
+  let html = '';
+  STEP_LABELS.forEach(function(lb, i){
+    const cls = done[i] ? 'done' : (i === cur ? 'cur' : '');
+    html += '<span class="sb-step ' + cls + '"><i>' + (done[i] ? '✓' : (i + 1)) + '</i>' + lb + '</span>';
+    if(i < STEP_LABELS.length - 1) html += '<span class="sb-arw">›</span>';
+  });
+  row.innerHTML = html;
+
+  let text;
+  if(allDone){
+    text = '✓ 都做完了。这条可以关掉（×），左下角「下一步」还在，需要时能翻明细。';
+  } else if(cur === 0){
+    text = STEP_DESCS[0];
+  } else if(cur === 1){
+    text = STEP_DESCS[1];
+  } else if(cur === 2){
+    text = STEP_DESCS[2];
+  } else {
+    text = s.dirty ? ('还有 ' + s.dirty + ' 处改动没保存：点顶部「💾 保存」或按 Ctrl+S。') : STEP_DESCS[3];
+  }
+  desc.textContent = text;
+  bar.classList.toggle('all', allDone);
+}
+
+/* v1.24.2 侧栏的两个引导开关（状态式勾选框，因为引导条默认显示） */
+function bindGuideToggles(){
+  const ckS = document.getElementById('ckStepBar');
+  const ckG = document.getElementById('ckGuide');
+  if(ckS && !ckS.__b){
+    ckS.__b = 1;
+    ckS.checked = localStorage.getItem('stepBarHidden') !== '1';
+    ckS.onchange = function(){
+      if(this.checked) localStorage.removeItem('stepBarHidden');
+      else localStorage.setItem('stepBarHidden', '1');
+      if(typeof renderStepBar === 'function') renderStepBar();
+    };
+  }
+  if(ckG && !ckG.__b){
+    ckG.__b = 1;
+    ckG.checked = localStorage.getItem('guideHidden') !== '1';
+    ckG.onchange = function(){
+      if(this.checked){ localStorage.removeItem('guideHidden'); renderGuide(); }
+      else {
+        localStorage.setItem('guideHidden', '1');
+        const bx = document.getElementById('guideBox');
+        if(bx) bx.classList.remove('show');
+      }
+    };
+  }
+}
+function syncGuideToggle(){
+  const ck = document.getElementById('ckGuide');
+  if(ck) ck.checked = localStorage.getItem('guideHidden') !== '1';
+  const ck2 = document.getElementById('ckStepBar');
+  if(ck2) ck2.checked = localStorage.getItem('stepBarHidden') !== '1';
+}
+
+function bindStepBar(){
+  const close = document.getElementById('sbClose');
+  if(close && !close.__b){
+    close.__b = 1;
+    close.onclick = function(){ localStorage.setItem('stepBarHidden', '1'); renderStepBar(); if(typeof syncGuideToggle === 'function') syncGuideToggle(); };
+  }
+  const dot = document.getElementById('sbDot');
+  if(dot && !dot.__b){
+    dot.__b = 1;
+    dot.onclick = function(){ localStorage.removeItem('stepBarHidden'); renderStepBar(); if(typeof syncGuideToggle === 'function') syncGuideToggle(); };
+  }
 }
 
 const FLOWS = {
@@ -3403,14 +3711,62 @@ function openEquip(){
   const first = ((DATA && DATA.equipment) || [])[0];
   if(first) selectEquip(first);
 }
+/* v1.24.1 列表行：id 等宽 / 名字占满 / 来源标签贴右。
+   来源是「这个文件在哪一层」，不是「当前加载的 mod 叫什么」——后端已经按层填好。 */
+/* v1.24.2 接管提示前移：打开编辑器那一刻就问后端「这条会写到哪」。
+   缓存按 root|file|layer，同一文件反复打开不打后端。 */
+const _srcCache = new Map();
+async function entrySource(root, file, layer){
+  const k = (root || '') + '|' + (file || '') + '|' + (layer || '');
+  if(_srcCache.has(k)) return _srcCache.get(k);
+  let j = {};
+  try{
+    j = await (await fetch('/api/entry_source', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root: root || '', file: file || '', layer: layer || ''})})).json();
+  }catch(e){ return {}; }
+  _srcCache.set(k, j);
+  return j;
+}
+function srcHintHtml(j){
+  if(!j || !j.ok || !j.layer) return '<div class="src-hint"></div>';
+  const txt = j.readonly
+    ? '来源: ' + j.layer + '（只读）· 保存时会复制到 ' + (j.adopt_to || '你的 mod')
+    : '来源: ' + j.layer;
+  return '<div class="src-hint' + (j.readonly ? ' ro' : '') + '">' + escapeHtml(txt) + '</div>';
+}
+function fillSrcHint(elId, root, file, layer){
+  const el = document.getElementById(elId);
+  if(!el) return;
+  el.outerHTML = '<div class="src-hint" id="' + elId + '">…</div>';
+  entrySource(root, file, layer).then(function(j){
+    const el2 = document.getElementById(elId);
+    if(el2) el2.outerHTML = srcHintHtml(j);
+  });
+}
+function _lastRoot(){
+  const rs = (DATA && DATA.roots) || [];
+  return rs.length ? rs[rs.length - 1].path : '';
+}
+
+function listRow(id, name, source, title){
+  const d = document.createElement('div');
+  d.className = 'lr';
+  if(title) d.title = title;
+  d.innerHTML = '<span class="lr-id">' + escapeHtml(id) + '</span>' +
+                '<span class="lr-nm">' + escapeHtml(name || '') + '</span>' +
+                (source ? '<span class="lr-src" title="来自 ' + escapeHtml(source) + '">' +
+                          escapeHtml(source) + '</span>' : '');
+  return d;
+}
+
 function renderEquipList(q){
   const box = document.getElementById('equipList'); if(!box || !DATA) return;
   q = (q || '').toLowerCase();
   const items = (DATA.equipment || []).filter(e=>!q || e.id.toLowerCase().includes(q) || (e.name||'').toLowerCase().includes(q));
   box.innerHTML = '';
   items.slice(0, 800).forEach(e=>{
-    const d = document.createElement('div');
-    d.textContent = e.id + '  ' + (e.name||'');
+    const d = listRow(e.id, e.name, e.source, e.file);
     d.onclick = ()=>selectEquip(e);
     box.appendChild(d);
   });
@@ -3419,6 +3775,7 @@ function renderEquipList(q){
 async function selectEquip(e){
   equipSel = e;
   document.getElementById('equipTitle').textContent = e.id + '   (' + e.file + ')';
+  fillSrcHint('equipSrc', _lastRoot(), e.file, e.source);
   document.getElementById('equipNameZ').value = e.name || '';
   document.getElementById('equipPic').value = e.picture || '';
   const ep = e.props || {};
@@ -3581,8 +3938,7 @@ function renderTechList(q){
   const items = (DATA.techs || []).filter(t=>!q || t.id.toLowerCase().includes(q) || (t.name||'').toLowerCase().includes(q));
   box.innerHTML = '';
   items.slice(0, 800).forEach(t=>{
-    const d = document.createElement('div');
-    d.textContent = t.id + '  ' + (t.name||'');
+    const d = listRow(t.id, t.name, t.source, t.file);
     d.onclick = ()=>selectTech(t);
     box.appendChild(d);
   });
@@ -3602,6 +3958,7 @@ function extractBlock(text, key){
 async function selectTech(t){
   techSel = t;
   document.getElementById('techTitle').textContent = t.id + '   (' + t.file + ')';
+  fillSrcHint('techSrc', _lastRoot(), t.file, t.source);
   document.getElementById('techNameZ').value = t.name || '';
   document.getElementById('techDescZ').value = '';
   document.getElementById('techNameJa').value = '';
@@ -3653,8 +4010,7 @@ function renderEventList(q){
   const items = (DATA.events || []).filter(e=>!q || e.id.toLowerCase().includes(q) || (e.title||'').toLowerCase().includes(q));
   box.innerHTML = '';
   items.slice(0, 800).forEach(e=>{
-    const d = document.createElement('div');
-    d.textContent = e.id + '  ' + (e.title||'');
+    const d = listRow(e.id, e.title, e.source, e.file);
     d.onclick = ()=>selectEvent(e);
     box.appendChild(d);
   });
@@ -3709,6 +4065,7 @@ function renderEventOptions(raw){
 async function selectEvent(e){
   eventSel = e;
   document.getElementById('eventTitle').textContent = e.id + '   (' + e.file + ')';
+  fillSrcHint('eventSrc', _lastRoot(), e.file, e.source);
   document.getElementById('eventNameZ').value = '';
   document.getElementById('eventDescZ').value = '';
   document.getElementById('eventNameJa').value = '';
@@ -4336,29 +4693,36 @@ function stopLoading(msg, isErr){
   updateSourceBox();
 }
 
+/* ---------- v1.24.0 数据源：完整加载链 ---------- */
+const SRC_REASON = {game:'原版', dep:'依赖', launcher:'启动器', manual:'手动', auto:'自动'};
+
+function srcShortName(l){
+  if(l.reason === 'game') return '原版';
+  const n = l.name || l.path || '';
+  return n.length > 18 ? n.slice(0, 17) + '…' : n;
+}
+
 function updateSourceBox(){
   const roots = (DATA && DATA.roots) || [];
+  const layers = (DATA && DATA.layers) || [];
   const badge = document.getElementById('srcBadge');
-  if(badge) badge.textContent = String(roots.length);
+  if(badge) badge.textContent = String(layers.length || roots.length);
+
   const vb = document.getElementById('vanillaBtn');
-  const game = roots.find(r=>r.readonly);
+  const gameLayer = layers.find(l => l.reason === 'game');
   if(vb){
-    vb.innerHTML = game
+    vb.innerHTML = gameLayer
       ? '<b>🚫 卸载原版参考</b><i>当前已加载（只读）</i>'
       : '<b>📖 加载原版参考</b><i>只读，可卸载</i>';
-    vb.classList.toggle('primary', !!game ? false : false);
   }
+
   const st = document.getElementById('srcState');
   if(st && !loadTimer){
     if(!roots.length){
       st.textContent = '还没有加载 mod；先「添加 mod」或加载原版参考';
     } else {
-      let txt = roots.map(r=>{
-        const n = ((COUNTRY_DATA && COUNTRY_DATA.list) || []).length;
-        return (r.name || r.path) + (r.readonly ? '（原版·只读）' : '');
-      }).join(' ＋ ') + ' 已加载';
-      // 只挂了一个非原版 mod，且树全来自别处：它是个空壳，
-      // 现在看到的内容全是底层的，提醒一句免得误以为编辑器塞了原版进来
+      let txt = roots.map(r => (r.name || r.path) + (r.readonly ? '（原版·只读）' : '')).join(' ＋ ') + ' 已加载';
+      // 只挂了一个非原版 mod，且树全来自别处：它是个空壳
       if(roots.length === 1 && !roots[0].readonly){
         const arr = (DATA && DATA.trees) || [];
         const mine = arr.filter(t => t.source === roots[0].name);
@@ -4366,48 +4730,101 @@ function updateSourceBox(){
           txt += ' · 里面还没有自己的内容，看到的是原版';
         }
       }
-      // v1.23.45：把「自动带进来的层」也列出来，不然用户只看到自己点的那一个，
-      // 会以为科技/装备没读到父 mod。
-      const lay = ((DATA && DATA.layers) || []).filter(l => l.auto && !l.readonly);
-      let html = '<span>' + escapeHtml(txt) + '</span>';
-      if(lay.length){
-        const names = lay.map(l => l.name).filter(Boolean);
-        const tip = lay.map(l => (l.name || '') + '：' + (l.path || '')).join('\n');
-        html += '<span class="src-auto" title="' + escapeHtml(tip) + '">自动带上：<b>'
-              + escapeHtml(names.join('、')) + '</b></span>';
+      st.textContent = txt;
+      const hint = (DATA && DATA.deps_hint) || '';
+      if(hint){
+        st.innerHTML = escapeHtml(txt) +
+          '<span class="src-auto" style="color:#c98f5a">⚠ ' + escapeHtml(hint) + '</span>';
       }
-      st.innerHTML = html;
+    }
+  }
+
+  // 加载链：每层都列，标「为什么在这」
+  const chain = document.getElementById('srcChain');
+  if(chain){
+    if(!layers.length){
+      chain.innerHTML = '';
+    } else {
+      const shadow = (DATA && DATA.layer_shadow) || {};
+      chain.innerHTML = layers.map(function(l){
+        const reason = l.reason || 'auto';
+        let tag = SRC_REASON[reason] || '';
+        if(reason === 'game') tag = '只读';
+        else if(l.readonly) tag = tag + '·只读';
+        // 只有「手动」的层能卸；自动带进来的卸了会断链
+        const x = (reason === 'manual')
+          ? '<button class="src-x" data-src-unload="' + escapeHtml(l.path) +
+            '" title="从本次会话卸载（不改磁盘）">×</button>'
+          : '';
+        // 这一层压住了下面几层多少个同名文件（同名文件后加载的赢）
+        const sw = shadow[l.path] || [];
+        const warn = sw.length
+          ? '<span class="src-warn" title="这一层盖住了下面 ' + sw.length + ' 个同名文件：\n' +
+            escapeHtml(sw.slice(0, 12).join('\n')) +
+            (sw.length > 12 ? '\n…' : '') + '">⚠ ' + sw.length + '</span>'
+          : '';
+        return '<div class="src-row src-' + reason + '" title="' + escapeHtml(l.path) + '">' +
+               '<span class="src-dot"></span>' +
+               '<span class="src-name">' + escapeHtml(l.name || l.path) + '</span>' +
+               warn +
+               '<span class="src-tag">' + escapeHtml(tag) + '</span>' + x + '</div>';
+      }).join('');
+      chain.querySelectorAll('[data-src-unload]').forEach(function(b){
+        b.onclick = function(ev){
+          ev.stopPropagation();
+          if(typeof unloadRoot === 'function') unloadRoot(b.dataset.srcUnload);
+          else if(typeof unloadMod === 'function') unloadMod();
+        };
+      });
+    }
+  }
+
+  // 覆盖关系：最上面的盖最下面的
+  const cov = document.getElementById('srcCover');
+  if(cov){
+    if(layers.length < 2){
+      cov.innerHTML = '';
+    } else {
+      const seq = layers.slice().reverse().map(srcShortName);
+      cov.innerHTML = '覆盖关系：<b>' + escapeHtml(seq.join(' > ')) + '</b>';
     }
   }
 }
 
-/* ---------- v1.23.45 跟随启动器的开关 ---------- */
+/* ---------- v1.24.0 两个独立开关 ---------- */
 async function loadOptions(){
-  const cb = document.getElementById('optFollow');
-  if(!cb) return;
+  const dep = document.getElementById('optDep');
+  const lch = document.getElementById('optLaunch');
+  if(!dep && !lch) return;
   try{
     const r = await fetch('/api/options', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
     const j = await r.json();
-    cb.checked = !!j.follow_launcher;
+    if(dep) dep.checked = !!j.follow_deps;
+    if(lch) lch.checked = !!j.follow_launcher;
   }catch(e){}
 }
 
 function bindOptions(){
-  const cb = document.getElementById('optFollow');
-  if(!cb || cb.__bound) return;
-  cb.__bound = true;
-  cb.onchange = async function(){
-    const on = this.checked;
-    try{
-      await fetch('/api/options', {method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({follow_launcher: on})});
-    }catch(e){}
-    const hint = document.getElementById('optHint');
-    if(hint){
-      hint.textContent = (on ? '已开启跟随启动器' : '已关闭跟随启动器') + ' · 重新加载 mod 后生效';
-      setTimeout(function(){ if(hint.textContent) hint.textContent = ''; }, 6000);
-    }
+  const hint = function(msg){
+    const el = document.getElementById('optHint');
+    if(!el) return;
+    el.textContent = msg;
+    setTimeout(function(){ if(el.textContent === msg) el.textContent = ''; }, 7000);
   };
+  function bindOne(el, key, label){
+    if(!el || el.__bound) return;
+    el.__bound = true;
+    el.onchange = async function(){
+      const on = this.checked;
+      try{
+        await fetch('/api/options', {method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({[key]: on})});
+      }catch(e){}
+      hint((on ? '已开启「' : '已关闭「') + label + '」 · 重新加载 mod 后生效');
+    };
+  }
+  bindOne(document.getElementById('optDep'), 'follow_deps', '带上依赖的 mod');
+  bindOne(document.getElementById('optLaunch'), 'follow_launcher', '同时读启动器已启用的 mod');
 }
 
 async function loadVanillaWithProgress(){
@@ -4894,10 +5311,11 @@ async function unloadRoot(r){
 function unloadMod(){ openUnloadModal(); }
 function contentItems(){
   const out = [];
-  ((DATA && DATA.ideas) || []).forEach(i=>out.push({kind:'idea', label:'[精神] ' + i.id + '  ' + (i.name||''), id:i.id}));
-  ((DATA && DATA.equipment) || []).forEach(e=>out.push({kind:'equip', label:'[装备] ' + e.id, id:e.id}));
-  ((DATA && DATA.techs) || []).forEach(t=>out.push({kind:'tech', label:'[科技] ' + t.id + '  ' + (t.name||''), id:t.id}));
-  ((DATA && DATA.events) || []).forEach(e=>out.push({kind:'event', label:'[事件] ' + e.id, id:e.id}));
+  // v1.24.0：每项都带来源层，方便一眼看出「这是原版的还是我改过的」
+  ((DATA && DATA.ideas) || []).forEach(i=>out.push({kind:'idea', label:'[精神] ' + i.id + '  ' + (i.name||''), id:i.id, source:i.source||''}));
+  ((DATA && DATA.equipment) || []).forEach(e=>out.push({kind:'equip', label:'[装备] ' + e.id, id:e.id, source:e.source||''}));
+  ((DATA && DATA.techs) || []).forEach(t=>out.push({kind:'tech', label:'[科技] ' + t.id + '  ' + (t.name||''), id:t.id, source:t.source||''}));
+  ((DATA && DATA.events) || []).forEach(e=>out.push({kind:'event', label:'[事件] ' + e.id, id:e.id, source:e.source||''}));
   return out;
 }
 let contentFilter = '';
@@ -4915,7 +5333,12 @@ function renderContent(q){
   box.innerHTML = '';
   items.slice(0, 800).forEach(it=>{
     const d = document.createElement('div');
-    d.textContent = it.label;
+    d.className = 'ct-item';
+    d.innerHTML = '<span class="ct-label">' + escapeHtml(it.label) + '</span>' +
+      (it.source
+        ? '<span class="ct-src" title="来自 ' + escapeHtml(it.source) + '">' +
+          escapeHtml(it.source) + '</span>'
+        : '');
     d.onclick = ()=>insertContent(it.kind, it.id);
     box.appendChild(d);
   });
@@ -4936,7 +5359,7 @@ function insertContent(kind, id){
   else line = 'country_event = { id = ' + id + ' days = 0 }';
   el.value = (el.value ? el.value.replace(/\s*$/, '') + '\n' : '') + line + '\n';
   if(contentFilter) document.getElementById('contentModal').classList.remove('show');
-  status('已插入 ' + id + '，记得点「保存此节点」');
+  status('已插入 ' + id + '，改完点顶部「💾 保存」');
 }
 async function loadVanilla(){
   const r = await fetch('/api/load_vanilla', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
@@ -4974,6 +5397,10 @@ async function pickMod(){
 }
 async function loadModByPath(p){
   if(!p) return;
+  // v1.24.0：有未保存改动时先问一句，避免切个 mod 就把改动丢了
+  if(typeof dirty !== 'undefined' && dirty && dirty.size){
+    if(!confirm('还有 ' + dirty.size + ' 处改动没保存。\n现在加载别的 mod 会丢掉它们，继续吗？')) return;
+  }
   startLoading('正在加载 mod…');
   try{
     const r = await fetch('/api/load_mod', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({path: p})});
@@ -4984,6 +5411,7 @@ async function loadModByPath(p){
       stopLoading(j.msg || '已加载');
     } else {
       stopLoading(j.msg || '加载失败', true);
+      showError(j);
     }
     status(j.msg || '', !j.ok);
   }catch(e){ stopLoading('加载失败：' + e.message, true); }
@@ -5041,7 +5469,7 @@ function treeOptions(){
     const d=document.createElement('div');
     d.textContent=`${t.id}  (${t.focuses.length})` + `  · ${t.source}`;
     d.className = i===current?'on':'';
-    d.onclick=()=>{ current=i; resetView(); renderAll(); };
+    d.onclick=()=>{ current=i; treePicked=true; resetView(); renderAll(); };
     treeList.appendChild(d);
   });
 }
@@ -5123,6 +5551,8 @@ function onNodeClick(id){
     linkSrc = null; return;
   }
   selId = id; renderTree(); showPanel();
+  if(typeof nodePicked !== 'undefined') nodePicked = true;
+  if(typeof renderStepBar === 'function') renderStepBar();
 }
 async function addPrereq(src, dst){
   const t = curTree(); const f = nodeById(t, dst); if(!f) return;
@@ -5232,6 +5662,7 @@ async function showPanel(){
     <div style="font-size:14px;color:#ffd479;margin-bottom:6px">${escapeHtml(f.name||f.id)}</div>
     <div class="k">ID：<span class="v">${escapeHtml(f.id)}</span></div>
     <div class="k">文件：<span class="v">${escapeHtml(f.file)}</span></div>
+    <div class="src-hint" id="pnSrc"></div>
     <div class="k">原始坐标（相对定位时为偏移）</div>
     <div>X <input type="number" step="0.5" id="edX" value="${xv??''}"> Y <input type="number" step="0.5" id="edY" value="${yv??''}"></div>
     <div class="k">前置：每组 OR，组内 + 表示 AND</div>
@@ -5279,7 +5710,6 @@ async function showPanel(){
     <input type="text" id="edNameJ" value="">
     <textarea id="edDescJ"></textarea>
     <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
-      <button class="btn" id="btnSave">保存此节点</button>
       <button class="btn" id="btnCopy">⧉ 复制分支</button>
       <button class="btn" id="btnLoc">保存名称/描述</button>
       <button class="btn" id="btnReset">还原</button>
@@ -5287,7 +5717,11 @@ async function showPanel(){
     </div>`;
   panel.classList.add('show');
   translateDom(panel);
-  document.getElementById('btnSave').onclick = ()=>saveNode(f);
+  // v1.24.2：这条节点从哪层来、保存会写到哪——打开时就问，不等保存时才知道
+  fillSrcHint('pnSrc', rootOf(t), f.file, t.source);
+  // 面板里的改动是实时进 dirty 的，保存统一走顶部「保存 (N)」；按钮已移除
+  const _btnSave = document.getElementById('btnSave');
+  if(_btnSave) _btnSave.onclick = ()=>saveNode(f);
   document.getElementById('btnCopy').onclick = ()=>copyBranch(f);
   document.getElementById('quickIdea').onclick = ()=>openContent('idea');
   document.getElementById('quickEquip').onclick = ()=>openContent('equip');
@@ -5482,12 +5916,12 @@ async function postSave(f, fields){
     body: JSON.stringify({root: rootOf(t), file: f.file, id: f.id, fields})});
   const j = await r.json();
   if(j.ok){ dirty.delete(f.id); await loadData(); }
-  else status('保存失败：' + j.msg, true);
+  else { showError(j); status('保存失败：' + j.msg, true); }
   return j.ok;
 }
 async function saveAll(){
   if(!dirty.size){ status('没有未保存的改动'); return; }
-  const t = curTree(); let ok=0;
+  const t = curTree(); let ok=0, bad=0, firstFail=null, adoptedTo='';
   for(const [id,d] of [...dirty.entries()]){
     const f = nodeById(t,id); if(!f) continue;
     const fields = {};
@@ -5497,9 +5931,17 @@ async function saveAll(){
     if(!Object.keys(fields).length) continue;
     const r = await fetch('/api/save', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({root: rootOf(t), file:f.file, id:f.id, fields})});
-    const j = await r.json(); if(j.ok) ok++;
+    const j = await r.json();
+    if(j.ok){ ok++; if(j.adopted_to) adoptedTo = j.adopted_to; }
+    else { bad++; if(!firstFail) firstFail = j; }
   }
-  status(`已保存 ${ok} 个节点`); await loadData();
+  if(firstFail) showError(firstFail);
+  // v1.24.1：后端若因为「写到了只读层」自动接管，把复制到的目标一起说出来
+  const _adopt = (typeof adoptedTo === 'string' && adoptedTo) ? ('（文件已复制到 ' + adoptedTo + '，原层未改动）') : '';
+  status(bad ? ('已保存 ' + ok + ' 个，' + bad + ' 个失败')
+             : ('已保存 ' + ok + ' 个节点' + _adopt), !!bad);
+  if(!bad) savedOnce = true;
+  await loadData();
 }
 async function delNode(f){
   if(!confirm('确定删除焦点 ' + f.id + ' ？（会写回文件，可在 .bak 恢复）')) return;
@@ -5507,6 +5949,7 @@ async function delNode(f){
   const r = await fetch('/api/delete_focus', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({root: rootOf(t), file: f.file, id: f.id})});
   const j = await r.json();
+  if(!j.ok) showError(j);
   status(j.ok ? ('已删除 ' + f.id) : ('删除失败：' + j.msg), !j.ok);
   if(j.ok) await loadData();
 }
@@ -5519,6 +5962,7 @@ async function addNode(){
   const r = await fetch('/api/add_focus', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({root: rootOf(t), file: t.file, tree: t.id, id, x, y, cost: 5})});
   const j = await r.json();
+  if(!j.ok) showError(j);
   status(j.ok ? ('已新建 ' + id) : ('新建失败：' + j.msg), !j.ok);
   if(j.ok) await loadData();
 }
@@ -5581,7 +6025,34 @@ function renderStats(){
     `<div>悬空前置：<span class="${a.missing.length?'warn':'ok'}">${a.missing.length}</span></div>` +
     `<div>未保存改动：<span class="${dirty.size?'warn':'ok'}">${dirty.size}</span></div>` +
     (linkMode ? `<div class="warn">连线模式：${linkMode==='prereq'?'前置':'互斥'}（点两个节点）</div>` : '');
+  updateSaveBtn();
+  if(typeof renderStepBar === 'function') renderStepBar();
 }
+
+/* v1.24.0 统一保存：按钮上直接显示有几处没存，0 时变灰 */
+function updateSaveBtn(){
+  const b = document.getElementById('saveAll');
+  if(!b) return;
+  const n = (typeof dirty !== 'undefined' && dirty) ? dirty.size : 0;
+  b.textContent = n ? ('💾 保存 (' + n + ')') : '💾 保存';
+  b.disabled = !n;
+  b.style.opacity = n ? '' : '.5';
+  b.style.cursor = n ? '' : 'default';
+  b.title = n ? ('保存 ' + n + ' 处改动（Ctrl+S）') : '没有未保存的改动';
+}
+
+/* v1.24.0 有未保存改动时，关页面/刷新先拦一下（浏览器不给自定义文案，只弹通用确认） */
+window.addEventListener('resize', function(){
+  if(typeof renderStepBar === 'function') renderStepBar();
+});
+
+window.addEventListener('beforeunload', function(ev){
+  if(typeof dirty !== 'undefined' && dirty && dirty.size){
+    ev.preventDefault();
+    ev.returnValue = '';
+    return '';
+  }
+});
 function fitView(){
   const t = curTree(); if(!t || !t.focuses.length){ view={x:0,y:0,k:1}; applyView(); return; }
   let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
@@ -5624,9 +6095,7 @@ function renderIdeaList(q){
   const items = (DATA.ideas||[]).filter(i=>!q || i.id.toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q));
   box.innerHTML = '';
   items.slice(0,600).forEach(i=>{
-    const d = document.createElement('div');
-    d.textContent = i.id + '  ' + (i.name||'');
-    d.title = i.file;
+    const d = listRow(i.id, i.name, i.source, i.file);
     d.onclick = ()=>selectIdea(i);
     box.appendChild(d);
   });
@@ -5642,6 +6111,7 @@ async function fetchRaw(kind, id){
 async function selectIdea(i){
   ideaSel = i;
   document.getElementById('ideaTitle').textContent = i.id + '   (' + i.file + ')';
+  fillSrcHint('ideaSrc', _lastRoot(), i.file, i.source);
   document.getElementById('ideaNameZ').value = i.name||'';
   document.getElementById('ideaDescZ').value = i.desc||'';
   document.getElementById('ideaPic').value = i.picture||'';
@@ -6012,8 +6482,8 @@ document.getElementById('wayNew').onclick = ()=>{ setFlow('new'); dismissWelcome
 document.getElementById('wayWorld').onclick = ()=>{ setFlow('world'); dismissWelcome(); openWorldGen(); };
 document.getElementById('welcomePath').onclick = loadModPath;
 document.getElementById('welcomeBtn').onclick = openWelcome;
-document.getElementById('guideBtn').onclick = openGuide;
-document.getElementById('gbClose').onclick = ()=>{ localStorage.setItem('guideHidden', '1'); document.getElementById('guideBox').classList.remove('show'); };
+// v1.24.2：「❓ 打开引导」按钮换成侧栏两个勾选框（bindGuideToggles），openGuide 保留给别处用
+document.getElementById('gbClose').onclick = ()=>{ localStorage.setItem('guideHidden', '1'); document.getElementById('guideBox').classList.remove('show'); if(typeof syncGuideToggle === 'function') syncGuideToggle(); };
 // 引导面板里的按钮是动态生成的，用事件委托接
 document.getElementById('gbBody').onclick = function(e){
   const b = e.target.closest('.gb-btn[data-act]');
@@ -6276,7 +6746,7 @@ function initNarrowMore(){
   const menu = document.getElementById('tbMoreMenu');
   if(!btn || !menu) return;
   const move = [
-    ['💾 保存全部', 'btnSaveAll'],
+    ['💾 保存', 'btnSaveAll'],
     ['📤 导出覆盖包', 'btnExport'],
     ['🩺 体检', 'btnLint'],
     ['🕘 备份', 'btnBackup'],
@@ -6301,7 +6771,7 @@ function initNarrowMore(){
     item.onclick = ()=>{
       menu.classList.remove('show');
       const map = {
-        '💾 保存全部': 'saveAll', '📤 导出覆盖包': 'exportBtn', '🩺 体检': 'lintEntry',
+        '💾 保存': 'saveAll', '📤 导出覆盖包': 'exportBtn', '🩺 体检': 'lintEntry',
         '🕘 备份': 'backupBtn', '📖 内容库': 'contentBtn', '❓ 教程': 'helpBtn'
       };
       const id = map[item.dataset.label];
@@ -12738,6 +13208,9 @@ function renderStateList(q){
     '<div class="cm-row' + (String(x.id) === String(stateSel) ? ' on' : '') + '" data-sid="' + x.id + '">' +
       '<b>' + x.id + ' ' + escapeHtml(x.name || x.raw_name || '') + '</b>' +
       '<span class="cm-meta">' + escapeHtml(x.owner || '—') + ' · 人' + (x.manpower || '0') + '</span>' +
+      // v1.24.2 来源标签：平时隐藏，hover/选中才出现——三个信息一直占位太挤
+      '<span class="lr-src st-src" title="来自 ' + escapeHtml(x.source || '?') +
+        '：' + escapeHtml(x.file || '') + '">' + escapeHtml(x.source || '?') + '</span>' +
     '</div>').join('') + (hits.length > shown.length ?
       '<div class="cm-empty">…另有 ' + (hits.length - shown.length) + ' 个，输入关键词缩小范围</div>' : '');
   box.querySelectorAll('[data-sid]').forEach(el=>{
@@ -12759,40 +13232,19 @@ async function selectState(id, full){
 
 function renderStateBody(d){
   const body = document.getElementById('stateBody');
+  const side = document.getElementById('stateSide');
   const cell = (k, v) => '<div class="cm-cell"><i>' + k + '</i><b>' +
     escapeHtml(v == null || v === '' ? '——' : String(v)) + '</b></div>';
   const ownerOpts = ['<option value="">（不改）</option>'].concat(
     d.owners.map(t=>'<option value="' + t + '">' + t + (LOC_NAME(t) ? ' · ' + escapeHtml(LOC_NAME(t)) : '') + '</option>')).join('');
 
+  /* 中栏 = 主体：建筑 / 资源 / 省份 */
   let html = '<div class="cm-title"><h3>' + d.id + ' ' + escapeHtml(d.name || d.raw_name || '') + '</h3>' +
     '<code>' + escapeHtml(d.file || '') + '</code>' +
+    '<div class="src-hint" id="stSrc"></div>' +
     (d.writable ? '' : '<span class="cm-sub" style="font-size:11px;color:var(--warn)">只读来源</span>') + '</div>';
-
-  html += '<div class="cm-grid">' +
-    cell('所属国家', (d.owner || '') + (d.owner_name ? ' · ' + d.owner_name : '')) +
-    cell('核心数', d.cores.length) +
-    cell('人力', d.manpower) +
-    cell('州类别', d.category) +
-    cell('省份数', d.province_count) +
-    cell('胜利点', d.victory_points.length) +
-    cell('建筑合计', Object.values(d.buildings).reduce((a, b)=>a + b, 0)) +
-    cell('历史日期', d.history_date) +
-    '</div>';
-
-  html += '<div class="cm-sec">编辑<span>只改填写的字段，注释与省份子块原样保留</span></div>' +
-    '<div class="st-grid">' +
-      '<label>owner<select id="stOwner">' + ownerOpts + '</select></label>' +
-      '<label>人力<input type="number" id="stManpower" value="' + escapeHtml(d.manpower || '') + '"></label>' +
-      '<label>州类别<select id="stCategory"><option value="">（不改）</option>' +
-        d.categories.map(c=>'<option value="' + c + '">' + c + '</option>').join('') + '</select></label>' +
-      '<label>核心（逗号或换行分隔）<textarea id="stCores" style="height:56px">' +
-        escapeHtml(d.cores.join(', ')) + '</textarea></label>' +
-    '</div>' +
-    stateBuildingsHtml(d) +
-    stateResourcesHtml(d) +
-    '<div style="display:flex;gap:8px;margin:8px 0 6px"><button class="btn primary" id="stSave">写入州文件</button>' +
-      '<button class="btn" id="stReload">重新读取</button></div>' +
-    '<div id="stDiff" class="hist-diff" style="display:none"></div>';
+  html += stateBuildingsHtml(d);
+  html += stateResourcesHtml(d);
 
   const vpMap = {};
   (d.victory_points || []).forEach(v=>{ vpMap[v[0]] = v[1]; });
@@ -12817,7 +13269,33 @@ function renderStateBody(d){
         ' 个省 <button class="btn" id="stShowAll" style="margin-left:6px">显示全部</button></div>' : '');
   }
 
+  /* 右栏 = 属性与操作 */
+  let sideHtml = '<div class="cm-sec">属性<span>从文件读出来的当前值</span></div>' +
+    '<div class="cm-grid">' +
+      cell('所属国家', (d.owner || '') + (d.owner_name ? ' · ' + d.owner_name : '')) +
+      cell('核心数', d.cores.length) +
+      cell('人力', d.manpower) +
+      cell('州类别', d.category) +
+      cell('省份数', d.province_count) +
+      cell('胜利点', d.victory_points.length) +
+      cell('建筑合计', Object.values(d.buildings).reduce((a, b)=>a + b, 0)) +
+      cell('历史日期', d.history_date) +
+    '</div>' +
+    '<div class="cm-sec">编辑<span>只改填写的字段，注释与省份子块原样保留</span></div>' +
+    '<div class="st-grid">' +
+      '<label>owner<select id="stOwner">' + ownerOpts + '</select></label>' +
+      '<label>人力<input type="number" id="stManpower" value="' + escapeHtml(d.manpower || '') + '"></label>' +
+      '<label>州类别<select id="stCategory"><option value="">（不改）</option>' +
+        d.categories.map(c=>'<option value="' + c + '">' + c + '</option>').join('') + '</select></label>' +
+      '<label>核心（逗号或换行分隔）<textarea id="stCores" style="height:56px">' +
+        escapeHtml(d.cores.join(', ')) + '</textarea></label>' +
+    '</div>' +
+    '<div class="dp-acts"><button class="btn primary" id="stSave">保存</button>' +
+      '<button class="btn" id="stReload">重新读取</button></div>' +
+    '<div id="stDiff" class="hist-diff" style="display:none"></div>';
+
   body.innerHTML = html;
+  if(side) side.innerHTML = sideHtml;
   document.getElementById('stOwner').value = d.owner || '';
   document.getElementById('stCategory').value = d.category || '';
   const showAll = document.getElementById('stShowAll');
@@ -12825,6 +13303,8 @@ function renderStateBody(d){
   document.getElementById('stSave').onclick = ()=>saveState(d);
   document.getElementById('stReload').onclick = ()=>selectState(d.id);
   bindStateBuildingUI(d);
+  // v1.24.2：州文件从哪层来、保存会写到哪
+  fillSrcHint('stSrc', d.root, d.file, d.source);
 }
 
 /* ---------- v1.23.48 开局建筑 / 战略资源（面板） ---------- */
