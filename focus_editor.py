@@ -1005,7 +1005,7 @@ def load_countries(root):
     for path in tag_files:
         fn = os.path.basename(path)
         rel = os.path.join("common", "country_tags", fn)
-        for m in re.finditer(r'(?m)^\s*([A-Z0-9]{2,4})\s*=\s*"([^"]+)"', _read_text(path)):
+        for m in re.finditer(r'(?m)^\s*([A-Z0-9_]{2,8})\s*=\s*"([^"]+)"', _read_text(path)):
             tag, defrel = m.group(1), m.group(2)
             cur = COUNTRIES.get(tag)
             if not _prefer(cur, root):
@@ -1067,7 +1067,7 @@ def load_countries(root):
             _hist_pairs.append((_b, _d, _f))
     for _hb, d, fn in _hist_pairs:
         if True:
-            m = re.match(r'([A-Z0-9]{2,4})\s*-\s*(.+)\.txt$', fn, re.I)
+            m = re.match(r'([A-Z0-9_]{2,8})\s*-\s*(.+)\.txt$', fn, re.I)
             tag = m.group(1).upper() if m else fn[:-4].strip().upper()[:4]
             text = _read_text(os.path.join(d, fn))
             cur = COUNTRIES.get(tag)
@@ -1187,7 +1187,7 @@ def _state_owner_effective(body, hb, he, dep, start=None):
             epos = brace_match(body, bpos)
             if epos <= bpos:
                 continue
-            dm = re.search(r'(?m)^[ \t]*owner\s*=\s*([A-Z0-9]{2,4})', body[bpos + 1:epos - 1])
+            dm = re.search(r'(?m)^[ \t]*owner\s*=\s*([A-Z0-9_]{2,8})', body[bpos + 1:epos - 1])
             if dm:
                 dated.append((int(m.group(1)), int(m.group(2)), int(m.group(3)), dm.group(1).strip()))
         dated.sort()
@@ -1196,13 +1196,13 @@ def _state_owner_effective(body, hb, he, dep, start=None):
         if eff:
             owner = eff[-1][3]
         if not owner:
-            for m in re.finditer(r'(?m)^[ \t]*owner\s*=\s*([A-Z0-9]{2,4})', body[hb:he]):
+            for m in re.finditer(r'(?m)^[ \t]*owner\s*=\s*([A-Z0-9_]{2,8})', body[hb:he]):
                 pos = hb + m.start()
                 if pos < len(dep) and dep[pos] == 1:
                     owner = m.group(1).strip()
                     break
     if not owner:
-        for m in re.finditer(r'(?m)^[ \t]*owner\s*=\s*([A-Z0-9]{2,4})', body):
+        for m in re.finditer(r'(?m)^[ \t]*owner\s*=\s*([A-Z0-9_]{2,8})', body):
             pos = m.start()
             if pos < len(dep) and dep[pos] == 0:
                 owner = m.group(1).strip()
@@ -1262,7 +1262,7 @@ def load_states(root):
             owner = _state_owner_effective(body, hb, he, dep, _start)
 
             cores = []
-            for m in re.finditer(r'(?m)^[ \t]*add_core_of\s*=\s*([A-Z0-9]{2,4})', body):
+            for m in re.finditer(r'(?m)^[ \t]*add_core_of\s*=\s*([A-Z0-9_]{2,8})', body):
                 pos = m.start()
                 if pos < len(dep) and dep[pos] in (0, 1, 2):
                     cores.append(m.group(1))
@@ -1330,7 +1330,104 @@ STATE_CATEGORIES = ("wasteland", "enclave", "tiny_island", "small_island", "past
                     "metropolis", "megalopolis")
 STATE_BUILDINGS = ("infrastructure", "arms_factory", "industrial_complex", "dockyard",
                    "air_base", "anti_air_building", "radar_station", "synthetic_refinery",
-                   "fuel_silo", "rocket_site", "nuclear_reactor")
+                   "fuel_silo", "rocket_site", "nuclear_reactor", "naval_base",
+                   "naval_supply_hub")
+
+# 州级建筑面板用：内部名 → 显示名 / 上限 / 是否只能建在沿海州。
+# 上限取自原版 common/buildings 的 max_level（基础设施原版 5，这里按任务书放宽到 100，
+# 因为不少 mod 会改 max_level；写超了游戏侧会自己截断，但面板要先拦住手滑）。
+STATE_BUILDING_META = (
+    ("infrastructure",     "基础设施",     100, False),
+    ("industrial_complex", "民用工厂",      20, False),
+    ("arms_factory",       "军工厂",        20, False),
+    ("dockyard",           "船坞",          10, True),
+    ("naval_base",         "海军基地",      10, True),
+    ("air_base",           "空军基地",      10, False),
+    ("anti_air_building",  "防空炮",         5, False),
+    ("radar_station",      "雷达站",         5, False),
+    ("naval_supply_hub",   "海军补给中心",    3, True),
+    ("fuel_silo",          "燃料仓",         3, False),
+    ("synthetic_refinery", "合成炼油厂",      3, False),
+)
+
+# 省级建筑（写在 buildings = { 省号 = { ... } } 里）
+PROV_BUILDING_META = (
+    ("bunker",         "陆上要塞", 10),
+    ("coastal_bunker", "海岸要塞", 10),
+    ("naval_facility", "海军设施",  3),
+    ("land_facility",  "陆军设施",  3),
+    ("air_facility",   "空军设施",  3),
+)
+
+RESOURCE_META = (
+    ("oil",       "石油", "原版常见 0–60"),
+    ("rubber",    "橡胶", "原版常见 0–40"),
+    ("steel",     "钢铁", "原版常见 0–80"),
+    ("aluminium", "铝",   "原版常见 0–60"),
+    ("tungsten",  "钨",   "原版常见 0–40"),
+    ("chromium",  "铬",   "原版常见 0–40"),
+)
+
+_COASTAL_CACHE = {"key": None, "set": set()}
+
+
+# 附庸自治度：内部名 → 中文名。名字与 common/autonomous_states/*.txt 对得上，
+# 顺序按「从最松到最紧」排，下拉里看着顺。
+AUTONOMY_STATES = (
+    ("autonomy_colony",                 "殖民地"),
+    ("autonomy_dominion",               "自治领"),
+    ("autonomy_associated_dominion",    "联系自治领"),
+    ("autonomy_satellite",              "卫星国"),
+    ("autonomy_puppet",                 "傀儡国"),
+    ("autonomy_integrated_puppet",      "整合傀儡"),
+    ("autonomy_personal_union",         "共主邦联"),
+    ("autonomy_supervised_state",       "受监管国"),
+    ("autonomy_collaboration_government", "合作政府"),
+    ("autonomy_reichskommissariat",     "帝国专员辖区"),
+    ("autonomy_reichsprotectorate",     "帝国保护国"),
+)
+
+
+def _coastal_provinces():
+    """definition.csv 第 6 列 = coastal（true/false）。按 mtime 缓存。
+
+    注意要走 `_layers_find` 拿源文件；`_map_dir` 给的是缓存目录，里面只有 png。
+    """
+    root = _map_pick(None)
+    layers = mod_layers(root) if root else []
+    p, _base = (_layers_find("map/definition.csv", layers) if layers else (None, None))
+    if not p and GAME:
+        p = os.path.join(GAME, "map", "definition.csv")
+    if not p or not os.path.exists(p):
+        return set()
+    try:
+        stamp = (p, int(os.path.getmtime(p)), os.path.getsize(p))
+    except Exception:
+        stamp = (p, 0, 0)
+    if _COASTAL_CACHE.get("key") == stamp:
+        return _COASTAL_CACHE["set"]
+    out = set()
+    try:
+        for ln in io.open(p, encoding="utf-8", errors="replace"):
+            f = ln.strip().split(";")
+            if len(f) >= 6 and f[5].strip().lower() == "true":
+                try:
+                    out.add(int(f[0]))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    _COASTAL_CACHE["key"] = stamp
+    _COASTAL_CACHE["set"] = out
+    return out
+
+
+def state_is_coastal(s):
+    """州里只要有一个沿海省，就能造海军基地/船坞。"""
+    coastal = _coastal_provinces()
+    if not coastal:
+        return None                      # 拿不到定义，不做限制
+    return any(int(p) in coastal for p in (s.get("provinces") or []))
 
 
 def states_payload():
@@ -1472,7 +1569,7 @@ def _set_resource(body, key, value):
 
     m = re.search(r'(?m)^[ \t]*resources\s*=\s*\{', body)
     if not m:
-        return body.rstrip() + "\n\tresources={\n\t\t%s=%d\n\t}\n" % (key, value)
+        return body.rstrip() + "\n\tresources = {\n\t\t%s = %d\n\t}\n" % (key, value)
     b = body.find("{", m.end() - 1)
     e = brace_match(body, b)
     if e <= b:
@@ -1480,22 +1577,50 @@ def _set_resource(body, key, value):
     inner = body[b + 1:e - 1]
     pat = re.compile(r'(?m)^([ \t]*)' + re.escape(key) + r'\s*=\s*\d+')
     if pat.search(inner):
-        inner2 = pat.sub(lambda mm: (mm.group(1) or "\t\t") + "%s=%d" % (key, value), inner, count=1)
+        inner2 = pat.sub(lambda mm: (mm.group(1) or "\t\t") + "%s = %d" % (key, value), inner, count=1)
     else:
-        inner2 = "\n\t\t%s=%d" % (key, value) + inner.rstrip("\r\n") + "\n\t"
+        # 追加到已有内容后面（顺序跟原版一致：先写先出）
+        inner2 = inner.rstrip() + "\n\t\t%s = %d\n\t" % (key, value)
     return body[:b + 1] + inner2 + body[e - 1:]
 
 
 def _set_building(body, key, value):
     m = re.search(r'(?m)^[ \t]*buildings\s*=\s*\{', body)
     if not m:
-        return body.rstrip() + "\n\t\tbuildings = {\n\t\t\t%s = %d\n\t\t}\n" % (key, value)
+        if value <= 0:
+            return body
+        # 没有 buildings 块时必须建在 history 里面。
+        # 原版 100% 都是 history={ ... buildings={...} ... }；写在 state 顶层
+        # 游戏读不到（不报错，就是当没有），表现为「保存成功但进游戏没建筑」。
+        block = "buildings = {\n\t\t\t%s = %d\n\t\t}" % (key, value)
+        hist = _state_history_range(body)
+        if hist:
+            pos = _insert_pos(body, hist[0], hist[1])
+            return body[:pos] + "\n\t\t" + block + body[pos:]
+        return body.rstrip() + "\n\thistory = {\n\t\t" + block + "\n\t}\n"
     b = body.find('{', m.end() - 1)
     e = brace_match(body, b)
     inner = body[b + 1:e - 1]
-    pat = re.compile(r'(?m)^([ \t]*)%s\s*=\s*\d+' % re.escape(key))
-    if pat.search(inner):
-        inner2 = pat.sub(lambda mm: (mm.group(1) or "\t") + "%s = %d" % (key, value), inner, count=1)
+    pat = re.compile(r'(?m)^[ \t]*%s\s*=\s*\d+[ \t]*\r?\n?' % re.escape(key))
+    if value <= 0:
+        # 0 = 删掉这一行（原版不写 0；留着 0 只会把文件越改越脏）
+        inner2 = pat.sub("", inner)
+        if inner2 == inner:
+            return body
+        if not inner2.strip():
+            st = m.start()
+            while st > 0 and body[st - 1] in " \t":
+                st -= 1
+            if st > 0 and body[st - 1] == "\n":
+                st -= 1
+            en = e
+            while en < len(body) and body[en] in "\r\n":
+                en += 1
+            return body[:st] + "\n" + body[en:]
+        return body[:b + 1] + inner2 + body[e - 1:]
+    pat2 = re.compile(r'(?m)^([ \t]*)%s\s*=\s*\d+' % re.escape(key))
+    if pat2.search(inner):
+        inner2 = pat2.sub(lambda mm: (mm.group(1) or "\t") + "%s = %d" % (key, value), inner, count=1)
     else:
         inner2 = "\n\t\t\t%s = %d\n" % (key, value) + inner.lstrip("\r\n")
     return body[:b + 1] + inner2 + body[e - 1:]
@@ -1701,12 +1826,18 @@ def state_detail(sid, full=False):
         "province_buildings": s.get("province_buildings", {}),
         "victory_points": s.get("victory_points", [])[:20],
         "categories": list(STATE_CATEGORIES),
-        "building_keys": list(STATE_BUILDINGS),
+        "building_keys": [k for k in STATE_BUILDINGS],
+        "building_meta": [{"key": k, "label": l, "max": m, "coastal": bool(c)}
+                          for k, l, m, c in STATE_BUILDING_META],
+        "prov_building_meta": [{"key": k, "label": l, "max": m}
+                               for k, l, m in PROV_BUILDING_META],
+        "resource_meta": [{"key": k, "label": l, "hint": h} for k, l, h in RESOURCE_META],
+        "coastal": state_is_coastal(s),
         "owners": sorted(COUNTRIES.keys()),
     }
 
 
-def state_save(sid, fields):
+def state_save(sid, fields, reload=True):
     try:
         sid = int(sid)
     except Exception:
@@ -1781,6 +1912,19 @@ def state_save(sid, fields):
             continue
         if iv >= 0:
             blds[k] = iv
+    # 上限 / 沿海校验：写进游戏也会被截断或直接不生效，不如在这里说清楚
+    _bmeta = {k: (l, cap, sea) for k, l, cap, sea in STATE_BUILDING_META}
+    _coastal = state_is_coastal(s)
+    for k, v in blds.items():
+        if k not in _bmeta:
+            continue
+        _label, _cap, _need_sea = _bmeta[k]
+        if v > _cap:
+            return {"ok": False, "msg": "%s 最多 %d 级，你填了 %d" % (_label, _cap, v)}
+        if _need_sea and v > 0 and _coastal is False:
+            return {"ok": False,
+                    "msg": "州 %d「%s」没有海岸线，%s 建不了（改填 0 或换个沿海州）"
+                           % (sid, LOC.get(s.get("name", ""), s.get("name", "")), _label)}
     res = {}
     for k, v in (fields.get("resources") or {}).items():
         if k not in STATE_RESOURCES:
@@ -1848,15 +1992,22 @@ def state_save(sid, fields):
         v = blds[k]
         if old_blds.get(k, None) == v:
             continue
+        if v == 0 and not old_blds.get(k):
+            continue          # 本来就没有这一项，写 0 没意义（预设会把未列出的都填 0）
         body = _set_building(body, k, v)
         diff.append({"key": "b_" + k, "label": "建筑 " + k,
                      "old": str(old_blds.get(k, "")), "new": str(v)})
 
     old_res = (s.get("resources") or {})
-    for k in sorted(set(list(res.keys()) + list(old_res.keys()))):
-        v = res.get(k, 0)
+    # 只处理「显式给出的键」。以前用的是 res ∪ old_res 的并集，
+    # 于是没传的键会被当成 0 删掉 —— 面板上只改建筑、资源留空时，
+    # 保存一次就把这个州原有的资源全清空了。
+    for k in sorted(res.keys()):
+        v = res[k]
         if old_res.get(k, 0) == v:
             continue
+        if v == 0 and not old_res.get(k):
+            continue          # 本来没有，写 0 等于什么都没做
         body = _set_resource(body, k, v)
         diff.append({"key": "res_" + k, "label": "资源 " + k,
                      "old": str(old_res.get(k, "")), "new": str(v)})
@@ -1899,10 +2050,66 @@ def state_save(sid, fields):
     new_text = text[:b + 1] + body + text[e - 1:]
     snapshot(p)
     _write_bom_text(p, new_text, has_bom)
+    if not reload:
+        return {"ok": True, "msg": "已写入 " + rel, "diff": diff}
     refresh_start_date(ROOTS)
     reload_data()
     link_countries()
     return {"ok": True, "msg": "已写入 " + rel, "diff": diff}
+
+
+def state_apply_buildings(sids, buildings=None, resources=None, only_empty=False):
+    """把一整套建筑/资源套用到多个州。
+
+    only_empty=True 时只填当前为 0 的项（不覆盖已有值），适合「给一片州铺基础设施」。
+    每州写一次文件，最后统一 reload 一次（逐个 reload 会把几十秒全花在解析上）。
+    """
+    if not sids:
+        return {"ok": False, "msg": "没有选中任何州"}
+    buildings = dict(buildings or {})
+    resources = dict(resources or {})
+    if not buildings and not resources:
+        return {"ok": False, "msg": "没有要套用的数值"}
+    done, skipped, failed = [], [], []
+    base_res = dict(resources)
+    for raw in sids:
+        try:
+            sid = int(raw)
+        except Exception:
+            failed.append({"id": raw, "msg": "州 id 不是数字"})
+            continue
+        s = STATES.get(sid)
+        if not s:
+            failed.append({"id": sid, "msg": "没有这个州"})
+            continue
+        use_b = dict(buildings)
+        use_r = dict(base_res)
+        if only_empty:
+            old = s.get("buildings") or {}
+            oldr = s.get("resources") or {}
+            use_b = {k: v for k, v in use_b.items() if int(old.get(k, 0) or 0) == 0}
+            use_r = {k: v for k, v in use_r.items() if int(oldr.get(k, 0) or 0) == 0}
+        if not use_b and not use_r:
+            skipped.append(sid)
+            continue
+        r = state_save(sid, {"buildings": use_b, "resources": use_r}, reload=False)
+        if r.get("ok"):
+            done.append(sid)
+        else:
+            failed.append({"id": sid, "msg": r.get("msg", "写入失败")})
+    if done:
+        refresh_start_date(ROOTS)
+        reload_data()
+        link_countries()
+    parts = []
+    if done:
+        parts.append("已套用到 %d 个州" % len(done))
+    if skipped:
+        parts.append("%d 个州本来就有值，跳过" % len(skipped))
+    if failed:
+        parts.append("%d 个州失败（%s）" % (len(failed), failed[0]["msg"]))
+    return {"ok": bool(done) or not failed, "done": done, "skipped": skipped,
+            "failed": failed, "msg": "；".join(parts) or "没有改动"}
 
 
 def link_countries():
@@ -1918,7 +2125,7 @@ def link_countries():
             if t in COUNTRIES and sid not in COUNTRIES[t]["states_core"]:
                 COUNTRIES[t]["states_core"].append(sid)
     for tid, t in TREES.items():
-        tags = re.findall(r'tag\s*=\s*([A-Z0-9]{2,4})', t.get("country_raw") or "")
+        tags = re.findall(r'tag\s*=\s*([A-Z0-9_]{2,8})', t.get("country_raw") or "")
         t["country_tags"] = sorted(set(tags))
         for tag in t["country_tags"]:
             if tag in COUNTRIES and tid not in COUNTRIES[tag]["focus_trees"]:
@@ -2124,7 +2331,7 @@ def _hist_opinions(text):
         if e <= b:
             continue
         body = text[b + 1:e - 1]
-        t = _first(body, r'(?m)^[ \t]*target\s*=\s*([A-Z0-9]{2,4})')
+        t = _first(body, r'(?m)^[ \t]*target\s*=\s*([A-Z0-9_]{2,8})')
         v = _first(body, r'(?m)^[ \t]*(?:value|opinion)\s*=\s*(-?\d+)')
         if t:
             out.append([t, int(v or 0)])
@@ -2537,6 +2744,384 @@ def country_history_save(tag, fields):
     reload_data()
     link_countries()
     return {"ok": True, "msg": "已写入 " + (c.get("history_file") or tag), "diff": diff, "warnings": warnings}
+
+
+# ---------- v1.23.48 附庸 / 外交状态 ----------
+_DIPLO_INDEX = {"key": None, "idx": {}}
+
+
+def _diplo_autonomy_blocks(text):
+    """拆出文件里所有 set_autonomy = { target=... autonomous_state=... }"""
+    out = []
+    for m in re.finditer(r'(?m)^[ \t]*set_autonomy\s*=\s*\{', text):
+        b = text.find('{', m.end() - 1)
+        e = brace_match(text, b)
+        if e <= b:
+            continue
+        body = text[b + 1:e - 1]
+        mt = re.search(r'target\s*=\s*([A-Z0-9_]{2,8})', body)
+        ma = re.search(r'autonomous_state\s*=\s*(autonomy_[a-z_]+)', body)
+        if mt:
+            out.append({"target": mt.group(1),
+                        "autonomy": ma.group(1) if ma else "autonomy_puppet",
+                        "start": m.start(), "end": e})
+    return out
+
+
+def _diplo_index():
+    """谁是谁的附庸：{附庸: [(宗主, 自治度)]}。按 countries 目录 mtime 缓存。"""
+    key = []
+    for r in list(ROOTS) + ([GAME] if GAME else []):
+        d = os.path.join(r or "", "history", "countries")
+        if r and os.path.isdir(d):
+            key.append((os.path.abspath(d), _dir_mtime(d)))
+    key = tuple(key)
+    if _DIPLO_INDEX.get("key") == key:
+        return _DIPLO_INDEX["idx"]
+    idx = {}
+    for t, c in COUNTRIES.items():
+        root = c.get("root") or ""
+        rel = c.get("history_file") or ""
+        if not root or not rel:
+            continue
+        p = os.path.join(root, rel)
+        if not os.path.exists(p):
+            continue
+        try:
+            txt = strip_comments(io.open(p, encoding="utf-8", errors="replace").read())
+        except Exception:
+            continue
+        for blk in _diplo_autonomy_blocks(txt):
+            idx.setdefault(blk["target"], []).append((t, blk["autonomy"]))
+    _DIPLO_INDEX["key"] = key
+    _DIPLO_INDEX["idx"] = idx
+    return idx
+
+
+def _diplo_block_text(target, autonomy):
+    """照原版 DEN 的写法：DLC 在时按自治度，不在时降级成 puppet。"""
+    return ("\nif = {\n"
+            "\tlimit = { has_dlc = \"Together for Victory\" }\n"
+            "\tset_autonomy = {\n"
+            "\t\ttarget = %s\n"
+            "\t\tautonomous_state = %s\n"
+            "\t}\n"
+            "}\n"
+            "else = {\n"
+            "\tpuppet = %s\n"
+            "}\n") % (target, autonomy, target)
+
+
+def _diplo_drop_blocks(text, targets=None):
+    """删掉 set_autonomy 块；targets=None 表示全删。
+
+    只删 set_autonomy 会留下它配套的 `else = { puppet = TAG }`，
+    再写一遍就变成「同一个国家两块 puppet」，游戏里读哪个不好说。
+    所以顺带把配套的 else 和空掉的 if 壳一起清掉。
+    """
+    blocks = [b for b in _diplo_autonomy_blocks(text)
+              if targets is None or b["target"] in targets]
+    gone = set()
+    for blk in sorted(blocks, key=lambda x: -x["start"]):
+        st = text.rfind("\n", 0, blk["start"]) + 1
+        en = blk["end"]
+        while en < len(text) and text[en] in " \t\r\n":
+            en += 1
+        text = text[:st] + text[en:]
+        gone.add(blk["target"])
+    for tg in gone:
+        text = re.sub(r'(?m)^[ \t]*else\s*=\s*\{\s*\n?[ \t]*puppet\s*=\s*%s[ \t]*\n?[ \t]*\}[ \t]*\r?\n?'
+                      % re.escape(tg), "", text)
+    text = re.sub(r'(?m)^[ \t]*if\s*=\s*\{\s*\n?[ \t]*limit\s*=\s*\{[^{}]*\}[ \t]*\n?[ \t]*\}[ \t]*\r?\n?',
+                  "", text)
+    return text
+
+
+def _diplo_set_lines(text, key, values):
+    """整块替换单行键（give_guarantee / give_military_access）"""
+    pat = re.compile(r'(?m)^[ \t]*%s\s*=\s*[A-Z0-9_]{2,8}[ \t]*\r?\n?' % re.escape(key))
+    text = pat.sub("", text)
+    lines = "".join("\t%s = %s\n" % (key, v) for v in values)
+    if not lines:
+        return text
+    return text.rstrip() + "\n\n" + lines
+
+
+def _country_write_path(tag):
+    """国家历史文件的「可写副本」路径；原版来源会先复制到自己的 mod。"""
+    c, root, _p = _hist_path(tag)
+    if not c:
+        return None, "没有这个国家 tag：" + tag
+    rel = c.get("history_file") or ""
+    if not rel:
+        # 这个国家还没有历史文件（常见于 replace 了 history/countries 的 mod）。
+        # 给它新建一个只含外交关系的文件：合法，游戏会读。
+        base0 = ROOTS[-1] if ROOTS else root
+        if not base0:
+            return None, "%s 没有历史文件，也没有可写目录" % tag
+        target0, why0 = write_base(base0, "history/countries")
+        if not target0:
+            return None, why0 or "%s 没有历史文件，也建不出来" % tag
+        name = c.get("history_display") or tag
+        dst0 = os.path.join(target0, "history", "countries", "%s - %s.txt" % (tag, name))
+        if not os.path.exists(dst0):
+            try:
+                os.makedirs(os.path.dirname(dst0) or ".", exist_ok=True)
+                io.open(dst0, "w", encoding="utf-8", newline="\n").write("")
+            except Exception as e:
+                return None, "给 %s 建历史文件失败：%s" % (tag, str(e)[:60])
+        return dst0, why0
+    if not root:
+        return None, "%s 没有来源目录" % tag
+    base = ROOTS[-1] if ROOTS else root
+    single, why = ensure_file_writable(base, "history/countries", os.path.basename(rel))
+    if single:
+        if os.path.abspath(single) == os.path.abspath(os.path.join(root, rel)):
+            return single, ""
+        src = os.path.join(root, rel)
+        if os.path.exists(src) and not os.path.exists(single):
+            try:
+                os.makedirs(os.path.dirname(single) or ".", exist_ok=True)
+                import shutil as _sh
+                _sh.copyfile(src, single)
+            except Exception:
+                pass
+        return single, why
+    target, why2 = write_base(base, "history/countries")
+    if not target:
+        return None, why2 or why or "写不进去"
+    dst = os.path.join(target, os.path.basename(rel))
+    src = os.path.join(root, rel)
+    if os.path.exists(src) and not os.path.exists(dst):
+        try:
+            os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+            import shutil as _sh2
+            _sh2.copyfile(src, dst)
+        except Exception:
+            pass
+    return dst, why2
+
+
+def _diplo_chain(tag, idx=None):
+    """往上追宗主链，用来防环（A 是 B 的附庸、B 又是 A 的附庸）"""
+    idx = idx if idx is not None else _diplo_index()
+    out, cur, guard = [], tag, 0
+    while guard < 8:
+        guard += 1
+        ups = idx.get(cur) or []
+        if not ups:
+            break
+        cur = ups[0][0]
+        if cur in out or cur == tag:
+            return out, True
+        out.append(cur)
+    return out, False
+
+
+def diplomacy_get(tag):
+    tag = (tag or "").strip().upper()
+    if not tag:
+        # 没指定就给「本 mod 里第一个有自己历史文件的国家」——通常是主角国家
+        for t2 in sorted(COUNTRIES):
+            c2 = COUNTRIES.get(t2) or {}
+            r2 = c2.get("root") or ""
+            if c2.get("history_file") and r2 and not is_under_game(r2):
+                tag = t2
+                break
+    c, root, p = _hist_path(tag)
+    if not c:
+        return {"ok": False, "msg": "没有这个国家 tag：" + tag}
+    text = ""
+    if p and os.path.exists(p):
+        text, _ = _read_bom_text(p)
+    body = strip_comments(text)
+    puppets = [{"tag": b["target"], "autonomy": b["autonomy"],
+                "label": dict(AUTONOMY_STATES).get(b["autonomy"], b["autonomy"])}
+               for b in _diplo_autonomy_blocks(body)]
+    guar = re.findall(r'(?m)^[ \t]*give_guarantee\s*=\s*([A-Z0-9_]{2,8})', body)
+    access = re.findall(r'(?m)^[ \t]*give_military_access\s*=\s*([A-Z0-9_]{2,8})', body)
+    idx = _diplo_index()
+    overlords = [{"tag": o, "autonomy": a,
+                  "label": dict(AUTONOMY_STATES).get(a, a)}
+                 for o, a in idx.get(tag, [])]
+    tags = []
+    default = ""
+    for t2 in sorted(COUNTRIES):
+        c2 = COUNTRIES.get(t2) or {}
+        r2 = c2.get("root") or ""
+        own = bool(c2.get("history_file")) and bool(r2) and not is_under_game(r2)
+        tags.append({"tag": t2, "name": LOC.get(t2, "") or t2, "own": own})
+        if own and not default:
+            default = t2
+    tags.sort(key=lambda x: (not x["own"], x["tag"]))
+    return {"ok": True, "tag": tag, "name": LOC.get(tag, "") or tag,
+            "default": default or tag, "own": bool(root) and not is_under_game(root),
+            "file": c.get("history_file", ""),
+            "writable": bool(root) and not is_under_game(root),
+            "puppets": puppets, "overlords": overlords,
+            "guarantees": sorted(set(guar)), "access": sorted(set(access)),
+            "autonomies": [{"key": k, "label": l} for k, l in AUTONOMY_STATES],
+            "tags": tags,
+            "conflict": _diplo_conflict(tag, body, idx)}
+
+
+def _diplo_conflict(tag, body, idx=None):
+    """返回人类可读的冲突说明（没有冲突就是空串）"""
+    idx = idx if idx is not None else _diplo_index()
+    ups = [o for o, _a in idx.get(tag, [])]
+    guar = set(re.findall(r'(?m)^[ \t]*give_guarantee\s*=\s*([A-Z0-9_]{2,8})', body))
+    for o in ups:
+        if o in guar:
+            return "%s 既是 %s 的附庸，又保证 %s 独立 —— 这两条同时存在时游戏里的关系会互相打架" % (tag, o, o)
+    mine = [b["target"] for b in _diplo_autonomy_blocks(body)]
+    both = [t for t in mine if t in guar]
+    if both:
+        return "%s 一边把 %s 当附庸，一边又保证它独立 —— 二选一" % (tag, both[0])
+    if tag in ups:
+        return "%s 被写成自己的附庸" % tag
+    chain, loop = _diplo_chain(tag, idx)
+    if loop:
+        return "宗主链成环：%s → %s" % (tag, " → ".join(chain))
+    return ""
+
+
+def diplomacy_save(tag, puppets=None, overlord=None, autonomy=None,
+                   guarantees=None, access=None):
+    """写附庸 / 保证独立 / 军事通行。
+
+    - puppets: 本国的附庸列表 [{"tag","autonomy"}]，None = 不改
+    - overlord: 本国的宗主（"" = 解除），None = 不改。**写在宗主国的文件里**，
+      因为 HOI4 只在宗主国文件里读 set_autonomy。
+    """
+    tag = (tag or "").strip().upper()
+    if tag not in COUNTRIES:
+        return {"ok": False, "msg": "没有这个国家 tag：" + tag}
+    items = []
+    if puppets is not None:
+        seen = set()
+        for it in puppets:
+            t = (it.get("tag") or "").strip().upper()
+            a = (it.get("autonomy") or "autonomy_puppet").strip()
+            if not t or t == tag:
+                continue
+            if t not in COUNTRIES:
+                return {"ok": False, "msg": "附庸 tag 不存在：" + t}
+            if t in seen:
+                continue
+            if a not in dict(AUTONOMY_STATES):
+                return {"ok": False, "msg": "自治度不认识：" + a}
+            seen.add(t)
+            items.append({"tag": t, "autonomy": a})
+    over = None
+    if overlord is not None:
+        over = (overlord or "").strip().upper()
+        if over == tag:
+            return {"ok": False, "msg": "一个国家不能当自己的宗主"}
+        if over and over not in COUNTRIES:
+            return {"ok": False, "msg": "宗主 tag 不存在：" + over}
+        if over:
+            aut = (autonomy or "autonomy_puppet").strip()
+            if aut not in dict(AUTONOMY_STATES):
+                return {"ok": False, "msg": "自治度不认识：" + aut}
+            idx = _diplo_index()
+            chain, loop = _diplo_chain(over, idx)
+            if loop or tag in chain:
+                return {"ok": False,
+                        "msg": "会让宗主链成环：%s 已经是 %s 的下级" % (over, " → ".join(chain))}
+
+    diff = []
+    # 冲突预检：用「保存后」的状态判断（传了什么就以什么为准，没传的沿用文件）
+    _c0, _r0, _p0 = _hist_path(tag)
+    _cur = ""
+    if _p0 and os.path.exists(_p0):
+        try:
+            _cur = strip_comments(_read_bom_text(_p0)[0])
+        except Exception:
+            _cur = ""
+    _pup_after = ([i["tag"] for i in items] if puppets is not None
+                  else [b["target"] for b in _diplo_autonomy_blocks(_cur)])
+    _guar_after = ({(x or "").strip().upper() for x in guarantees if (x or "").strip()}
+                   if guarantees is not None
+                   else set(re.findall(r'(?m)^[ \t]*give_guarantee\s*=\s*([A-Z0-9_]{2,8})', _cur)))
+    _bad = [t for t in _pup_after if t in _guar_after]
+    if _bad:
+        return {"ok": False,
+                "msg": "%s 一边把 %s 当附庸，一边又保证它独立 —— 只能留一个（先取消保证，或换个附庸）"
+                       % (tag, _bad[0])}
+    if over and over in _guar_after:
+        return {"ok": False,
+                "msg": "本国要当 %s 的附庸，却又保证 %s 独立 —— 只能留一个" % (over, over)}
+
+    # 1) 本文件：自己的附庸 + 保证 + 军通
+    if puppets is not None or guarantees is not None or access is not None:
+        p, why = _country_write_path(tag)
+        if not p:
+            return {"ok": False, "msg": why}
+        text, has_bom = _read_bom_text(p)
+        before = strip_comments(text)
+        if puppets is not None:
+            old = [b["target"] for b in _diplo_autonomy_blocks(before)]
+            text = _diplo_drop_blocks(text, None)
+            for it in items:
+                text = text.rstrip() + "\n" + _diplo_block_text(it["tag"], it["autonomy"])
+            diff.append({"key": "puppets", "label": "本国的附庸",
+                         "old": ", ".join(old) or "无",
+                         "new": ", ".join("%s(%s)" % (i["tag"], dict(AUTONOMY_STATES).get(i["autonomy"], i["autonomy"])) for i in items) or "无"})
+        if guarantees is not None:
+            vals = sorted({(x or "").strip().upper() for x in guarantees if (x or "").strip().upper() in COUNTRIES})
+            old = sorted(set(re.findall(r'(?m)^[ \t]*give_guarantee\s*=\s*([A-Z0-9_]{2,8})', before)))
+            if vals != old:
+                text = _diplo_set_lines(text, "give_guarantee", vals)
+                diff.append({"key": "guarantees", "label": "保证独立",
+                             "old": ", ".join(old) or "无", "new": ", ".join(vals) or "无"})
+        if access is not None:
+            vals = sorted({(x or "").strip().upper() for x in access if (x or "").strip().upper() in COUNTRIES})
+            old = sorted(set(re.findall(r'(?m)^[ \t]*give_military_access\s*=\s*([A-Z0-9_]{2,8})', before)))
+            if vals != old:
+                text = _diplo_set_lines(text, "give_military_access", vals)
+                diff.append({"key": "access", "label": "军事通行",
+                             "old": ", ".join(old) or "无", "new": ", ".join(vals) or "无"})
+        if diff:
+            snapshot(p)
+            _write_bom_text(p, text, has_bom)
+
+    # 2) 宗主国文件：把「我是谁的附庸」写进去（或从旧宗主文件里删掉）
+    if overlord is not None:
+        idx = _diplo_index()
+        olds = [o for o, _a in idx.get(tag, [])]
+        drop_from = [o for o in olds if o != over]
+        for o in drop_from:
+            q, why = _country_write_path(o)
+            if not q:
+                return {"ok": False, "msg": "要从 %s 解除附庸，但写不进去：%s" % (o, why)}
+            t2, b2 = _read_bom_text(q)
+            t2 = _diplo_drop_blocks(t2, {tag})
+            snapshot(q)
+            _write_bom_text(q, t2, b2)
+            diff.append({"key": "overlord_drop", "label": "%s 的文件里解除附庸" % o,
+                         "old": tag, "new": ""})
+        if over:
+            cur = [a for o, a in idx.get(tag, []) if o == over]
+            aut = (autonomy or "autonomy_puppet").strip()
+            if not cur or cur[0] != aut:
+                q, why = _country_write_path(over)
+                if not q:
+                    return {"ok": False, "msg": "要写到宗主 %s 的文件里，但写不进去：%s" % (over, why)}
+                t2, b2 = _read_bom_text(q)
+                t2 = _diplo_drop_blocks(t2, {tag})
+                t2 = t2.rstrip() + "\n" + _diplo_block_text(tag, aut)
+                snapshot(q)
+                _write_bom_text(q, t2, b2)
+                diff.append({"key": "overlord", "label": "%s 的文件里写入附庸" % over,
+                             "old": ", ".join(cur) or "无",
+                             "new": "%s（%s）" % (tag, dict(AUTONOMY_STATES).get(aut, aut))})
+
+    if not diff:
+        return {"ok": True, "msg": "没有改动", "diff": []}
+    _DIPLO_INDEX["key"] = None
+    reload_data()
+    link_countries()
+    return {"ok": True, "msg": "已写入外交关系", "diff": diff}
 
 
 # v0.59 国策引用体检
@@ -4909,7 +5494,7 @@ def _country_hist_file(root, tag):
     for p in (files or []):
         fn = os.path.basename(p)
         # 文件名形如 "AFR - Africa.txt"
-        m = re.match(r'([A-Z0-9]{2,4})\s*-', fn.upper())
+        m = re.match(r'([A-Z0-9_]{2,8})\s*-', fn.upper())
         if m and m.group(1) == tag:
             return p, os.path.join("history", "countries", fn)
     return None, ""
@@ -7314,7 +7899,7 @@ def load_country_tags(root=None):
             if re.match(r'(?i)dynamic_tags\s*=\s*yes', s0):
                 dyn = True
                 continue
-            m = re.match(r'([A-Z0-9]{2,4})\s*=\s*"([^"]+)"', s0)
+            m = re.match(r'([A-Z0-9_]{2,8})\s*=\s*"([^"]+)"', s0)
             if m:
                 seen[m.group(1)] = {"tag": m.group(1), "def": m.group(2), "file": fn}
     out = sorted(seen.values(), key=lambda x: x["tag"])
@@ -7370,7 +7955,7 @@ def country_tag_refs(root, tag):
         files, _r = _layer_files("history/countries", mod_layers(root))
         for p in (files or []):
             fn = os.path.basename(p)
-            m = re.match(r'([A-Z0-9]{2,4})\s*-', fn.upper())
+            m = re.match(r'([A-Z0-9_]{2,8})\s*-', fn.upper())
             if m and m.group(1) == tag:
                 refs["history_files"].append(fn)
     except Exception:
@@ -9272,7 +9857,7 @@ def load_bookmarks(root=None):
                 dt = _first(body, r'(?m)^\s*date\s*=\s*([\d.]+)')
                 pic = _first(body, r'(?m)^\s*picture\s*=\s*"([^"]*)"')
                 dc = _first(body, r'(?m)^\s*default_country\s*=\s*"([A-Z0-9]+)"')
-                countries = re.findall(r'(?m)^[ \t]*"([A-Z0-9]{2,4})"[ \t]*=\s*\{', body)
+                countries = re.findall(r'(?m)^[ \t]*"([A-Z0-9_]{2,8})"[ \t]*=\s*\{', body)
                 items.append({"i": len(items), "name": nm, "desc": ds, "date": dt,
                               "picture": pic, "default_country": dc,
                               "countries": countries, "country_count": len(countries),
@@ -14585,6 +15170,347 @@ def terrain_paint(points, terrain, brush=3, root=None):
             "msg": "刷了 %d 个像素为 %s · 需重建图层" % (n, terrain)}
 
 
+# ---------- v1.23.48 河流绘制 ----------
+# rivers.bmp 是 8 位索引图：255=陆地 254=海洋，河道用 3/6/4/11 这几档索引。
+# 方向是拿省份类型做面积统计反解出来的（原版 97.7% / ES 98.7%），不是猜的。
+RIVER_KINDS = (
+    ("main",      "河流（主干）",   3),
+    ("tributary", "支流",           6),
+    ("stream",    "小溪",           4),
+    ("deep",      "深河（可通航）",  11),
+)
+RIVER_KIND_IDX = {k: i for k, _l, i in RIVER_KINDS}
+RIVER_LAND = 255
+RIVER_SEA = 254
+_RIVER_UNDO = []                       # [{"path":..., "px": {(x,y): old}}]
+_RIVER_LAST = {"path": None, "pt": None}
+_DEF_RGB_CACHE = {"key": None, "map": {}}
+
+
+def _def_rgb_kind():
+    """definition.csv 的 RGB → land/sea。擦除时用它决定还原成 255 还是 254。"""
+    root = _map_pick(None)
+    layers = mod_layers(root) if root else []
+    csvp, _base = (_layers_find("map/definition.csv", layers) if layers else (None, None))
+    if not csvp and GAME:
+        csvp = os.path.join(GAME, "map", "definition.csv")
+    if not csvp or not os.path.exists(csvp):
+        return {}
+    try:
+        key = (csvp, int(os.path.getmtime(csvp)), os.path.getsize(csvp))
+    except Exception:
+        key = (csvp, 0, 0)
+    if _DEF_RGB_CACHE.get("key") == key:
+        return _DEF_RGB_CACHE["map"]
+    m = {}
+    try:
+        for ln in io.open(csvp, encoding="utf-8", errors="replace"):
+            p = ln.strip().split(";")
+            if len(p) >= 5:
+                try:
+                    m[(int(p[1]), int(p[2]), int(p[3]))] = p[4]
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    _DEF_RGB_CACHE["key"] = key
+    _DEF_RGB_CACHE["map"] = m
+    return m
+
+
+def _line_pts(p0, p1):
+    """Bresenham：两点之间补齐像素，避免鼠标移动快了变成虚线"""
+    (x0, y0), (x1, y1) = p0, p1
+    pts = []
+    dx, dy = abs(x1 - x0), abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx - dy
+    while True:
+        pts.append((x0, y0))
+        if x0 == x1 and y0 == y1:
+            break
+        e2 = err * 2
+        if e2 > -dy:
+            err -= dy
+            x0 += sx
+        if e2 < dx:
+            err += dx
+            y0 += sy
+    return pts
+
+
+def river_paint(points, kind="main", brush=1, erase=False, new_stroke=False, root=None):
+    """在地图上画河流（直接写 rivers.bmp 的索引）。
+
+    points: [[x,y], ...] 地图像素坐标（和 /api/map_asset 的图同一坐标系）
+    kind:   main / tributary / stream / deep
+    brush:  笔刷半径 1-5
+    erase:  True = 擦回陆地/海洋
+    new_stroke: 一次拖拽的第一帧，用来把整笔合成一个撤销单元
+    """
+    if not points:
+        return {"ok": False, "msg": "没有落点"}
+    try:
+        brush = max(1, min(5, int(brush or 1)))
+    except Exception:
+        brush = 1
+    kind = (kind or "main").strip()
+    if not erase and kind not in RIVER_KIND_IDX:
+        return {"ok": False, "msg": "河型只能是 " + " / ".join(k for k, _l, _i in RIVER_KINDS)}
+    root = _map_pick(root)
+    layers = mod_layers(root)
+    rbmp, rbase = _layers_find("map/rivers.bmp", layers)
+    pbmp, pbase = _layers_find("map/provinces.bmp", layers)
+    if not rbmp:
+        return {"ok": False, "msg": "找不到 map/rivers.bmp"}
+    if not pbmp:
+        return {"ok": False, "msg": "找不到 map/provinces.bmp"}
+    if os.path.abspath(rbase or "") != os.path.abspath(pbase or ""):
+        return {"ok": False, "msg": "rivers.bmp 与 provinces.bmp 不同源，画上去会错位"}
+    if is_under_game(rbmp):
+        return {"ok": False, "msg": "这张河流图来自原版目录（只读），不能直接改"}
+    info = bmp_info(rbmp)
+    if not info or info.get("bpp") != 8:
+        return {"ok": False, "msg": "rivers.bmp 不是 8 位索引图，无法按像素画"}
+    W, H = info["w"], info["h"]
+    off0, rowb = info["offset"], info["row"]
+    top_down = bool(info.get("top_down"))
+    new_idx = RIVER_KIND_IDX.get(kind, 3)
+
+    # 把这一批点连成线，并接上同一笔的上一个末点（跨请求不断线）
+    seq = []
+    for pt in points:
+        try:
+            seq.append((int(pt[0]), int(pt[1])))
+        except Exception:
+            continue
+    if not seq:
+        return {"ok": False, "msg": "坐标不合法"}
+    pts = []
+    if _RIVER_LAST.get("path") == rbmp and _RIVER_LAST.get("pt") and not new_stroke:
+        pts.extend(_line_pts(_RIVER_LAST["pt"], seq[0])[1:])
+    pts.append(seq[0])
+    for a, b in zip(seq, seq[1:]):
+        pts.extend(_line_pts(a, b)[1:])
+    _RIVER_LAST["path"] = rbmp
+    _RIVER_LAST["pt"] = seq[-1]
+
+    hit = set()
+    for (cx, cy) in pts:
+        for dy in range(-brush + 1, brush):
+            for dx in range(-brush + 1, brush):
+                if brush > 1 and dx * dx + dy * dy > (brush - 1) * (brush - 1) + 1:
+                    continue
+                x, y = cx + dx, cy + dy
+                if 0 <= x < W and 0 <= y < H:
+                    hit.add((x, y))
+    if not hit:
+        return {"ok": False, "msg": "笔刷落在图外了"}
+
+    if new_stroke or not _RIVER_UNDO or _RIVER_UNDO[-1]["path"] != rbmp:
+        _RIVER_UNDO.append({"path": rbmp, "px": {}})
+        if len(_RIVER_UNDO) > 30:
+            _RIVER_UNDO.pop(0)
+        # 备份一笔一次就够：每次 mousemove 都 snapshot 会把整个 bmp 复制几十份
+        snapshot(rbmp)
+    undo = _RIVER_UNDO[-1]
+
+    rgb2kind = _def_rgb_kind() if erase else {}
+    pb = open(pbmp, "rb") if erase else None
+    pinfo = bmp_info(pbmp) if erase else None
+    n = 0
+    try:
+        with open(rbmp, "r+b") as f:
+            for (x, y) in hit:
+                fy = y if top_down else (H - 1 - y)
+                f.seek(off0 + fy * rowb + x)
+                old_b = f.read(1)
+                old = old_b[0] if old_b else 0
+                if erase:
+                    # 还原成「原本的底色」：看 provinces.bmp 这个像素属于陆还是海
+                    new = RIVER_LAND
+                    if rgb2kind and pb and pinfo:
+                        pfy = y if pinfo.get("top_down") else (pinfo["h"] - 1 - y)
+                        pb.seek(pinfo["offset"] + pfy * pinfo["row"] + x * 3)
+                        b3 = pb.read(3)
+                        if len(b3) == 3:
+                            new = RIVER_LAND if rgb2kind.get((b3[2], b3[1], b3[0])) == "land" else RIVER_SEA
+                else:
+                    new = new_idx
+                if old == new:
+                    continue
+                undo["px"][(x, y)] = old
+                f.seek(off0 + fy * rowb + x)
+                f.write(bytes((new,)))
+                n += 1
+    finally:
+        if pb:
+            pb.close()
+    return {"ok": True, "painted": n, "to": ("擦除" if erase else kind),
+            "msg": ("擦掉 %d 个像素" % n) if erase else ("画了 %d 个像素（%s）" % (n, dict((k, l) for k, l, _i in RIVER_KINDS).get(kind, kind)))}
+
+
+def river_undo(root=None):
+    """撤销上一笔（一笔 = 一次按下到松开）"""
+    if not _RIVER_UNDO:
+        return {"ok": False, "msg": "没有可撤销的笔画（只记录本次运行画过的）"}
+    item = _RIVER_UNDO.pop()
+    p = item["path"]
+    if not os.path.exists(p):
+        return {"ok": False, "msg": "文件不在了：" + p}
+    info = bmp_info(p)
+    if not info:
+        return {"ok": False, "msg": "读不了 bmp 头"}
+    W, H = info["w"], info["h"]
+    off0, rowb = info["offset"], info["row"]
+    top_down = bool(info.get("top_down"))
+    with open(p, "r+b") as f:
+        for (x, y), old in item["px"].items():
+            fy = y if top_down else (H - 1 - y)
+            f.seek(off0 + fy * rowb + x)
+            f.write(bytes((old,)))
+    _RIVER_LAST["pt"] = None
+    return {"ok": True, "restored": len(item["px"]),
+            "msg": "撤销了上一笔（%d 个像素）" % len(item["px"])}
+
+
+def river_stats(root=None):
+    """读 rivers.bmp + provinces.bmp，算索引分布 / 落海的河 / 连通块"""
+    root = _map_pick(root)
+    layers = mod_layers(root)
+    rbmp, _rb = _layers_find("map/rivers.bmp", layers)
+    pbmp, _pb = _layers_find("map/provinces.bmp", layers)
+    if not rbmp:
+        return {"ok": False, "msg": "找不到 rivers.bmp"}
+    try:
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None
+        with Image.open(rbmp) as im:
+            # 必须是索引值本身。convert("L") 会把索引按调色板折成灰度，
+            # 254（RGB 122,122,122）就变成 122 —— 统计出来的「河」全是假的。
+            if im.mode not in ("P", "L"):
+                im = im.convert("P")
+            W, H = im.size
+            riv = im.tobytes()
+        land = None
+        if pbmp:
+            with Image.open(pbmp) as im2:
+                raw = im2.convert("RGB").tobytes()
+            rgb2kind = _def_rgb_kind()
+            land = bytearray(W * H)
+            for i in range(0, len(raw), 3):
+                k = rgb2kind.get((raw[i], raw[i + 1], raw[i + 2]))
+                land[i // 3] = 1 if k == "land" else 0
+    except Exception as e:
+        return {"ok": False, "msg": "读图失败：%s" % str(e)[:80]}
+    if len(riv) < W * H:
+        return {"ok": False, "msg": "rivers.bmp 数据长度不足"}
+    river_val = set(RIVER_KIND_IDX.values())
+    dist = {}
+    river_px = []
+    for i, v in enumerate(riv[:W * H]):
+        dist[v] = dist.get(v, 0) + 1
+        if v in river_val:
+            river_px.append(i)
+    in_sea = 0
+    if land is not None:
+        in_sea = sum(1 for i in river_px if not land[i])
+    # 连通块：只走河道像素，4 邻接
+    seen = bytearray(W * H)
+    blocks = []
+    rs = set(river_px)
+    for i in river_px:
+        if seen[i]:
+            continue
+        stack = [i]
+        seen[i] = 1
+        cnt = 0
+        touches_sea = False
+        touches_edge = False
+        while stack:
+            j = stack.pop()
+            cnt += 1
+            x, y = j % W, j // W
+            if x == 0 or y == 0 or x == W - 1 or y == H - 1:
+                touches_edge = True
+            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if not (0 <= nx < W and 0 <= ny < H):
+                    continue
+                k = ny * W + nx
+                if k in rs and not seen[k]:
+                    seen[k] = 1
+                    stack.append(k)
+                elif land is not None and land[k] == 0:
+                    touches_sea = True
+        blocks.append({"pixels": cnt, "sea": touches_sea, "edge": touches_edge})
+    blocks.sort(key=lambda b: -b["pixels"])
+    dead = [b for b in blocks if not b["sea"] and not b["edge"]]
+    msgs = []
+    msgs.append("河道像素 %d 个，分成 %d 段" % (len(river_px), len(blocks)))
+    if in_sea:
+        msgs.append("有 %d 个河道像素落在海里（河画到海上了）" % in_sea)
+    if dead:
+        msgs.append("%d 段河没有连到海也没有连到地图边缘（会变成断头河）" % len(dead))
+    if not in_sea and not dead and river_px:
+        msgs.append("没有落海、没有断头，看起来是通的")
+    if not river_px:
+        msgs.append("整张图还没有河")
+    return {"ok": True, "width": W, "height": H,
+            "dist": {str(k): v for k, v in sorted(dist.items(), key=lambda x: -x[1])[:8]},
+            "river_pixels": len(river_px), "in_sea": in_sea,
+            "blocks": len(blocks), "dead": len(dead),
+            "largest": blocks[0]["pixels"] if blocks else 0,
+            "msg": "；".join(msgs), "lines": msgs}
+
+
+def river_preview(root=None):
+    """生成一张叠加用的 PNG：河道上色，其余透明。返回路径。"""
+    root = _map_pick(root)
+    layers = mod_layers(root)
+    rbmp, _rb = _layers_find("map/rivers.bmp", layers)
+    if not rbmp:
+        return None
+    outc = os.path.join(MAP_CACHE_DIR, "river_preview.png")
+    try:
+        mt = int(os.path.getmtime(rbmp))
+    except Exception:
+        mt = 0
+    stamp = os.path.join(MAP_CACHE_DIR, "river_preview.stamp")
+    try:
+        if os.path.exists(outc) and os.path.exists(stamp):
+            if io.open(stamp, encoding="utf-8").read().strip() == "%s|%s" % (rbmp, mt):
+                return outc
+    except Exception:
+        pass
+    try:
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None
+        with Image.open(rbmp) as im:
+            idx = im.convert("P") if im.mode != "P" else im.copy()
+            idx.load()
+        pal = idx.getpalette() or []
+        W, H = idx.size
+        data = idx.tobytes()
+        out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        px = out.load()
+        cmap = {3: (0, 210, 255, 230), 6: (40, 120, 255, 230),
+                4: (130, 220, 255, 220), 11: (0, 70, 200, 240)}
+        for y in range(H):
+            base = y * W
+            for x in range(W):
+                v = data[base + x]
+                c = cmap.get(v)
+                if c:
+                    px[x, y] = c
+        os.makedirs(MAP_CACHE_DIR, exist_ok=True)
+        out.save(outc)
+        io.open(stamp, "w", encoding="utf-8", newline="\n").write("%s|%s" % (rbmp, mt))
+        return outc
+    except Exception:
+        return None
+
+
 def _sr_dirs(root):
     """战略区目录（先 mod 后原版），返回 [(base, dir)]"""
     out = []
@@ -16118,7 +17044,7 @@ def lint_project(limit=1500):
 
     for tid, t in TREES.items():
         raw = t.get("country_raw") or ""
-        tags = re.findall(r'tag\s*=\s*([A-Z0-9]{2,4})', raw)
+        tags = re.findall(r'tag\s*=\s*([A-Z0-9_]{2,8})', raw)
         if raw.strip() and not tags:
             add("info", "tree", "国策树 %s 的 country 块里没有 tag（按条件或默认挂载）" % tid, raw[:120],
                 {"type": "tree", "id": tid})
@@ -18066,6 +18992,19 @@ class Handler(SimpleHTTPRequestHandler):
         elif path_only == "/api/state":
             qs = parse_qs(urlparse(self.path).query)
             self._send(state_detail(qs.get("id", [""])[0], bool(qs.get("full", [""])[0])))
+        elif path_only == "/api/diplomacy":
+            qs = parse_qs(urlparse(self.path).query)
+            self._send(diplomacy_get(qs.get("tag", [""])[0]))
+        elif path_only == "/api/river_stats":
+            qs = parse_qs(urlparse(self.path).query)
+            self._send(river_stats(qs.get("root", [""])[0] or None))
+        elif path_only == "/api/river_preview.png":
+            qs = parse_qs(urlparse(self.path).query)
+            _rp = river_preview(qs.get("root", [""])[0] or None)
+            if not _rp:
+                self._send({"ok": False, "msg": "生成河流预览失败"}, 404)
+            else:
+                self._send(io.open(_rp, "rb").read(), 200, "image/png")
         elif path_only == "/api/country":
             qs = parse_qs(urlparse(self.path).query)
             self._send(country_detail(qs.get("tag", [""])[0]))
@@ -18424,6 +19363,27 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send(country_variant_add(body.get("tag", ""), body))
         elif self.path == "/api/state_save":
             self._send(state_save(body.get("id", ""), body.get("fields") or {}))
+        elif self.path == "/api/state_buildings_batch":
+            self._send(state_apply_buildings(body.get("ids") or [],
+                                             body.get("buildings") or {},
+                                             body.get("resources") or {},
+                                             bool(body.get("only_empty"))))
+        elif self.path == "/api/diplomacy_save":
+            self._send(diplomacy_save(body.get("tag", ""),
+                                      body.get("puppets"),
+                                      body.get("overlord"),
+                                      body.get("autonomy"),
+                                      body.get("guarantees"),
+                                      body.get("access")))
+        elif self.path == "/api/river_paint":
+            self._send(river_paint(body.get("points") or [],
+                                   body.get("kind") or "main",
+                                   body.get("brush") or 1,
+                                   bool(body.get("erase")),
+                                   bool(body.get("new_stroke")),
+                                   body.get("root") or None))
+        elif self.path == "/api/river_undo":
+            self._send(river_undo(body.get("root") or None))
         elif self.path == "/api/country_save":
             self._send(country_history_save(body.get("tag", ""), body.get("fields") or {}))
         elif self.path == "/api/idea_save":

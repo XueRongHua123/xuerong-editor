@@ -433,11 +433,54 @@
   /* ---------- v0.57 州 / 地块 ---------- */
   #stateModal{position:fixed;inset:0;z-index:96;background:rgba(10,12,13,.8);display:none;align-items:center;justify-content:center}
   #stateModal.show{display:flex}
+  #diploModal{position:fixed;inset:0;z-index:96;background:rgba(10,12,13,.8);display:none;align-items:center;justify-content:center}
+  #diploModal.show{display:flex}
   .st-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px 10px;margin:8px 0 4px}
   .st-grid label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--muted)}
   .st-bld{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 10px;margin:6px 0 4px}
   .st-bld label{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
   .st-bld input{width:64px}
+  /* v1.23.48 开局建筑 / 战略资源面板 */
+  .bld-presets{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px}
+  .bld-preset{padding:3px 9px;font-size:11.5px}
+  .bld-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:4px 10px;margin:4px 0 6px}
+  .bld-row{display:flex;align-items:center;gap:5px;font-size:12px;padding:2px 4px;border-radius:6px}
+  .bld-row:hover{background:var(--panel2)}
+  .bld-row.off{opacity:.55}
+  .bld-row .bld-name{flex:1;color:var(--text);min-width:74px}
+  .bld-row input{width:56px}
+  .bld-step{width:20px;height:20px;line-height:1;padding:0;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:4px;cursor:pointer}
+  .bld-step:hover{border-color:var(--accent)}
+  .bld-max{font-size:10.5px;color:var(--t3);min-width:26px}
+  .bld-warn{font-size:10.5px;color:var(--danger);min-width:34px}
+  .bld-row input.bad{border-color:var(--danger)}
+  .bld-row input.dirty,.res-row input.dirty{border-color:var(--accent)}
+  .bld-note{font-size:11.5px;color:var(--warn);margin:2px 0 6px}
+  .bld-batch{display:flex;align-items:center;gap:10px;margin:4px 0 8px;font-size:11.5px;color:var(--muted)}
+  .res-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:4px 10px;margin:4px 0 6px}
+  .res-row{display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 4px;border-radius:6px}
+  .res-row:hover{background:var(--panel2)}
+  .res-row .res-name{min-width:34px}
+  .res-row input{width:64px}
+  .res-hint{font-size:10.5px;color:var(--t3)}
+  .res-auto{display:flex;align-items:center;gap:8px;font-size:11.5px}
+  .bb-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:2px 8px;max-height:52vh;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px}
+  .bb-item{display:flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 4px;border-radius:5px;cursor:pointer}
+  .bb-item:hover{background:var(--panel2)}
+  .bb-item span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bb-item i{font-style:normal;color:var(--t3);font-size:10.5px}
+  .bb-foot{display:flex;align-items:center;gap:10px;margin-top:8px;font-size:11.5px;color:var(--muted)}
+  /* v1.23.48 附庸 / 外交 */
+  .dp-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;margin:6px 0 8px}
+  .dp-grid label,.dp-grid2 label{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--muted);min-width:0}
+  .dp-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:6px 0 8px}
+  .dp-grid2 select{width:100%;min-width:0}
+  .dp-row{display:flex;gap:8px;align-items:center;margin:3px 0}
+  .dp-row select{flex:1;max-width:280px;min-width:0}
+  .dp-acts{display:flex;align-items:center;gap:10px;margin:8px 0 10px;font-size:11.5px;color:var(--muted)}
+  .dp-acts .btn{flex:0 0 auto;white-space:nowrap}
+  #diploModal .cm-card{height:auto;max-height:calc(100% - 40px)}
+  #dpMsg{white-space:pre-wrap;line-height:1.6}
   .st-prov{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0 8px}
   .st-prov span{font-size:10.5px;padding:2px 6px;border:1px solid var(--line);border-radius:5px;color:var(--muted);background:var(--panel2)}
   .st-vp{font-size:11.5px;color:var(--text);margin:2px 0}
@@ -1060,6 +1103,7 @@ window.onerror = function(m, s, l, c){
       <div id="mapEntry" class="tabbtn">🗺 地图</div>
       <div id="navEditEntry" class="tabbtn" style="padding-left:22px">✎ 开局数据与编辑</div>
       <div id="stateEntry" class="tabbtn">🗺 州 / 地块</div>
+      <div id="diploEntry" class="tabbtn">🌐 附庸 / 外交</div>
     </details>
     <details>
       <summary>装备</summary>
@@ -1166,6 +1210,20 @@ window.onerror = function(m, s, l, c){
         <div class="cm-body">
           <div id="stateList" class="cm-list"></div>
           <div id="stateBody" class="cm-detail"></div>
+        </div>
+      </div>
+    </div>
+    <div id="diploModal">
+      <div class="cm-card" style="width:min(880px,calc(100% - 60px))">
+        <div class="cm-head">
+          <b>附庸 / 外交</b>
+          <input id="diploTagSearch" placeholder="输入或选择国家 tag" autocomplete="off" list="diploTagList" style="width:220px">
+          <datalist id="diploTagList"></datalist>
+          <span id="diploFile" class="k"></span>
+          <button class="btn" id="diploClose" style="margin-left:auto">关闭</button>
+        </div>
+        <div class="cm-body" style="display:block;overflow:auto">
+          <div id="diploBody"><div class="cm-empty">先选一个国家</div></div>
         </div>
       </div>
     </div>
@@ -1904,6 +1962,24 @@ window.onerror = function(m, s, l, c){
             <span class="mp-k" id="msBrushSizeV">5</span>
           </div>
           <div class="mp-k">开启后在地图上按住左键拖动刷地形，抬手保存</div>
+          <h4>河流笔刷</h4>
+          <div class="mp-acts">
+            <select id="rvKind" class="btn" style="height:26px;flex:1">
+              <option value="main">河流（主干）</option>
+              <option value="tributary">支流</option>
+              <option value="stream">小溪</option>
+              <option value="deep">深河（可通航）</option>
+            </select>
+            <input type="range" id="rvBrush" min="1" max="5" value="2" style="flex:1;min-width:0"
+                   oninput="document.getElementById('rvBrushV').textContent=this.value">
+            <span class="mp-k" id="rvBrushV" style="width:14px">2</span>
+          </div>
+          <div class="mp-acts">
+            <button class="btn" id="rvToggle">开始画</button>
+            <button class="btn" id="rvUndo">撤销</button>
+            <button class="btn" id="rvCheck">检查</button>
+          </div>
+          <div class="mp-k" id="rvMsg" style="min-height:16px;line-height:1.5">左键画、右键擦；画完点「检查」</div>
           <h4>操作</h4>
           <div class="mp-acts">
             <input id="msTarget" placeholder="目标州号" style="height:28px">
@@ -11284,8 +11360,8 @@ function makePannable(svg, body){
     let drawing = false;
     const toMap = function(ev){
       const r = cv.getBoundingClientRect();
-      const x = (ev.clientX - r.left - (window.MAP ? MAP.x : 0)) / (window.MAP ? MAP.k : 1);
-      const y = (ev.clientY - r.top - (window.MAP ? MAP.y : 0)) / (window.MAP ? MAP.k : 1);
+      const x = (ev.clientX - r.left - (typeof MAP !== 'undefined' ? MAP.x : 0)) / (typeof MAP !== 'undefined' ? MAP.k : 1);
+      const y = (ev.clientY - r.top - (typeof MAP !== 'undefined' ? MAP.y : 0)) / (typeof MAP !== 'undefined' ? MAP.k : 1);
       return [Math.round(x), Math.round(y)];
     };
     cv.addEventListener('mousedown', function(ev){
@@ -11311,6 +11387,198 @@ function makePannable(svg, body){
     document.addEventListener('DOMContentLoaded', function(){
       setTimeout(function(){ bind(); attach(); }, 800);
     });
+  }
+})();
+
+/* ---------- v1.23.48 河流笔刷 ---------- */
+(function(){
+  let ON = false, drawing = false, erasing = false, strokeNew = false;
+  let pending = [], sending = false, lastSent = 0;
+
+  const KIND_COLOR = {main:'rgba(0,210,255,.85)', tributary:'rgba(40,120,255,.85)',
+                      stream:'rgba(130,220,255,.85)', deep:'rgba(0,70,200,.9)'};
+
+  function msg(t, bad){
+    const el = document.getElementById('rvMsg');
+    if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
+  }
+  function kind(){ return ((document.getElementById('rvKind')||{}).value || 'main'); }
+  function brush(){ return Number((document.getElementById('rvBrush')||{}).value || 2); }
+
+  function ensureCanvas(){
+    const stack = document.getElementById('mapStack');
+    // MAP 是顶层 const（不是 window 属性），别写成 window.MAP
+    if(!stack || typeof MAP === 'undefined') return null;
+    let cv = document.getElementById('mapRiverCanvas');
+    if(!cv){
+      cv = document.createElement('canvas');
+      cv.id = 'mapRiverCanvas';
+      cv.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:4;image-rendering:pixelated';
+      stack.appendChild(cv);
+    }
+    if(cv.width !== MAP.w || cv.height !== MAP.h){
+      cv.width = MAP.w; cv.height = MAP.h;
+      cv.style.width = MAP.w + 'px';
+      cv.style.height = MAP.h + 'px';
+      reloadPreview();
+    }
+    return cv;
+  }
+  window.__riverSync = function(){ ensureCanvas(); };
+
+  function reloadPreview(){
+    const cv = document.getElementById('mapRiverCanvas');
+    if(!cv) return;
+    const c = cv.getContext('2d');
+    const img = new Image();
+    img.onload = function(){
+      c.clearRect(0, 0, cv.width, cv.height);
+      c.drawImage(img, 0, 0);
+    };
+    img.src = '/api/river_preview.png?t=' + Date.now();
+  }
+
+  let localLast = null;
+
+  function paintLocal(x, y){
+    const cv = document.getElementById('mapRiverCanvas');
+    if(!cv) return;
+    const c = cv.getContext('2d');
+    const r = Math.max(1, brush());
+    c.strokeStyle = erasing ? 'rgba(255,90,90,.5)' : (KIND_COLOR[kind()] || KIND_COLOR.main);
+    c.lineWidth = r * 2;
+    c.lineCap = 'round';
+    c.lineJoin = 'round';
+    c.beginPath();
+    if(localLast){
+      c.moveTo(localLast[0], localLast[1]);
+      c.lineTo(x, y);
+    } else {
+      c.moveTo(x, y);
+      c.lineTo(x + 0.01, y);
+    }
+    c.stroke();
+    localLast = [x, y];
+  }
+
+  function sendPoint(pt){
+    pending.push([Math.round(pt.x), Math.round(pt.y)]);
+    if(sending) return;
+    const now = Date.now();
+    if(now - lastSent < 35){
+      if(!window.__rvTimer){
+        window.__rvTimer = setTimeout(function(){
+          window.__rvTimer = null; flush();
+        }, 40);
+      }
+      return;
+    }
+    flush();
+  }
+
+  async function flush(){
+    if(!pending.length || sending) return;
+    sending = true;
+    const pts = pending;
+    pending = [];
+    lastSent = Date.now();
+    const body = {points: pts, kind: kind(), brush: brush(),
+                  erase: erasing, new_stroke: strokeNew};
+    strokeNew = false;
+    try{
+      const r = await (await fetch('/api/river_paint', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body)})).json();
+      if(r.ok) msg(r.msg);
+      else msg(r.msg || '写入失败', true);
+    }catch(e){ msg('请求失败：' + e.message, true); }
+    sending = false;
+    if(pending.length) flush();
+  }
+
+  function onDown(ev){
+    if(!ON) return;
+    if(window.mapEventOverUI && window.mapEventOverUI(ev)) return;
+    if(typeof mapScreenToImage !== 'function') return;
+    const pt = mapScreenToImage(ev.clientX, ev.clientY);
+    if(!pt || pt.x < 0 || pt.y < 0 || pt.x >= MAP.w || pt.y >= MAP.h) return;
+    ev.stopPropagation(); ev.preventDefault();
+    drawing = true;
+    erasing = (ev.button === 2);
+    strokeNew = true;
+    sendPoint(pt);
+    paintLocal(pt.x, pt.y);
+  }
+
+  function onMove(ev){
+    if(!ON || !drawing) return;
+    if(typeof mapScreenToImage !== 'function') return;
+    const pt = mapScreenToImage(ev.clientX, ev.clientY);
+    if(!pt || pt.x < 0 || pt.y < 0 || pt.x >= MAP.w || pt.y >= MAP.h) return;
+    ev.stopPropagation();
+    sendPoint(pt);
+    paintLocal(pt.x, pt.y);
+  }
+
+  function onUp(){
+    if(!drawing) return;
+    drawing = false;
+    localLast = null;
+    flush();
+    // 抬手后从 rivers.bmp 重新生成预览：本地画笔只是「随手画」，以文件为准
+    setTimeout(reloadPreview, 260);
+  }
+
+  function bind(){
+    const wrap = document.getElementById('mapStageWrap');
+    if(!wrap || wrap.dataset.rvBound) return;
+    wrap.dataset.rvBound = '1';
+    wrap.addEventListener('mousedown', onDown, true);
+    wrap.addEventListener('mousemove', onMove, true);
+    window.addEventListener('mouseup', onUp, true);
+    wrap.addEventListener('contextmenu', function(e){ if(ON) e.preventDefault(); }, true);
+    const t = document.getElementById('rvToggle');
+    if(t && !t.dataset.bound){
+      t.dataset.bound = '1';
+      t.onclick = function(){
+        ON = !ON;
+        ensureCanvas();
+        t.textContent = ON ? '停止画' : '开始画';
+        t.style.background = ON ? 'var(--accent)' : '';
+        msg(ON ? '左键画、右键擦（底图请先开「地形」或「省色块」）' : '已停止');
+        if(ON) reloadPreview();
+      };
+    }
+    const u = document.getElementById('rvUndo');
+    if(u && !u.dataset.bound){
+      u.dataset.bound = '1';
+      u.onclick = async function(){
+        try{
+          const r = await (await fetch('/api/river_undo', {method:'POST',
+            headers:{'Content-Type':'application/json'}, body: '{}'})).json();
+          msg(r.msg || '', !r.ok);
+          if(r.ok) reloadPreview();
+        }catch(e){ msg('撤销失败：' + e.message, true); }
+      };
+    }
+    const ck = document.getElementById('rvCheck');
+    if(ck && !ck.dataset.bound){
+      ck.dataset.bound = '1';
+      ck.onclick = async function(){
+        msg('检查中…');
+        try{
+          const r = await (await fetch('/api/river_stats')).json();
+          if(!r.ok){ msg(r.msg || '检查失败', true); return; }
+          msg((r.lines || [r.msg]).join('；'));
+        }catch(e){ msg('检查失败：' + e.message, true); }
+      };
+    }
+  }
+
+  if(document.readyState !== 'loading'){
+    setTimeout(bind, 900);
+  } else {
+    document.addEventListener('DOMContentLoaded', function(){ setTimeout(bind, 900); });
   }
 })();
 
@@ -11682,6 +11950,8 @@ function mapApply(){
   // 放大时一律 pixelated —— 插值会把边界糊成一团，高倍下反而比锯齿更难看。
   stack.classList.toggle('smooth', MAP.k < 0.35);
   mapUpdateStatus();
+  // 河流覆盖层的尺寸跟着地图走（地图尺寸在建图层时才确定）
+  if(typeof window.__riverSync === 'function') window.__riverSync();
 }
 
 function mapFit(){
@@ -12174,6 +12444,12 @@ function openKeys(){
 }
 function closeKeys(){ document.getElementById('keysModal').classList.remove('show'); }
 document.getElementById('stateEntry').onclick = ()=>openStates();
+document.getElementById('diploEntry').onclick = ()=>openDiplo();
+document.getElementById('diploClose').onclick = ()=>document.getElementById('diploModal').classList.remove('show');
+document.getElementById('diploTagSearch').onchange = (ev)=>{
+  const v = ((ev.target && ev.target.value) || '').trim().toUpperCase();
+  if(v) loadDiplo(v);
+};
 document.getElementById('stateClose').onclick = closeStates;
 document.getElementById('stateSearch').addEventListener('input', e=>renderStateList(e.target.value.trim().toLowerCase()));
 document.getElementById('stateModal').addEventListener('click', e=>{ if(e.target.id === 'stateModal') closeStates(); });
@@ -12512,10 +12788,8 @@ function renderStateBody(d){
       '<label>核心（逗号或换行分隔）<textarea id="stCores" style="height:56px">' +
         escapeHtml(d.cores.join(', ')) + '</textarea></label>' +
     '</div>' +
-    '<div class="k">建筑（留空或 0 = 改成 0；不填的项目保持不变）</div>' +
-    '<div class="st-bld">' + d.building_keys.map(k=>
-      '<label>' + k + '<input type="number" min="0" data-b="' + k + '" value="' +
-      (d.buildings[k] != null ? d.buildings[k] : '') + '" placeholder="—"></label>').join('') + '</div>' +
+    stateBuildingsHtml(d) +
+    stateResourcesHtml(d) +
     '<div style="display:flex;gap:8px;margin:8px 0 6px"><button class="btn primary" id="stSave">写入州文件</button>' +
       '<button class="btn" id="stReload">重新读取</button></div>' +
     '<div id="stDiff" class="hist-diff" style="display:none"></div>';
@@ -12550,6 +12824,353 @@ function renderStateBody(d){
   if(showAll) showAll.onclick = ()=>selectState(d.id, true);
   document.getElementById('stSave').onclick = ()=>saveState(d);
   document.getElementById('stReload').onclick = ()=>selectState(d.id);
+  bindStateBuildingUI(d);
+}
+
+/* ---------- v1.23.48 开局建筑 / 战略资源（面板） ---------- */
+// 预设：点一下整套填进去，再手动微调。数值是给人用的起点，不是原版规则。
+const BLD_PRESETS = {
+  industrial: {label:'工业中心', buildings:{infrastructure:60, industrial_complex:8, arms_factory:4}},
+  farm:       {label:'农业州',   buildings:{infrastructure:40, industrial_complex:2}},
+  port:       {label:'军港',     buildings:{infrastructure:50, industrial_complex:3, naval_base:8, dockyard:4, anti_air_building:2}},
+  airbase:    {label:'空军基地', buildings:{infrastructure:50, industrial_complex:3, air_base:8, radar_station:2}},
+  resource:   {label:'资源产地', buildings:{infrastructure:30, industrial_complex:2}},
+  wild:       {label:'荒芜',     buildings:{infrastructure:10}}
+};
+const SEA_BUILDINGS = ['naval_base', 'dockyard', 'naval_supply_hub'];
+
+function stateBuildingsHtml(d){
+  const meta = d.building_meta || [];
+  const coastal = d.coastal;
+  const rows = meta.map(m=>{
+    const v = d.buildings[m.key];
+    const dis = (m.coastal && coastal === false);
+    return '<div class="bld-row' + (dis ? ' off' : '') + '" data-row="' + m.key + '" title="' + m.key + '">' +
+      '<span class="bld-name">' + escapeHtml(m.label) + '</span>' +
+      '<button type="button" class="bld-step" data-step="-1" data-for="' + m.key + '">−</button>' +
+      '<input type="number" min="0" max="' + m.max + '" data-b="' + m.key + '" data-max="' + m.max +
+        '" value="' + (v != null ? v : '') + '" placeholder="—">' +
+      '<button type="button" class="bld-step" data-step="1" data-for="' + m.key + '">＋</button>' +
+      '<span class="bld-max">/' + m.max + '</span>' +
+      '<span class="bld-warn"></span>' +
+      '</div>';
+  }).join('');
+  const presets = Object.keys(BLD_PRESETS).map(k=>
+    '<button type="button" class="btn bld-preset" data-preset="' + k + '">' + BLD_PRESETS[k].label + '</button>').join('');
+  return '<div class="cm-sec">开局建筑<span>留空 = 不改；填 0 = 把那一行删掉</span></div>' +
+    '<div class="bld-presets">' + presets + '</div>' +
+    '<div class="bld-list">' + rows + '</div>' +
+    (coastal === false ? '<div class="bld-note">这个州没有海岸线：海军基地 / 船坞 / 海军补给中心保存时会被拒绝</div>' : '') +
+    '<div class="bld-batch"><button type="button" class="btn" id="stBatchOpen">套用到其他州…</button>' +
+    '<label><input type="checkbox" id="stBatchEmpty"> 只填空缺（不覆盖已有值）</label></div>';
+}
+
+function stateResourcesHtml(d){
+  const meta = d.resource_meta || [];
+  const res = d.resources || {};
+  const rows = meta.map(m=>{
+    const v = res[m.key];
+    return '<div class="res-row"><span class="res-name">' + escapeHtml(m.label) + '</span>' +
+      '<input type="number" min="0" data-r="' + m.key + '" value="' + (v != null ? v : '') + '" placeholder="—">' +
+      '<span class="res-hint">' + escapeHtml(m.hint) + '</span></div>';
+  }).join('');
+  return '<div class="cm-sec">战略资源<span>填 0 会把那一行从文件里删掉</span></div>' +
+    '<div class="res-list">' + rows + '</div>' +
+    '<div class="res-auto"><button type="button" class="btn" id="stResAuto">按面积推荐</button>' +
+    '<span class="k" id="stResMsg">省份数 × 密度，给个起点</span></div>';
+}
+
+function bindStateBuildingUI(d){
+  document.querySelectorAll('#stateBody .bld-step').forEach(btn=>{
+    btn.onclick = ()=>{
+      const k = btn.dataset.for;
+      const inp = document.querySelector('#stateBody [data-b="' + k + '"]');
+      if(!inp) return;
+      const max = Number(inp.dataset.max || 99);
+      let v = Number(inp.value || 0) + Number(btn.dataset.step);
+      v = Math.max(0, Math.min(max, v));
+      inp.value = v;
+      inp.classList.add('dirty');
+      const row = inp.closest('.bld-row');
+      const warn = row && row.querySelector('.bld-warn');
+      if(warn) warn.textContent = '';
+      inp.classList.remove('bad');
+    };
+  });
+  document.querySelectorAll('#stateBody [data-b]').forEach(inp=>{
+    inp.oninput = ()=>{
+      const max = Number(inp.dataset.max || 99);
+      const v = Number(inp.value || 0);
+      const row = inp.closest('.bld-row');
+      const warn = row && row.querySelector('.bld-warn');
+      const bad = inp.value !== '' && (v < 0 || v > max);
+      if(warn) warn.textContent = bad ? '0–' + max : '';
+      inp.classList.toggle('bad', bad);
+      inp.classList.add('dirty');
+    };
+  });
+  document.querySelectorAll('#stateBody .bld-preset').forEach(btn=>{
+    btn.onclick = ()=>{
+      const p = BLD_PRESETS[btn.dataset.preset];
+      if(!p) return;
+      document.querySelectorAll('#stateBody [data-b]').forEach(inp=>{
+        const v = p.buildings[inp.dataset.b];
+        inp.value = (v != null) ? v : 0;
+        inp.classList.add('dirty');
+        inp.classList.remove('bad');
+        const warn = inp.closest('.bld-row') && inp.closest('.bld-row').querySelector('.bld-warn');
+        if(warn) warn.textContent = '';
+      });
+      const usesSea = Object.keys(p.buildings).some(k=>SEA_BUILDINGS.indexOf(k) >= 0);
+      if(d.coastal === false && usesSea){
+        status('已填入「' + p.label + '」（其余建筑置 0），但这个州没有海岸线，海军建筑保存时会被拒绝', true);
+      } else {
+        status('已填入「' + p.label + '」（这是一整套，未列出的建筑会置 0），可再微调后保存');
+      }
+    };
+  });
+  const ra = document.getElementById('stResAuto');
+  if(ra) ra.onclick = ()=>{
+    const n = Math.max(1, Number(d.province_count || 1));
+    const dens = {oil:1.2, rubber:0.6, steel:2.0, aluminium:1.2, tungsten:0.6, chromium:0.6};
+    document.querySelectorAll('#stateBody [data-r]').forEach(inp=>{
+      inp.value = Math.round(n * (dens[inp.dataset.r] || 0.6));
+      inp.classList.add('dirty');
+    });
+    const m = document.getElementById('stResMsg');
+    if(m) m.textContent = '按 ' + n + ' 个省估算，可再调';
+  };
+  const bo = document.getElementById('stBatchOpen');
+  if(bo) bo.onclick = ()=>openBldBatch(d);
+}
+
+function collectBldValues(){
+  const b = {};
+  document.querySelectorAll('#stateBody [data-b]').forEach(inp=>{
+    const v = inp.value.trim();
+    if(v !== '') b[inp.dataset.b] = Number(v);
+  });
+  const r = {};
+  document.querySelectorAll('#stateBody [data-r]').forEach(inp=>{
+    const v = inp.value.trim();
+    if(v !== '') r[inp.dataset.r] = Number(v);
+  });
+  return {buildings: b, resources: r};
+}
+
+function openBldBatch(d){
+  const vals = collectBldValues();
+  if(!Object.keys(vals.buildings).length && !Object.keys(vals.resources).length){
+    status('先把建筑或资源填好，再套用', true);
+    return;
+  }
+  const list = (STATE_DATA && STATE_DATA.list) || [];
+  const wrap = document.createElement('div');
+  wrap.className = 'show';
+  wrap.id = 'bldBatchModal';
+  wrap.innerHTML = '<div class="cm-card" style="width:min(760px,calc(100% - 60px))">' +
+    '<div class="cm-head"><b>把这一套数值套用到…</b>' +
+    '<input id="bbSearch" placeholder="搜索 id / 名称 / owner" autocomplete="off">' +
+    '<span id="bbCount" class="k"></span>' +
+    '<button class="btn" id="bbClose" style="margin-left:auto">取消</button></div>' +
+    '<div class="cm-body" style="display:block">' +
+    '<div id="bbList" class="bb-list"></div>' +
+    '<div class="bb-foot"><label><input type="checkbox" id="bbEmpty"> 只填空缺（不覆盖已有值）</label>' +
+    '<span class="k">当前州 #' + d.id + ' 不参与</span>' +
+    '<button class="btn primary" id="bbGo" style="margin-left:auto">套用</button></div></div></div>';
+  document.body.appendChild(wrap);
+  const box = document.getElementById('bbList');
+  const cnt = document.getElementById('bbCount');
+  const picked = new Set();
+  function render(){
+    const q = (document.getElementById('bbSearch').value || '').toLowerCase();
+    const hits = list.filter(x=>x.id !== d.id && (!q ||
+      String(x.id).includes(q) || (x.name||'').toLowerCase().includes(q) ||
+      (x.owner||'').toLowerCase().includes(q)));
+    const shown = hits.slice(0, 300);
+    box.innerHTML = shown.map(x=>
+      '<label class="bb-item"><input type="checkbox" data-sid="' + x.id + '"' +
+      (picked.has(x.id) ? ' checked' : '') + '><span>' + x.id + ' ' +
+      escapeHtml(x.name || x.raw_name || '') + '</span><i>' + escapeHtml(x.owner || '—') + '</i></label>').join('') +
+      (hits.length > shown.length ? '<div class="cm-empty">…另有 ' + (hits.length - shown.length) + ' 个，输入关键词缩小范围</div>' : '');
+    box.querySelectorAll('[data-sid]').forEach(el=>{
+      el.onchange = ()=>{
+        const id = Number(el.dataset.sid);
+        if(el.checked) picked.add(id); else picked.delete(id);
+        cnt.textContent = '已选 ' + picked.size + ' 个';
+      };
+    });
+    cnt.textContent = '已选 ' + picked.size + ' 个';
+  }
+  render();
+  document.getElementById('bbSearch').oninput = render;
+  document.getElementById('bbClose').onclick = ()=>wrap.remove();
+  document.getElementById('bbGo').onclick = async ()=>{
+    if(!picked.size){ status('先勾几个州', true); return; }
+    const onlyEmpty = document.getElementById('bbEmpty').checked;
+    const btn = document.getElementById('bbGo');
+    btn.disabled = true;
+    btn.textContent = '写入中…';
+    let r;
+    try{
+      r = await (await fetch('/api/state_buildings_batch', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ids: [...picked], buildings: vals.buildings,
+                              resources: vals.resources, only_empty: onlyEmpty})})).json();
+    }catch(e){ status('套用失败：' + e.message, true); btn.disabled = false; btn.textContent = '套用'; return; }
+    status(r.msg || '', !r.ok);
+    if(r.ok){
+      wrap.remove();
+      STATE_DATA = null;
+      await loadData();
+      await openStates(d.id);
+    } else {
+      btn.disabled = false;
+      btn.textContent = '套用';
+    }
+  };
+}
+
+/* ---------- v1.23.48 附庸 / 外交 ---------- */
+let DIPLO = null;
+
+function diploTagsHtml(tags){
+  return tags.map(t=>'<option value="' + t.tag + '">' + (t.own ? '★ ' : '') + t.tag +
+    (t.name && t.name !== t.tag ? ' · ' + escapeHtml(t.name) : '') + '</option>').join('');
+}
+
+async function openDiplo(tag){
+  document.getElementById('diploModal').classList.add('show');
+  const t = tag || (DIPLO && DIPLO.tag) || '';
+  // 空 tag 交给后端挑（它会选本 mod 里第一个有自己历史文件的国家）
+  await loadDiplo(t);
+}
+
+async function loadDiplo(tag){
+  const body = document.getElementById('diploBody');
+  body.innerHTML = '<div class="cm-empty">读取中…</div>';
+  let d;
+  try { d = await (await fetch('/api/diplomacy?tag=' + encodeURIComponent(tag))).json(); }
+  catch(e){ body.innerHTML = '<div class="cm-empty">读取失败：' + escapeHtml(e.message) + '</div>'; return; }
+  if(!d.ok){ body.innerHTML = '<div class="cm-empty">' + escapeHtml(d.msg || '读不到这个国家') + '</div>'; return; }
+  DIPLO = d;
+  document.getElementById('diploTagSearch').value = d.tag;
+  document.getElementById('diploFile').textContent = d.file || '';
+  document.getElementById('diploTagList').innerHTML =
+    d.tags.map(x=>'<option value="' + x.tag + '">' + escapeHtml(x.name || '') + '</option>').join('');
+  renderDiplo(d);
+}
+
+function dpPuppetRowHtml(opts, autOpts, tag, aut){
+  return '<div class="dp-row">' +
+    '<select class="dp-p-tag">' + opts + '</select>' +
+    '<select class="dp-p-aut">' + autOpts + '</select>' +
+    '<button type="button" class="btn dp-p-del">移除</button></div>';
+}
+
+function renderDiplo(d){
+  const body = document.getElementById('diploBody');
+  const opts = diploTagsHtml(d.tags);
+  const autOpts = d.autonomies.map(a=>'<option value="' + a.key + '">' + a.label + '</option>').join('');
+  const cur = d.overlords[0] || null;
+  let html = '';
+
+  html += '<div class="cm-sec">' + d.tag + (d.name && d.name !== d.tag ? ' · ' + escapeHtml(d.name) : '') +
+    '<span>关系写在国家历史文件里</span></div>';
+  html += '<div class="cm-grid" style="grid-template-columns:repeat(4,1fr)">' +
+    '<div class="cm-cell"><i>本国附庸</i><b>' + d.puppets.length + '</b></div>' +
+    '<div class="cm-cell"><i>宗主</i><b>' + (cur ? cur.tag : '无') + '</b></div>' +
+    '<div class="cm-cell"><i>保证独立</i><b>' + d.guarantees.length + '</b></div>' +
+    '<div class="cm-cell"><i>军事通行</i><b>' + d.access.length + '</b></div></div>';
+
+  html += '<div class="cm-sec">本国是谁的附庸<span>这一项会写到宗主国的文件里（HOI4 只在那里读 set_autonomy）</span></div>' +
+    '<div class="dp-grid">' +
+    '<label>宗主<select id="dpOverlord"><option value="">（独立，没有宗主）</option>' + opts + '</select></label>' +
+    '<label>自治度<select id="dpAutonomy">' + autOpts + '</select></label>' +
+    '</div>';
+  if(d.overlords.length > 1){
+    html += '<div class="bld-note">现在有多个国家声明了本国（' +
+      d.overlords.map(o=>o.tag).join('、') + '），保存后只保留上面选的那一个</div>';
+  }
+
+  html += '<div class="cm-sec">本国的附庸<span>写在本国的文件里，对方文件不用改</span></div>' +
+    '<div id="dpPuppets"></div>' +
+    '<div class="dp-acts"><button type="button" class="btn" id="dpAddPuppet">＋ 添加附庸</button>' +
+    '<span class="k">自治度决定它在游戏里有多独立</span></div>';
+
+  html += '<div class="cm-sec">保证独立 / 军事通行<span>按住 Ctrl 点选多行；一个都不选 = 清空这一项</span></div>' +
+    '<div class="dp-grid2">' +
+    '<label>本国保证这些国家的独立<select multiple size="7" id="dpGuarantees" style="height:auto;min-height:150px">' + opts + '</select></label>' +
+    '<label>本国给这些国家军事通行<select multiple size="7" id="dpAccess" style="height:auto;min-height:150px">' + opts + '</select></label>' +
+    '</div>';
+
+  if(d.conflict) html += '<div class="bld-note">⚠ ' + escapeHtml(d.conflict) + '</div>';
+  html += '<div class="dp-acts"><button type="button" class="btn primary" id="dpSave">写入</button>' +
+    '<span id="dpMsg" class="k"></span></div>';
+  body.innerHTML = html;
+
+  const pbox = document.getElementById('dpPuppets');
+  function addRow(tag, aut){
+    const div = document.createElement('div');
+    // 新增行留一个空选项，避免默认就选中列表第一个国家（很容易误存）
+    div.innerHTML = dpPuppetRowHtml('<option value="">（选一个国家）</option>' + opts,
+                                    autOpts, tag, aut);
+    const row = div.firstChild;
+    pbox.appendChild(row);          // 先进文档再设 value，detached 时设值偶发不生效
+    const tsel = row.querySelector('.dp-p-tag');
+    const asel = row.querySelector('.dp-p-aut');
+    if(tag) tsel.value = tag;
+    asel.value = aut || 'autonomy_puppet';
+    row.querySelector('.dp-p-del').onclick = ()=>row.remove();
+  }
+  d.puppets.forEach(p=>addRow(p.tag, p.autonomy));
+  document.getElementById('dpAddPuppet').onclick = ()=>addRow('', 'autonomy_puppet');
+
+  const ov = document.getElementById('dpOverlord');
+  const au = document.getElementById('dpAutonomy');
+  if(cur){ ov.value = cur.tag; au.value = cur.autonomy; }
+  const setMulti = (id, vals)=>{
+    const sel = document.getElementById(id);
+    [...sel.options].forEach(o=>{ o.selected = vals.indexOf(o.value) >= 0; });
+  };
+  setMulti('dpGuarantees', d.guarantees);
+  setMulti('dpAccess', d.access);
+  document.getElementById('dpSave').onclick = ()=>saveDiplo(d);
+}
+
+async function saveDiplo(d){
+  const _rows = [...document.querySelectorAll('#dpPuppets .dp-row')];
+  if(_rows.some(r=>!r.querySelector('.dp-p-tag').value)){
+    status('附庸列表里有一行没选国家：先选好，或者点「移除」', true);
+    return;
+  }
+  const puppets = _rows.map(r=>({
+    tag: r.querySelector('.dp-p-tag').value,
+    autonomy: r.querySelector('.dp-p-aut').value
+  })).filter(x=>x.tag);
+  const overlay = {
+    tag: d.tag,
+    overlord: document.getElementById('dpOverlord').value,
+    autonomy: document.getElementById('dpAutonomy').value,
+    puppets: puppets,
+    guarantees: [...document.getElementById('dpGuarantees').selectedOptions].map(o=>o.value),
+    access: [...document.getElementById('dpAccess').selectedOptions].map(o=>o.value)
+  };
+  const msg = document.getElementById('dpMsg');
+  if(msg) msg.textContent = '写入中…';
+  let r;
+  try{
+    r = await (await fetch('/api/diplomacy_save', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(overlay)})).json();
+  }catch(e){ if(msg) msg.textContent = '失败：' + e.message; return; }
+  if(!r.ok){ if(msg) msg.textContent = r.msg || '写入失败'; status(r.msg || '', true); return; }
+  status(r.msg || '已保存');
+  await loadDiplo(d.tag);
+  const box = document.getElementById('dpMsg');
+  if(box){
+    box.innerHTML = (r.diff || []).map(x=>'<div>' + escapeHtml(x.label) + '：' +
+      escapeHtml(x.old || '无') + ' → ' + escapeHtml(x.new || '无') + '</div>').join('') || '（没有改动）';
+  }
 }
 
 function LOC_NAME(tag){
@@ -12565,12 +13186,18 @@ async function saveState(d){
     const v = inp.value.trim();
     if(v !== '') buildings[inp.dataset.b] = Number(v);
   });
+  const resources = {};
+  document.querySelectorAll('#stateBody [data-r]').forEach(inp=>{
+    const v = inp.value.trim();
+    if(v !== '') resources[inp.dataset.r] = Number(v);
+  });
   const fields = {
     owner: document.getElementById('stOwner').value,
     cores: cores,
     manpower: document.getElementById('stManpower').value.trim(),
     category: document.getElementById('stCategory').value,
     buildings: buildings,
+    resources: resources,
     province_buildings: (function(){
       const pb = {};
       document.querySelectorAll('#stateBody [data-pb]').forEach(inp=>{
