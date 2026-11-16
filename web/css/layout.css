@@ -1,0 +1,154 @@
+/* 雪绒编辑器 · 页面骨架（layout）
+   body/html 基础、三栏骨架、工具栏、加载与状态条、引导条与步骤条。
+   判据：去掉所有子元素内容，这一块还该长这样。 */
+  html,body{margin:0;height:100%;font-family:system-ui,"Microsoft YaHei",sans-serif;background:var(--input);color:var(--text)}
+  #app{display:flex;height:100%}
+  #side{width:300px;min-width:240px;overflow:auto;background:var(--input);border-right:1px solid var(--line);padding:10px;box-sizing:border-box;display:flex;flex-direction:column}
+  #main{flex:1;position:relative;overflow:hidden}
+  /* v1.24.1 常驻引导条：画布顶部、工具栏之下。回答「走到哪了」；
+     左下角 #guideBox 回答「这一步具体怎么做」，两者互补不重复。 */
+  #stepBar{position:absolute;top:56px;left:10px;right:calc(var(--pane-r,356px) + 18px);z-index:4;
+    background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);
+    border-radius:10px;padding:7px 26px 8px 11px;font-size:12px;display:flex;flex-direction:column;gap:5px;
+    box-shadow:0 6px 18px rgba(0,0,0,.18)}
+  #stepBar.all{border-color:color-mix(in srgb,var(--accent-2) 55%,var(--line))}
+  .sb-row{display:flex;align-items:center;gap:1px;flex-wrap:wrap}
+  .sb-step{display:flex;align-items:center;gap:5px;color:var(--muted);padding:1px 5px 1px 1px;border-radius:6px}
+  .sb-step i{width:16px;height:16px;border-radius:50%;border:1px solid var(--line2);
+    display:inline-flex;align-items:center;justify-content:center;font-size:9.5px;font-style:normal;flex:0 0 auto}
+  .sb-step.done{opacity:.55}
+  .sb-step.done i{background:color-mix(in srgb,var(--accent-2) 70%,transparent);border-color:transparent;color:#10140f}
+  .sb-step.cur{color:var(--text);font-weight:600}
+  .sb-step.cur i{background:var(--accent);border-color:var(--accent);color:#141716}
+  .sb-arw{color:var(--line2);font-size:10px;padding:0 1px;user-select:none}
+  .sb-desc{color:var(--muted);font-size:11px;line-height:1.5}
+  .sb-x{position:absolute;top:4px;right:5px;background:none;border:none;color:var(--muted);
+    cursor:pointer;font-size:13px;line-height:1;padding:3px 5px;border-radius:5px}
+  .sb-x:hover{color:var(--text);background:var(--panel2)}
+  #sbDot{position:absolute;top:56px;left:10px;z-index:4;width:22px;height:22px;border-radius:50%;
+    background:var(--panel);border:1px solid var(--line2);color:var(--muted);cursor:pointer;
+    font-size:11px;line-height:1;display:none;place-items:center;padding:0}
+  #sbDot:hover{color:var(--text);border-color:var(--accent)}
+  .toolbar{position:absolute;top:10px;left:10px;display:flex;gap:6px;flex-wrap:wrap;z-index:5}
+  .panel{position:absolute;top:56px;right:10px;width:320px;max-height:calc(100% - 70px);overflow:auto;
+    background:#1c2124f2;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12px;display:none}
+  #status{position:absolute;bottom:10px;left:10px;right:10px;background:#141a21ee;border:1px solid var(--panel2);pointer-events:none;
+    border-radius:6px;padding:6px 10px;font-size:12px;color:var(--text);display:none;z-index:95}
+  /* v1.24.0 错误卡片：三行（发生什么 / 为什么 / 怎么办） */
+  #errBar{position:fixed;left:50%;bottom:52px;z-index:200;width:min(640px,calc(100% - 40px));
+    transform:translateX(-50%) translateY(14px);opacity:0;pointer-events:none;
+    background:var(--panel);border:1px solid #a05c5c;border-radius:12px;padding:12px 14px;
+    box-shadow:var(--shadow);transition:opacity .16s,transform .16s}
+  #errBar.show{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
+  #errBar b{display:block;font-size:13px;color:var(--text);margin-bottom:3px}
+  #errBar .err-why{display:block;font-size:10.5px;color:var(--muted);line-height:1.55;margin-bottom:9px}
+  #errBar .err-why em{font-style:normal;opacity:.7}
+  #errBar .err-acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  body.fs-large{zoom:1.06}
+  body.fs-small{zoom:.94}
+  html,body{font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;font-size:13px;letter-spacing:.1px}
+  #side{width:288px;min-width:260px;padding:0!important;background:var(--panel)!important;border-right:1px solid var(--line)!important}
+  .side-brand{display:flex;align-items:center;gap:10px;padding:16px 14px 12px;border-bottom:1px solid var(--line)}
+  .brand-mark{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
+    background:linear-gradient(145deg,rgba(208,173,114,.22),rgba(208,173,114,.05));
+    border:1px solid rgba(208,173,114,.45);color:var(--accent);font-weight:700;font-size:16px}
+  .brand-text b{display:block;font-size:14px;color:var(--text);letter-spacing:.5px}
+  .brand-text span{display:block;font-size:9.5px;color:var(--muted);letter-spacing:1.6px;margin-top:2px}
+  .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding:10px 14px!important;
+    background:var(--panel)!important;border-bottom:1px solid var(--line)!important;box-shadow:0 1px 0 rgba(0,0,0,.18)}
+  #fit,#zoomIn,#zoomOut{min-width:32px;width:32px;padding:0!important;justify-content:center}
+  #fit{width:auto!important;min-width:82px;padding:0 12px!important;white-space:nowrap}
+  #saveAll{color:var(--accent)!important;border-color:color-mix(in srgb,var(--accent) 45%,transparent)!important}
+  #saveAll:hover{background:color-mix(in srgb,var(--accent) 14%,transparent)!important;color:var(--accent)!important}
+  .tb-sep{width:1px;height:18px;background:var(--line);margin:6px 5px;flex:0 0 1px}
+  .tb-break{flex-basis:100%;height:0}
+  #panel{width:356px!important;top:64px!important;padding:14px 14px 18px!important;
+    background:color-mix(in srgb,var(--panel) 94%,transparent)!important;border:1px solid var(--line)!important;
+    border-radius:var(--r-lg)!important;box-shadow:var(--shadow)!important;backdrop-filter:blur(10px)}
+  #status{font-size:11.5px;color:var(--muted)}
+  *{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:var(--line2);border-radius:6px;border:2px solid var(--panel)}
+  ::selection{background:color-mix(in srgb,var(--accent) 35%,transparent)}
+  #tbMore{display:none}
+  #tbMoreMenu{position:fixed;z-index:130;display:none;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;box-shadow:var(--shadow);padding:6px;min-width:180px;flex-direction:column;gap:2px}
+  #tbMoreMenu.show{display:flex}
+  #tbMoreMenu .tb-more-item{padding:7px 10px;border-radius:6px;font-size:12px;color:var(--text);cursor:pointer}
+  #tbMoreMenu .tb-more-item:hover{background:var(--panel2);color:var(--accent)}
+  .side-tab{flex:1;height:30px;border:0;background:none;color:var(--t2);font-size:11.5px;cursor:pointer;
+    border-bottom:2px solid transparent;border-radius:6px 6px 0 0}
+  .side-tab:hover{color:var(--text);background:var(--panel2)}
+  .side-tab.on{color:var(--accent);border-bottom-color:var(--accent);background:var(--panel2)}
+  .side-pane{display:none;flex:1;overflow:auto;padding:10px 12px}
+  .side-pane.on{display:block}
+  /* ---------- v0.82 选择与拖拽防护 ---------- */
+  /* 界面整体不可选中：拖动地图/SVG 时不会选中文字，也不会把文字拖出浏览器窗口 */
+  html, body{user-select:none;-webkit-user-select:none}
+  /* ---------- v0.60 数据源 ---------- */
+  #srcBox{margin:10px 10px 6px;padding:10px;border:1px solid color-mix(in srgb,var(--accent) 42%,var(--line));
+    border-radius:var(--r-md);
+    background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 9%,var(--panel)),var(--panel))}
+  .src-state{margin-top:8px;font-size:10.5px;color:var(--muted);min-height:15px;line-height:1.45}
+  .src-state.busy{color:var(--accent)}
+  #loadBar{position:fixed;top:0;left:0;right:0;height:4px;z-index:999;display:none;overflow:hidden;
+    box-shadow:0 1px 8px color-mix(in srgb,var(--accent) 35%,transparent)}
+  #loadBar.show{display:block}
+  #loadBar .lb-inner{height:100%;width:34%;
+    background:linear-gradient(90deg,transparent,var(--accent),transparent);
+    animation:lbslide 1.15s ease-in-out infinite}
+  /* ---------- 加载遮罩：长任务（读 mod、扫图标、建地图）期间盖住界面 ---------- */
+  #busyMask{position:fixed;inset:0;z-index:998;background:rgba(8,10,9,.55);
+    display:none;align-items:center;justify-content:center;backdrop-filter:blur(2px)}
+  #busyMask.show{display:flex}
+  .busy-card{min-width:320px;max-width:min(520px,calc(100% - 60px));padding:22px 26px 18px;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 20px 48px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:10px}
+  .busy-title{font-size:14px;color:var(--text);font-weight:600;letter-spacing:.5px}
+  .busy-sub{font-size:12px;color:var(--muted);line-height:1.6;min-height:18px}
+  .busy-track{position:relative;height:6px;border-radius:3px;overflow:hidden;
+    background:color-mix(in srgb,var(--line) 70%,transparent)}
+  .busy-track i{position:absolute;top:0;bottom:0;width:36%;border-radius:3px;
+    background:linear-gradient(90deg,transparent,var(--accent),transparent);
+    animation:lbslide 1.15s ease-in-out infinite}
+  .busy-track.det i{left:0;width:0;border-radius:3px;
+    background:linear-gradient(90deg,var(--accent-2),var(--accent));
+    animation:none;transition:width .35s ease-out}
+  .busy-foot{display:flex;justify-content:space-between;align-items:center;
+    font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+  #guideBox{position:fixed;left:14px;bottom:14px;width:292px;background:var(--panel);
+    border:1px solid var(--line);border-radius:11px;box-shadow:0 12px 34px rgba(0,0,0,.5);
+    z-index:70;display:none;overflow:hidden;max-height:76vh;flex-direction:column}
+  #guideBox.show{display:flex}
+  .gb-head{display:flex;justify-content:space-between;align-items:center;
+    padding:7px 9px 7px 11px;border-bottom:1px solid var(--line);
+    cursor:grab;user-select:none;flex:0 0 auto;touch-action:none}
+  #guideBox.dragging .gb-head{cursor:grabbing}
+  .gb-head .gb-reset{background:none;border:none;color:var(--muted);font-size:11px;
+    cursor:pointer;padding:0 4px;font-family:inherit;opacity:0;transition:opacity .15s}
+  #guideBox:hover .gb-head .gb-reset{opacity:1}
+  .gb-head .gb-reset:hover{color:var(--accent)}
+  .gb-head b{font-size:12px;color:var(--accent);letter-spacing:.3px}
+  .gb-x{background:none;border:none;color:var(--muted);font-size:15px;line-height:1;
+    cursor:pointer;padding:0 2px;font-family:inherit}
+  .gb-x:hover{color:var(--text)}
+  .gb-body{padding:9px 11px 10px;display:flex;flex-direction:column;gap:9px;
+    overflow-y:auto;flex:1 1 auto;min-height:0}
+  .gb-flow{font-size:10.5px;color:var(--accent);letter-spacing:.4px;
+    padding-bottom:7px;border-bottom:1px dashed var(--line);margin-bottom:1px}
+  .gb-step{display:flex;gap:7px;font-size:11.5px;line-height:1.55;color:var(--muted)}
+  .gb-step.now{color:var(--text)}
+  .gb-step.now .gb-num{background:var(--accent);border-color:var(--accent);color:var(--panel);font-weight:700}
+  .gb-step.next{opacity:.5}
+  .gb-step.next .gb-txt b{font-weight:500}
+  .gb-num{flex:0 0 15px;height:15px;border-radius:50%;background:var(--input);
+    border:1px solid var(--line);color:var(--accent);font-size:9.5px;line-height:13px;
+    text-align:center;margin-top:1px}
+  .gb-txt{flex:1;min-width:0}
+  .gb-txt b{color:var(--text);font-weight:600;display:block;line-height:1.4}
+  .gb-btn{margin-top:5px;background:var(--input);border:1px solid var(--line);color:var(--accent);
+    border-radius:5px;padding:3px 9px;font-size:11px;cursor:pointer;font-family:inherit}
+  .gb-btn:hover{border-color:var(--accent);background:var(--panel)}
+  .gb-empty{font-size:11.5px;color:var(--muted);line-height:1.6}
+  #status{background:color-mix(in srgb,var(--panel) 94%,transparent)!important;color:var(--text)!important;
+    border:1px solid var(--line)!important;box-shadow:var(--shadow)!important}

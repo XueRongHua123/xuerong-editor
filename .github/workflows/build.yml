@@ -9,22 +9,59 @@ on:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      # 源码与图标里有中文文件名/中文版本串，统一 UTF-8 免得 PyInstaller 在 runner 上读成乱码
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Version file
+        shell: pwsh
+        run: |
+          $v = "$env:GITHUB_REF_NAME" -replace '^v', ''
+          if (-not $v) { $v = 'dev' }
+          [IO.File]::WriteAllText("$PWD\_version.txt", $v, (New-Object Text.UTF8Encoding $false))
+          Write-Host "version = $v"
       - name: Build
         shell: pwsh
         run: |
+          python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller
           python -m PyInstaller --noconfirm --onefile --name "雪绒的钢铁雄心编辑器" `
             --icon "mascot\xuerong_face.ico" `
             --add-data "focus_editor_index.html;." `
+            --add-data "web;web" `
+            --add-data "xuerong;xuerong" `
+            --add-data "qa;qa" `
             --add-data "mascot_face.png;." `
             --add-data "mascot_card.png;." `
+            --add-data "_version.txt;." `
             --add-data "mascot;mascot" `
+            --exclude-module "PIL._avif" `
+            --exclude-module "PIL._avif_cffi" `
+            --exclude-module "numpy" `
+            --exclude-module "scipy" `
+            --exclude-module "pandas" `
+            --exclude-module "matplotlib" `
             focus_editor.py
+          Get-Item dist\*.exe | ForEach-Object { Write-Host "$($_.Name) $($_.Length) B" }
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\雪绒的钢铁雄心编辑器.exe" -ArgumentList '--port','8811' -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 40; $i++) {
+            Start-Sleep -Seconds 3
+            try {
+              $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8811/' -UseBasicParsing -TimeoutSec 15
+              if ($r.StatusCode -eq 200) { Write-Host "GET / 200 $($r.RawContentLength) B"; $ok = $true; break }
+            } catch { }
+          }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "exe 起服务失败" }
       - uses: actions/upload-artifact@v4
         with:
           name: xuerong-editor

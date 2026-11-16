@@ -21,3 +21,6 @@ ai_config.json
 .idea/
 Thumbs.db
 desktop.ini
+
+# 构建期生成
+_version.txt

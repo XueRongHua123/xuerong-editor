@@ -1,0 +1,102 @@
+types = {
+	type[bookmark] = {
+		path = "game/common/bookmarks"
+		skip_root_key = bookmarks
+	}
+}
+
+bookmark = {
+	name = localisation
+	desc = localisation
+	date = datetime_field
+	picture = scalar
+	default_country = enum[country_tags]
+
+	## cardinality = 0..1
+	filters = { 
+		## cardinality = ~0..inf
+		scalar
+	}
+
+	## cardinality = 0..1
+	sort_unplayed_first = no            # defaults to yes: countries with unplayed content are listed first
+	## cardinality = 0..1
+	include_majors_in_minor_list = no   # defaults to yes: when a filter is active, majors also show in the mini list
+	## cardinality = 0..1
+	apply_filter_to_majors = yes        # defaults to no: when yes, the major row also respects the filter (only majors matching it are shown)
+	## cardinality = 0..1
+	apply_filter_to_other_country = yes # defaults to no: by default the "other" (---) entry is always shown; when yes it respects the filter too
+	## cardinality = 0..1
+	label_order = { 					# optional: forces the label filter button order; a warning is logged for any label used by a country that is missing from this list
+		## cardinality = 0..inf
+		scalar							
+	}   
+	#                                     
+	## cardinality = 0..1
+	scrollable_country_list = yes       # defaults to no: scroll the minor list with its vertical scrollbar instead of the overflow dropdown
+	
+	## cardinality = 0..1
+	default = bool
+
+	## cardinality = 7..inf
+	enum[country_tags] = {
+		## cardinality = 0..1
+		minor = yes
+
+		history = localisation
+		## cardinality = 0..1
+		required_dlc  = { 
+			## cardinality = ~1..inf
+			enum[dlc] 
+		}
+		ideology = <ideology>
+		## cardinality = 0..1
+		version = scalar
+
+		## cardinality = 0..1
+		label = {
+			## cardinality = ~1..inf
+			scalar
+		}
+
+		## cardinality = 0..1
+		assume_not_played_if_missing_data = bool
+		## cardinality = 0..1
+		override_leader_portrait = <character>
+
+		## cardinality = 0..1
+		available = {
+			## cardinality = ~1..inf
+			alias_name[trigger] = alias_match_left[trigger]
+		}
+
+		## cardinality = 0..1
+		ideas = {
+			## cardinality = ~1..inf
+			<idea>
+		}
+
+		## cardinality = 0..1
+		focuses = {
+			## cardinality = 0..3
+			<focus>
+
+			## cardinality = 0..3
+			<shared_focus>
+		}
+	}
+
+	## cardinality = 0..1
+	"---" = {
+		## cardinality = 0..1
+		minor = yes
+
+		history = localisation
+	}
+
+	effect = {
+		randomize_weather = 12345
+		randomize_weather = 22345
+	}
+
+}

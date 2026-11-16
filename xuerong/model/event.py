@@ -1,0 +1,600 @@
+# -*- coding: utf-8 -*-
+"""事件域（P0-3 D5 从 focus_editor.py 迁入）。
+
+事件图（国家/省份事件 + add_namespace）与逐个事件的读写。
+`_EVENT_GRAPH_CACHE` 跟着本模块走——它只被这几个函数用（含 space_create/delete 里的
+`.clear()`），搬出去会变成两份缓存。
+
+依赖边界：
+  · EVENTS / LOC / CHANGED → xuerong.state
+  · 文本改写 → core.text；叠加链 → core.paths
+  · 本地化写 → model.loc（save_loc / _loc_write_pairs）；快照 → model.history
+  · 唯一钩子：reload_data
+"""
+import io
+import os
+import re
+
+from xuerong import state
+from xuerong.core import paths
+from xuerong.core.paths import _chain_layers, is_under_game
+from xuerong.core.text import (_atomic_write, _bom_for, brace_match, braces_balanced,
+                               set_raw_block, set_scalar, strip_comments, top_items)
+from xuerong.model.history import snapshot
+from xuerong.model.loc import save_loc, _loc_write_pairs
+
+_RELOAD = None
+
+
+def bind(reload_data):
+    global _RELOAD
+    _RELOAD = reload_data
+
+
+def _reload():
+    if _RELOAD:
+        _RELOAD()
+
+
+# ref: HOI4 Mod Utilities "Event tree preview"
+_EVENT_GRAPH_CACHE = {}
+
+
+
+def _event_block(text, kind_kw):
+    """取出所有 xxx_event = { ... } 块：(id, body)"""
+    out = []
+    for m in re.finditer(r'(?m)^\s*([a-z_]*_event)\s*=\s*\{', text):
+        b = text.find("{", m.end() - 1)
+        e = brace_match(text, b)
+        if e <= b:
+            continue
+        body = text[b + 1:e - 1]
+        eid = re.search(r'(?m)^\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', body)
+        if not eid:
+            continue
+        out.append((eid.group(1), body, m.group(1)))
+    return out
+
+
+
+def _event_fire_targets(body):
+    """事件体里触发的其它事件 → [(target, where)]，where ∈ option / after / immediate"""
+    res = []
+    KINDS = r'(?:country_event|news_event|state_event)'
+    # 先按块归类：option / after / immediate
+    zones = []
+    for key in ("option", "after", "immediate"):
+        for m in re.finditer(r'(?m)^\s*' + key + r'\s*=\s*\{', body):
+            b = body.find("{", m.end() - 1)
+            e = brace_match(body, b)
+            if e > b:
+                zones.append((b, e, key))
+    zones.sort()
+
+    def zone_of(pos):
+        for b, e, k in zones:
+            if b <= pos < e:
+                return k
+        return "other"
+
+    # 两种写法：块式 { id = X } 与简写 = X
+    for m in re.finditer(KINDS + r'\s*=\s*\{', body):
+        b = body.find("{", m.end() - 1)
+        e = brace_match(body, b)
+        if e <= b:
+            continue
+        sub = body[b + 1:e - 1]
+        tid = re.search(r'(?m)^\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', sub)
+        if tid:
+            res.append((tid.group(1), zone_of(m.start())))
+    for m in re.finditer(KINDS + r'\s*=\s*"?([A-Za-z0-9_.\-]+)"?', body):
+        tid = m.group(1)
+        if tid in ("yes", "no"):
+            continue
+        res.append((tid, zone_of(m.start())))
+    return res
+
+
+
+def event_graph(ns="", root=None):
+    """某个事件命名空间的树。ns 为空时返回所有命名空间概览。"""
+    root = paths._pick(root)
+    ns = (ns or "").strip()
+    key = (os.path.abspath(root or ""), ns)
+    hit = _EVENT_GRAPH_CACHE.get(key)
+    if hit:
+        return hit
+
+    events = {}
+    d = os.path.join(root or "", "events")
+    if os.path.isdir(d):
+        for _dp, _dn, files in os.walk(d):
+            for fn in sorted(files):
+                if not fn.endswith(".txt"):
+                    continue
+                try:
+                    text = strip_comments(io.open(os.path.join(_dp, fn), encoding="utf-8-sig",
+                                                  errors="replace").read())
+                except Exception:
+                    continue
+                for eid, body, kind in _event_block(text, "event"):
+                    events[eid] = {"id": eid, "kind": kind, "body": body,
+                                   "file": os.path.relpath(os.path.join(_dp, fn), root)}
+
+    # 命名空间：优先 ns 前缀（X.1 里的 X），没有点号的按整个 id 算
+    spaces = {}
+    for eid in events:
+        s = eid.split(".")[0] if "." in eid else eid
+        spaces.setdefault(s, []).append(eid)
+
+    if not ns:
+        out = {"ok": True, "spaces": [{"id": k, "count": len(v)} for k, v in
+                                      sorted(spaces.items(), key=lambda kv: -len(kv[1]))],
+               "count": len(spaces), "events": len(events),
+               "msg": "%d 个事件，分属 %d 个命名空间" % (len(events), len(spaces))}
+        _EVENT_GRAPH_CACHE[key] = out
+        return out
+
+    ids = set(spaces.get(ns) or [])
+    if not ids:
+        return {"ok": False, "msg": "没有命名空间 %s 的事件" % ns}
+
+    nodes, edges = [], []
+    for eid in sorted(ids):
+        ev = events[eid]
+        nodes.append({"id": eid, "kind": ev["kind"], "file": ev["file"],
+                      "name": state.loc().get(eid + ".t", "") or state.loc().get(eid + ".title", ""),
+                      "text": "#" + str(len(nodes) + 1)})
+        for tid, where in _event_fire_targets(ev["body"]):
+            edges.append({"from": eid, "to": tid, "where": where,
+                          "external": tid not in ids})
+    # 外部引用也画成节点（灰色），方便看出跳到别处
+    ext = sorted({e["to"] for e in edges if e["external"]})
+    for tid in ext:
+        nodes.append({"id": tid, "kind": "external", "file": "",
+                      "name": state.loc().get(tid + ".t", ""), "text": ""})
+    out = {"ok": True, "ns": ns, "count": len(nodes), "edges": len(edges),
+           "nodes": nodes, "edges": edges,
+           "msg": "%s：%d 个事件，%d 条触发，%d 个外部引用" % (
+               ns, len(ids), len(edges), len(ext))}
+    _EVENT_GRAPH_CACHE[key] = out
+    return out
+
+
+
+def event_space_create(ns, root=None):
+    """新建一个事件命名空间：写 events/zz_xuerong_<ns>.txt，含一个样板事件"""
+    import re as _re
+    ns = (ns or "").strip()
+    if not _re.match(r'^[A-Za-z][A-Za-z0-9_]*$', ns):
+        return {"ok": False, "msg": "命名空间只能用字母、数字、下划线，且字母开头：%s" % ns}
+    root = paths._pick(root)
+    if not root:
+        return {"ok": False, "msg": "没有加载 mod"}
+    if is_under_game(root):
+        return {"ok": False, "msg": "这是原版目录，只读"}
+    d = os.path.join(root, "events")
+    os.makedirs(d, exist_ok=True)
+    fn = os.path.join(d, "zz_xuerong_%s.txt" % ns)
+    if os.path.exists(fn):
+        return {"ok": False, "msg": "文件已存在：events/zz_xuerong_%s.txt" % ns}
+    # 避免和已有命名空间撞名
+    existing = event_graph("", root)
+    for sp in existing.get("spaces") or []:
+        if sp["id"] == ns:
+            return {"ok": False, "msg": "命名空间 %s 已经有事件了" % ns}
+    body = (
+        "add_namespace = %s\n\n"
+        "country_event = {\n"
+        "\tid = %s.1\n"
+        "\ttitle = %s.1.t\n"
+        "\tdesc = %s.1.d\n"
+        "\tis_triggered_only = yes\n"
+        "\n"
+        "\toption = {\n"
+        "\t\tname = %s.1.a\n"
+        "\t}\n"
+        "}\n"
+    ) % (ns, ns, ns, ns, ns)
+    snapshot(fn) if os.path.exists(fn) else None
+    _atomic_write(fn, _bom_for(fn) + body.encode("utf-8"))
+    _EVENT_GRAPH_CACHE.clear()
+
+    # 同时生成本地化，省得再手动补键
+    loc_dir = os.path.join(root, "localisation", "simp_chinese")
+    loc_fn = os.path.join(loc_dir, "zz_xuerong_%s_l_simp_chinese.yml" % ns)
+    loc_msg = ""
+    try:
+        os.makedirs(loc_dir, exist_ok=True)
+        lines = ["l_simp_chinese:",
+                 ' %s.1.t:0 "【未命名事件】"' % ns,
+                 ' %s.1.d:0 "（在这里写事件描述）"' % ns,
+                 ' %s.1.a:0 "确定"' % ns]
+        _atomic_write(loc_fn, b"\xef\xbb\xbf" + (chr(10).join(lines) + chr(10)).encode("utf-8"))
+        loc_msg = "，本地化已写到 localisation/simp_chinese/%s" % os.path.basename(loc_fn)
+    except Exception as _e:
+        loc_msg = "，本地化生成失败（%s）" % _e
+
+    return {"ok": True, "ns": ns, "file": "events/zz_xuerong_%s.txt" % ns,
+            "locFile": os.path.basename(loc_fn) if os.path.exists(loc_fn) else "",
+            "msg": "已创建命名空间 %s（events/zz_xuerong_%s.txt）%s" % (ns, ns, loc_msg)}
+
+
+
+def event_space_delete(ns, root=None):
+    """删除某个命名空间的事件：从各 events/*.txt 里摘掉这些块，文件空了就删"""
+    ns = (ns or "").strip()
+    if not ns:
+        return {"ok": False, "msg": "没有指定命名空间"}
+    root = paths._pick(root)
+    if not root:
+        return {"ok": False, "msg": "没有加载 mod"}
+    if is_under_game(root):
+        return {"ok": False, "msg": "这是原版目录，只读"}
+    d = os.path.join(root, "events")
+    if not os.path.isdir(d):
+        return {"ok": False, "msg": "没有 events 目录"}
+
+    prefix = ns + "."
+    removed = 0
+    touched = []
+    for _dp, _dn, files in os.walk(d):
+        for fn in sorted(files):
+            if not fn.endswith(".txt"):
+                continue
+            p = os.path.join(_dp, fn)
+            try:
+                raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            except Exception:
+                continue
+            text = strip_comments(raw)
+            spans = []
+            for m in re.finditer(r'(?m)^\s*[a-z_]*_event\s*=\s*\{', text):
+                b = text.find("{", m.end() - 1)
+                e = brace_match(text, b)
+                if e <= b:
+                    continue
+                body = text[b + 1:e - 1]
+                eid = re.search(r'(?m)^\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', body)
+                if eid and eid.group(1).startswith(prefix):
+                    # 用原文（去注释后的坐标）回到原始文本里删：按行号范围删更稳
+                    spans.append((m.start(), e))
+            lines = raw.splitlines(True)
+            # 即使事件块已经删过，只要还有 add_namespace = ns 也要处理（否则残留声明）
+            _ns_re = re.compile(r'^\s*add_namespace\s*=\s*' + re.escape(ns) + r'\s*$')
+            _has_ns = any(_ns_re.match(ln.strip()) for ln in lines)
+            if not spans and not _has_ns:
+                continue
+            offsets = []
+            acc = 0
+            for ln in lines:
+                offsets.append(acc)
+                acc += len(ln)
+            drop = set()
+            for (b, e) in spans:
+                for i, off in enumerate(offsets):
+                    if off >= b and off < e:
+                        drop.add(i)
+                    elif off < b and off + len(lines[i]) > b:
+                        drop.add(i)
+            # 命名空间声明本身也要删（add_namespace = ns）
+            for i, ln in enumerate(lines):
+                if re.match(r'^\s*add_namespace\s*=\s*' + re.escape(ns) + r'\s*$', ln.strip()):
+                    drop.add(i)
+            if not drop:
+                continue
+            keep = [ln for i, ln in enumerate(lines) if i not in drop]
+            new_text = "".join(keep)
+            if new_text.strip() in ("", "l_english:", "l_simp_chinese:"):
+                snapshot(p)
+                os.remove(p)
+                touched.append("%s（已删空，文件移除）" % os.path.relpath(p, root))
+            else:
+                snapshot(p)
+                _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
+                touched.append("%s（删 %d 个块）" % (os.path.relpath(p, root), len(spans)))
+            removed += max(1, len(spans))     # 只剩 add_namespace 声明时也算删过
+    if not removed:
+        return {"ok": False, "msg": "没有找到 %s.* 的事件" % ns}
+    _EVENT_GRAPH_CACHE.clear()
+    _reload()
+    return {"ok": True, "ns": ns, "removed": removed, "files": touched,
+            "msg": "已删除命名空间 %s 的 %d 个事件" % (ns, removed)}
+
+
+
+def event_detail(eid, root=None):
+    """读一个事件的 title / desc / 各 option 的名称与触发目标，供就地编辑"""
+    eid = (eid or "").strip()
+    root = paths._pick(root)
+    if not eid:
+        return {"ok": False, "msg": "没有事件 id"}
+    d = os.path.join(root or "", "events")
+    if not os.path.isdir(d):
+        return {"ok": False, "msg": "没有 events 目录"}
+    for _dp, _dn, files in os.walk(d):
+        for fn in files:
+            if not fn.endswith(".txt"):
+                continue
+            p = os.path.join(_dp, fn)
+            try:
+                text = strip_comments(io.open(p, encoding="utf-8-sig", errors="replace").read())
+            except Exception:
+                continue
+            for m in re.finditer(r'(?m)^\s*[a-z_]*_event\s*=\s*\{', text):
+                b = text.find("{", m.end() - 1)
+                e = brace_match(text, b)
+                if e <= b:
+                    continue
+                body = text[b + 1:e - 1]
+                got = re.search(r'(?m)^\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', body)
+                if not got or got.group(1) != eid:
+                    continue
+                tit = re.search(r'(?m)^\s*title\s*=\s*"?([A-Za-z0-9_.\-]+)"?', body)
+                dsc = re.search(r'(?m)^\s*desc\s*=\s*"?([A-Za-z0-9_.\-]+)"?', body)
+                opts = []
+                for om in re.finditer(r'(?m)^\s*option\s*=\s*\{', body):
+                    ob = body.find("{", om.end() - 1)
+                    oe = brace_match(body, ob)
+                    if oe <= ob:
+                        continue
+                    sub = body[ob + 1:oe - 1]
+                    nm = re.search(r'(?m)^\s*name\s*=\s*"?([A-Za-z0-9_.\-]+)"?', sub)
+                    tg = re.search(r'(?m)^\s*(?:country_event|news_event|state_event)\s*=\s*(?:\{\s*)?id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', sub)
+                    if not tg:
+                        tg = re.search(r'(?m)^\s*(?:country_event|news_event|state_event)\s*=\s*"?([A-Za-z0-9_.\-]+)"?', sub)
+                    opts.append({"name": nm.group(1) if nm else "",
+                                 "target": tg.group(1) if tg else ""})
+                return {"ok": True, "id": eid, "file": os.path.relpath(p, root),
+                        "title": tit.group(1) if tit else "",
+                        "desc": dsc.group(1) if dsc else "",
+                        "titleText": state.loc().get(tit.group(1), "") if tit else "",
+                        "descText": state.loc().get(dsc.group(1), "") if dsc else "",
+                        "options": opts}
+    return {"ok": False, "msg": "找不到事件 %s（可能不在本 mod 里）" % eid}
+
+
+
+def event_edit(eid, title=None, desc=None, options=None, root=None,
+               title_text=None, desc_text=None):
+    """就地改事件的 title / desc / 各 option 的名称与触发目标。
+
+    只替换匹配到的行，不动其它内容；改前 snapshot。"""
+    eid = (eid or "").strip()
+    root = paths._pick(root)
+    if not eid:
+        return {"ok": False, "msg": "没有事件 id"}
+    if is_under_game(root):
+        return {"ok": False, "msg": "这是原版目录，只读"}
+    d = os.path.join(root or "", "events")
+    if not os.path.isdir(d):
+        return {"ok": False, "msg": "没有 events 目录"}
+
+    changed = []
+    for _dp, _dn, files in os.walk(d):
+        for fn in files:
+            if not fn.endswith(".txt"):
+                continue
+            p = os.path.join(_dp, fn)
+            try:
+                raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            except Exception:
+                continue
+            text = strip_comments(raw)
+            hit = None
+            for m in re.finditer(r'(?m)^\s*[a-z_]*_event\s*=\s*\{', text):
+                b = text.find("{", m.end() - 1)
+                e = brace_match(text, b)
+                if e <= b:
+                    continue
+                body = text[b + 1:e - 1]
+                got = re.search(r'(?m)^\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', body)
+                if got and got.group(1) == eid:
+                    hit = (m.start(), e, body)
+                    break
+            if not hit:
+                continue
+            # 用「去注释后的坐标」定位到原文：按行替换更安全
+            lines = raw.splitlines(True)
+            out = []
+            state = {"in_event": False, "depth": 0, "opt_i": -1,
+                     "title_done": False, "desc_done": False}
+            for ln in lines:
+                st = ln.strip()
+                if re.match(r'^[a-z_]*_event\s*=\s*\{', st):
+                    state["in_event"] = True
+                    state["depth"] = 0
+                    state["title_done"] = False
+                    state["desc_done"] = False
+                    state["opt_i"] = -1
+                if state["in_event"]:
+                    is_this = False
+                    mid = re.match(r'^id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', st)
+                    if mid and mid.group(1) == eid:
+                        is_this = True
+                    if is_this:
+                        state["this"] = True
+                    if state.get("this"):
+                        if title and not state["title_done"]:
+                            nt = re.sub(r'^(\s*title\s*=\s*)"?[A-Za-z0-9_.\-]+"?.*$',
+                                        lambda mm: mm.group(1) + title, ln)
+                            if nt != ln:
+                                ln = nt
+                                state["title_done"] = True
+                                changed.append("title")
+                        if desc and not state["desc_done"]:
+                            nd = re.sub(r'^(\s*desc\s*=\s*)"?[A-Za-z0-9_.\-]+"?.*$',
+                                        lambda mm: mm.group(1) + desc, ln)
+                            if nd != ln:
+                                ln = nd
+                                state["desc_done"] = True
+                                changed.append("desc")
+                        if re.match(r'^option\s*=\s*\{', st):
+                            state["opt_i"] += 1
+                        if options and 0 <= state["opt_i"] < len(options):
+                            o = options[state["opt_i"]] or {}
+                            if o.get("name"):
+                                nn = re.sub(r'^(\s*name\s*=\s*)"?[A-Za-z0-9_.\-]+"?.*$',
+                                            lambda mm: mm.group(1) + o["name"], ln)
+                                if nn != ln:
+                                    ln = nn
+                                    changed.append("option%d.name" % state["opt_i"])
+                            if o.get("target"):
+                                nt2 = re.sub(r'^((\s*)(?:country_event|news_event|state_event)\s*=\s*)"?[A-Za-z0-9_.\-]+"?.*$',
+                                             lambda mm: mm.group(1) + o["target"], ln)
+                                if nt2 != ln:
+                                    ln = nt2
+                                    changed.append("option%d.target" % state["opt_i"])
+                    # 花括号深度
+                    state["depth"] += ln.count("{") - ln.count("}")
+                    if state["depth"] <= 0:
+                        state["in_event"] = False
+                        state["this"] = False
+                out.append(ln)
+            if not changed:
+                # 键名没变，但可能只改了中文文本 —— 那也要写进 yml
+                _p2 = {}
+                if title_text and title:
+                    _p2[title] = title_text
+                if desc_text and desc:
+                    _p2[desc] = desc_text
+                if _p2:
+                    _lf = _loc_write_pairs(root, _p2)
+                    _reload()
+                    return {"ok": True, "id": eid, "file": os.path.relpath(p, root),
+                            "locFile": _lf, "changed": ["文本"],
+                            "msg": "已更新 %s 的文本（写进 %s）" % (eid, _lf)}
+                return {"ok": False, "msg": "没有实际改动（参数为空或未匹配到字段）"}
+            snapshot(p)
+            _atomic_write(p, b"\xef\xbb\xbf" + "".join(out).encode("utf-8"))
+            # 中文文本写进本地化，不塞回事件文件
+            _pairs = {}
+            if title_text and title:
+                _pairs[title] = title_text
+            if desc_text and desc:
+                _pairs[desc] = desc_text
+            _locfn = _loc_write_pairs(root, _pairs) if _pairs else ""
+            if _pairs:
+                changed.append("文本")
+            _reload()
+            _msg = "已更新 %s 的 %s" % (eid, "、".join(sorted(set(changed))))
+            if _locfn:
+                _msg += "（文本写进 %s）" % _locfn
+            return {"ok": True, "id": eid, "file": os.path.relpath(p, root),
+                    "locFile": _locfn, "changed": changed, "msg": _msg}
+    return {"ok": False, "msg": "找不到事件 %s" % eid}
+
+
+
+def load_events(root):
+    # 整条链都读（父 → 子），同名事件由子层覆盖。只读 root 会丢掉父 mod 的事件。
+    n = 0
+    for ab in _chain_layers(root):
+        d = os.path.join(ab, "events")
+        if not os.path.isdir(d):
+            continue
+        name = os.path.basename(ab.rstrip("\\/")) or ab
+        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+            rel = os.path.join("events", fn)
+            text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
+            nsm = re.search(r'add_namespace\s*=\s*(\w+)', text)
+            ns = nsm.group(1) if nsm else ""
+            for k, v, b in top_items(text):
+                if not b or not k.endswith("_event"):
+                    continue
+                m = re.search(r'(?m)^\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', v)
+                if not m:
+                    continue
+                eid = m.group(1)
+                state.events()[eid] = {"id": eid, "file": rel, "source": name, "type": k, "ns": ns,
+                               "title": state.loc().get(eid + ".t", ""),
+                               "raw": "%s = {\n%s\n}" % (k, v.strip())}
+                n += 1
+    return n
+
+
+
+# ---------------- 事件 ----------------
+def save_event(root, rel, eid, raw, title="", desc="", title_ja="", desc_ja="",
+               title_en="", desc_en="", options=None, trigger_raw="", immediate_raw="", picture=""):
+    path = os.path.join(root, rel)
+    text = io.open(path, encoding="utf-8", errors="replace", newline="").read()
+    m = re.search(r'(?m)^[ \t]*id\s*=\s*"?%s"?' % re.escape(eid), text)
+    if not m:
+        return False, "未找到事件 " + eid
+    if trigger_raw:
+        raw = set_raw_block(raw, "trigger", trigger_raw)
+    if immediate_raw:
+        raw = set_raw_block(raw, "immediate", immediate_raw)
+    if picture:
+        raw = set_scalar(raw, "picture", picture)
+    # 定位包含该 id 的事件块：向前找最近的 *_event = {
+    start = text.rfind("_event", 0, m.start())
+    brace = text.find('{', start)
+    e = brace_match(text, brace)
+    if not braces_balanced(raw):
+        return False, "花括号不匹配，未保存"
+    nsm = re.search(r'add_namespace\s*=\s*(\w+)', text)
+    if nsm and "." in eid and not eid.startswith(nsm.group(1) + "."):
+        return False, "事件 id 前缀与文件 namespace 不一致"
+    if "option" not in raw:
+        return False, "事件至少需要一个 option"
+    snapshot(path)
+    io.open(path, "w", encoding="utf-8", newline="").write(text[:brace - 1] + raw.strip() + "\n" + text[e:])
+    state.changed()[path] = rel
+    ents = {}
+    if title: ents.setdefault("simp_chinese", {})[eid + ".t"] = title
+    if desc: ents.setdefault("simp_chinese", {})[eid + ".d"] = desc
+    if title_ja: ents.setdefault("japanese", {})[eid + ".t"] = title_ja
+    if desc_ja: ents.setdefault("japanese", {})[eid + ".d"] = desc_ja
+    if title_en: ents.setdefault("english", {})[eid + ".t"] = title_en
+    if desc_en: ents.setdefault("english", {})[eid + ".d"] = desc_en
+    for o in (options or []):
+        k = o.get("key")
+        t = o.get("text")
+        if k and t:
+            ents.setdefault("simp_chinese", {})[k] = t
+    if ents:
+        save_loc(root, ents)
+    _reload()
+    return True, "事件已保存"
+
+
+
+def add_event(root, eid):
+    if not re.match(r'^[A-Za-z0-9_]+\.[A-Za-z0-9_]+$', eid or ""):
+        return False, "事件 id 需要 namespace.member 格式"
+    ns = eid.split(".")[0]
+    d = os.path.join(root, "events")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "zz_focus_editor_events.txt")
+    text = io.open(path, encoding="utf-8", errors="replace", newline="").read() if os.path.exists(path) else ""
+    if re.search(r'(?m)^\s*id\s*=\s*"?%s"?' % re.escape(eid), text):
+        return False, "事件已存在"
+    if ("add_namespace = " + ns) not in text:
+        text += "\nadd_namespace = %s\n" % ns
+    text += ("\ncountry_event = {\n\tid = %s\n\ttitle = %s.t\n\tdesc = %s.d\n"
+             "\tis_triggered_only = yes\n\toption = {\n\t\tname = %s.a\n\t}\n}\n" % (eid, eid, eid, eid))
+    snapshot(path)
+    io.open(path, "w", encoding="utf-8", newline="").write(text)
+    state.changed()[path] = os.path.join("events", "zz_focus_editor_events.txt")
+    _reload()
+    return True, "已新建事件 " + eid
+
+
+
+def delete_event(root, rel, eid):
+    path = os.path.join(root, rel)
+    text = io.open(path, encoding="utf-8", errors="replace", newline="").read()
+    m = re.search(r'(?m)^[ \t]*id\s*=\s*"?%s"?' % re.escape(eid), text)
+    if not m:
+        return False, "未找到事件 " + eid
+    start = text.rfind("_event", 0, m.start())
+    brace = text.find('{', start)
+    e = brace_match(text, brace)
+    snapshot(path)
+    io.open(path, "w", encoding="utf-8", newline="").write(text[:start - 1] + text[e:])
+    state.changed()[path] = rel
+    _reload()
+    return True, "已删除事件 " + eid

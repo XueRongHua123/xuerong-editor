@@ -1,0 +1,258 @@
+# -*- coding: utf-8 -*-
+"""HOI4 脚本文本的解析与原子写入。
+
+纯函数：只依赖 io / os / re。不读全局状态，不 import 上层。
+从 focus_editor.py 原样搬过来（P0-2），行为一字未改。
+"""
+import io
+import os
+import re
+
+
+def _strip_keep_len(text):
+    """去注释但**保持字符长度不变**：注释内容替换成空格。
+
+    需要「在去注释文本里定位、再回到原文改写」的场景必须用它，
+    否则 strip_comments 截断注释会让偏移全错。"""
+    out = []
+    for line in text.splitlines(True):
+        buf, instr, hit = [], False, False
+        for c in line:
+            if c == '"':
+                instr = not instr
+            if c == '#' and not instr:
+                hit = True
+            buf.append(' ' if (hit and c not in '\r\n') else c)
+        out.append("".join(buf))
+    return "".join(out)
+
+
+def strip_comments(text):
+    out = []
+    for line in text.splitlines():
+        buf, instr = [], False
+        for c in line:
+            if c == '"':
+                instr = not instr
+            if c == '#' and not instr:
+                break
+            buf.append(c)
+        out.append("".join(buf))
+    return "\n".join(out)
+
+
+def brace_match(s, i):
+    depth = 0
+    instr = False
+    while i < len(s):
+        c = s[i]
+        if c == '"':
+            instr = not instr
+        elif not instr:
+            if c == '{':
+                depth += 1
+            elif c == '}':
+                depth -= 1
+                if depth == 0:
+                    return i + 1
+        i += 1
+    return i
+
+
+def unq(v):
+    v = (v or "").strip()
+    return v[1:-1] if len(v) >= 2 and v[0] == '"' and v[-1] == '"' else v
+
+
+def top_items(body):
+    items = []
+    i, n = 0, len(body)
+    while i < n:
+        if body[i] in " \t\r\n":
+            i += 1
+            continue
+        m = re.match(r'([A-Za-z0-9_.\-]+)\s*=\s*', body[i:])
+        if not m:
+            i += 1
+            continue
+        key = m.group(1)
+        j = i + m.end()
+        if j < n and body[j] == '{':
+            end = brace_match(body, j)
+            items.append((key, body[j + 1:end - 1], True))
+            i = end
+        else:
+            k, instr = j, False
+            while k < n:
+                c = body[k]
+                if c == '"':
+                    instr = not instr
+                if c == '\n' and not instr:
+                    break
+                k += 1
+            items.append((key, unq(body[j:k]), False))
+            i = k
+    return items
+
+
+def find_blocks(text, key):
+    out = []
+    for m in re.finditer(r'(?m)^\s*%s\s*=\s*\{' % key, text):
+        start = text.find('{', m.start())
+        if start < 0:
+            continue
+        end = brace_match(text, start)
+        out.append((start, end, text[start + 1:end - 1]))
+    return out
+
+
+def _atomic_write(path, data):
+    """原子写文件：先写同目录临时文件，成功后 os.replace 覆盖。
+
+    直接写目标路径在写到一半崩溃/断电时会留下半截文件，
+    原来的内容也没了。临时文件 + rename 保证要么是旧内容，要么是新内容。
+    """
+    path = os.path.abspath(path)
+    d = os.path.dirname(path) or "."
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    tmp = "%s.tmp%d" % (path, os.getpid())
+    try:
+        with io.open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except Exception:
+                pass
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        raise
+
+
+def _bom_for(path):
+    """新建文件一律不加 BOM。
+
+    HOI4 的解析器会把 BOM 吃进第一个 token：common/decisions 里新建的文件
+    如果带 BOM，类别名会变成 "\ufeffXTT_category"，整个类别失效并刷报错。
+    实测 HOI4 读无 BOM 的 UTF-8 完全正常，所以这里统一返回空。
+    已有文件的 BOM 由各写入函数自己用 utf-8-sig 读取时保留，不走这个函数。
+    """
+    return b""
+
+
+def _read_text(path):
+    return strip_comments(io.open(path, encoding="utf-8-sig", errors="replace").read())
+
+
+# ---- P0-3 B0：脚本块改写工具（set_scalar / remove_block / set_raw_block ...）----
+def _first(text, pat, default=""):
+    """取第一个匹配的 group(1)，没有就返回 default（不 strip，调用方自己处理）。"""
+    m = re.search(pat, text)
+    return m.group(1) if m else default
+
+
+def _first_in(text, pat):
+    m = re.search(pat, text, re.M)
+    return m.group(1).strip() if m else ""
+
+
+
+def set_scalar(block, key, value):
+    pat = re.compile(r'(?m)^(\s*)%s\s*=\s*[^\s#]+' % key)
+    if pat.search(block):
+        return pat.sub(lambda m: "%s%s = %s" % (m.group(1), key, value), block, count=1)
+    # 插入到 id 行后
+    m = re.search(r'(?m)^(\s*)id\s*=\s*[^\n]+', block)
+    if not m:
+        return block
+    indent = m.group(1)
+    return block[:m.end()] + "\n" + indent + "%s = %s" % (key, value) + block[m.end():]
+
+
+
+def remove_block(block, key):
+    # 删除 block 顶层 key = { ... }（不处理嵌套同名，MVP 足够）
+    out = []
+    i = 0
+    while True:
+        m = re.search(r'(?m)^\s*%s\s*=\s*\{' % key, block[i:])
+        if not m:
+            out.append(block[i:])
+            break
+        s = i + m.start()
+        out.append(block[i:s])
+        b = block.find('{', s)
+        e = brace_match(block, b)
+        i = e
+    return "".join(out)
+
+
+
+def braces_balanced(text):
+    depth = 0
+    instr = False
+    for c in text or "":
+        if c == '"':
+            instr = not instr
+        elif not instr:
+            if c == '{':
+                depth += 1
+            elif c == '}':
+                depth -= 1
+                if depth < 0:
+                    return False
+    return depth == 0 and not instr
+
+
+
+def set_raw_block(block, key, content):
+    """替换/删除 focus 内的原始脚本块（如 completion_reward）"""
+    content = (content or "").strip("\n")
+    m = re.search(r'(?m)^[ \t]*%s\s*=\s*\{' % key, block)
+    if not content.strip():
+        if m:
+            start = m.start()
+            b = block.find('{', m.start())
+            e = brace_match(block, b)
+            return block[:start] + block[e + 1:]
+        return block
+    lines = []
+    for ln in content.splitlines():
+        lines.append("\t\t\t" + ln.rstrip() if ln.strip() else "")
+    newb = "\t\t%s = {\n%s\n\t\t}" % (key, "\n".join(lines))
+    if m:
+        start = m.start()
+        b = block.find('{', start)
+        e = brace_match(block, b)
+        return block[:start] + newb + block[e + 1:]
+    return block.rstrip() + "\n\t" + newb + "\n"
+
+
+
+# ---------------- 国家精神 ----------------
+def apply_modifier_props(raw, props):
+    if not props:
+        return raw
+    m = re.search(r'(?m)^[ \t]*modifier\s*=\s*\{', raw)
+    if m:
+        b = raw.find('{', m.start())
+        e = brace_match(raw, b)
+        inner = raw[b + 1:e - 1]
+        for k, v in props.items():
+            inner = set_scalar(inner, k, v)
+        body = "\n".join("\t" + ln for ln in inner.strip("\n").splitlines())
+        return raw[:m.start()] + "modifier = {\n" + body + "\n\t\t}" + raw[e:]
+    lines = ["modifier = {"]
+    for k, v in props.items():
+        lines.append("\t%s = %s" % (k, v))
+    lines.append("}")
+    return raw.rstrip() + "\n\t\t" + "\n\t\t".join(lines) + "\n"
