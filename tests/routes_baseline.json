@@ -1,0 +1,1291 @@
+{
+ "schema": 2,
+ "recorded_at": "2026-11-17 11:21:26",
+ "counts": {
+  "OK": 205,
+  "INTERNAL": 0,
+  "HTTP500": 0,
+  "DEAD": 0,
+  "SKIP": 8
+ },
+ "routes": {
+  "POST /api/add_focus": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/add_idea": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/add_tree": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/adj_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/adj_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/adj_edit": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/adopt_dir": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/ai_chat": {
+   "method": "POST",
+   "state": "SKIP",
+   "status": 0,
+   "msg": ""
+  },
+  "POST /api/ai_config": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/ai_test": {
+   "method": "POST",
+   "state": "SKIP",
+   "status": 0,
+   "msg": ""
+  },
+  "POST /api/air_wing_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/air_wing_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/air_wings": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/battalions": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/bookmark_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/bookmark_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/bookmark_set": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/bookmarks": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/character_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/character_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/character_set": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/characters": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/completed_focuses": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/copy_item": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/copy_tree": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_history_create": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_idea_toggle": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_ideas": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_ideas_raw": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_offsite_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_offsite_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_offsite_set": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_starter": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_tag_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_tag_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_tag_refs": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_tags": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_tech_toggle": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_techs": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_techs_raw": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/country_variant": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/decision_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/decision_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/decision_set": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/decisions": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/delete_focus": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/delete_idea": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/delete_tree": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/design_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/diagnose": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/diplomacy_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/entry_source": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/equip_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/equip_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/equip_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/equipment_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/equipment_edit": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/event_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/event_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/event_edit": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/event_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/export": {
+   "method": "POST",
+   "state": "SKIP",
+   "status": 0,
+   "msg": ""
+  },
+  "POST /api/focus_complete_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/focus_complete_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/gfx_import": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/gfx_list": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/gfx_sprites": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/height_paint": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/height_sample": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/idea_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/load_mod": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/load_progress": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/load_vanilla": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/loc_generate": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/loc_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/map_build": {
+   "method": "POST",
+   "state": "SKIP",
+   "status": 0,
+   "msg": ""
+  },
+  "POST /api/map_cache_clear": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/map_generate": {
+   "method": "POST",
+   "state": "SKIP",
+   "status": 0,
+   "msg": ""
+  },
+  "POST /api/map_integrity": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/map_merge": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/map_paint": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/navy": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/navy_add_ship": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/navy_add_tf": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/navy_delete_fleet": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/navy_delete_tf": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/navy_set_ship": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/new_mod": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/options": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/output_apply": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/pick_mod": {
+   "method": "POST",
+   "state": "SKIP",
+   "status": 0,
+   "msg": ""
+  },
+  "POST /api/playset_pick": {
+   "method": "POST",
+   "state": "SKIP",
+   "status": 0,
+   "msg": ""
+  },
+  "POST /api/playset_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/politics": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/politics_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/popularities_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/portrait_import": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/railway_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/railway_edit": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/railway_level": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/redo": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/refine_apply": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/repair_all": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/repair_braces": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/replace_drop": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/replace_fix_all": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/replace_ignore": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/restore_backup": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/river_paint": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/river_undo": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/save_tree": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/shared_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/shared_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/sr_create": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/sr_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/sr_set_provinces": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/state_buildings_batch": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/state_create": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/state_province": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/state_refine": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/state_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/supply_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/supply_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/tech_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/tech_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/tech_graph": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/tech_link": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/tech_move": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/tech_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/template_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/template_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/template_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/terrain_batch": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/terrain_by_type": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/terrain_paint": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/terrain_set": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/undo": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/unit_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/unit_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/unit_move": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/units": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/unload_mod": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/update_apply": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/variant_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/verify_adopt": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/war_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/war_delete": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/world_create": {
+   "method": "POST",
+   "state": "SKIP",
+   "status": 0,
+   "msg": ""
+  },
+  "POST /api/write_targets": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/adjacencies": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/ai_config": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/app_info": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/backups": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/countries": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/country": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/country_history": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/diplomacy": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/equipment_detail": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/equipment_list": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/errorlog": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/event_detail": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/event_graph": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/event_space_create": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/event_space_delete": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/event_spaces": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/file_excerpt": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/focus": {
+   "method": "GET",
+   "state": "OK",
+   "status": 404,
+   "msg": ""
+  },
+  "GET /api/focus_graph": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/focus_trees": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/fs": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/gfx_missing": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/icon": {
+   "method": "GET",
+   "state": "OK",
+   "status": 404,
+   "msg": ""
+  },
+  "GET /api/icons": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/lint": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/loc_missing": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/log": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/map_analysis": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/map_asset": {
+   "method": "GET",
+   "state": "OK",
+   "status": 404,
+   "msg": ""
+  },
+  "GET /api/map_meta": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/map_repair": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/map_repair_cross": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/missing_loc": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/orphan_tags": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/output": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/playset": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/railways": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/raw": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/refine_preview": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/report": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/river_preview.png": {
+   "method": "GET",
+   "state": "OK",
+   "status": 404,
+   "msg": ""
+  },
+  "GET /api/river_stats": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/scripted": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/state": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/state_refine_preview": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/states": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/strategic_regions": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/supply_areas": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/terrain_by_type": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/terrain_types": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/update": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/usages": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /mascot.ico": {
+   "method": "GET",
+   "state": "OK",
+   "status": 404,
+   "msg": ""
+  },
+  "GET /mascot_card.png": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /mascot_face.png": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /index": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /help": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/data": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /icons/": {
+   "method": "GET",
+   "state": "OK",
+   "status": 404,
+   "msg": ""
+  },
+  "GET /web/": {
+   "method": "GET",
+   "state": "OK",
+   "status": 404,
+   "msg": ""
+  },
+  "GET /mascot/": {
+   "method": "GET",
+   "state": "OK",
+   "status": 404,
+   "msg": ""
+  }
+ }
+}

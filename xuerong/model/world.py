@@ -516,13 +516,27 @@ def country_history_create(root, tag, capital=1, ruling_party="neutrality",
 
 
 
-def _centroids_from_map(map_dir):
+def _centroids_from_map(map_dir, notes=None):
     """从 map/definition.csv + provinces.bmp 反算每省像素质心。
 
     `world_create` 正常走 mapgen.generate，那边会直接把 centroids 返回；
     这个函数只是兜底：手工改过图、或从别的工具生成的 mod 也能补坐标表。
+
+    返回空字典的两种情况含义完全不同：
+      · map/ 下没这两个文件（返回空是正常结论，不报）
+      · numpy / PIL / 图片读不开（返回空表示**没算**，必须能说出原因）
+    第二种把原因写进 notes（可选 list），调用点拿去拼进步骤消息，
+    否则界面上只剩「unitstacks 0 / buildings 0 / weather 0」，看不出是缺库。
     """
     cen = {}
+
+    def _note(msg):
+        if notes is not None:
+            try:
+                notes.append(msg)
+            except Exception:
+                pass
+
     map_dir = os.path.abspath(map_dir)
     csvp = os.path.join(map_dir, "definition.csv")
     provp = os.path.join(map_dir, "provinces.bmp")
@@ -531,7 +545,15 @@ def _centroids_from_map(map_dir):
     try:
         import numpy as np
         from PIL import Image
-    except Exception:
+    except Exception as e:
+        # 分开写：ImportError 时说清缺哪个模块（exe 里缺 numpy 就是这个），
+        # 其它异常说明是哪类错误。
+        name = getattr(e, "name", "") or ""
+        if isinstance(e, ImportError):
+            _note("缺模块 %s，质心表未计算" % (name or str(e)))
+        else:
+            _note("加载 numpy/PIL 失败 %s: %s，质心表未计算"
+                  % (e.__class__.__name__, e))
         return cen
     rgb2pid = {}
     for line in io.open(csvp, encoding="utf-8", errors="replace"):
@@ -544,7 +566,9 @@ def _centroids_from_map(map_dir):
             continue
     try:
         im = Image.open(provp).convert("RGB")
-    except Exception:
+    except Exception as e:
+        _note("provinces.bmp 读不开 %s: %s，质心表未计算"
+              % (e.__class__.__name__, e))
         return cen
     a = np.asarray(im, dtype=np.int32)
     h, w = a.shape[:2]
@@ -807,15 +831,20 @@ def world_create(out_dir, source="procedural", width=1024, height=512,
     try:
         import mapgen_write as _mgw
         cen = (r or {}).get("centroids") or {}
+        _cen_notes = []
         if not cen:
-            cen = _centroids_from_map(os.path.join(out_dir, "map"))
+            cen = _centroids_from_map(os.path.join(out_dir, "map"), notes=_cen_notes)
         _sz = ((r or {}).get("width"), (r or {}).get("height"))
         mp = _mgw.write_map_positions(os.path.join(out_dir, "map"), cen,
                                       states=state_map,
                                       size=_sz if all(_sz) else None)
-        steps.append({"step": "地标落点", "ok": bool(cen),
-                      "msg": "unitstacks %d / buildings %d / weather %d"
-                             % (mp["unitstacks"], mp["buildings"], mp["weather"])})
+        # 三种情况要能区分：算出了坐标 / 图里本来就没有坐标可算 / 库缺失导致没算。
+        # 以前后两种都只显示「unitstacks 0 / buildings 0 / weather 0」，看不出区别。
+        _msg = ("unitstacks %d / buildings %d / weather %d"
+                % (mp["unitstacks"], mp["buildings"], mp["weather"]))
+        if _cen_notes:
+            _msg = _msg + "；" + "；".join(_cen_notes)
+        steps.append({"step": "地标落点", "ok": bool(cen), "msg": _msg})
     except Exception as e:
         steps.append({"step": "地标落点", "ok": False, "msg": str(e)})
 

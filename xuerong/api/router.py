@@ -13,17 +13,15 @@
 2. **路由函数自己调 `h._send(...)`**，签名统一 `(h, ...)`。
    门面里原有的分支就是这么写的，搬过来只把 `self` 改成 `h`，别的字不动。
 
-3. **延迟绑定**：搬出来的函数体会用到门面里的几百个名字（`data_payload` /
-   `TREES` / `_map_pick` …）。这些函数定义在 `xuerong/api/` 里，如果 import 门面就成环，
-   所以改成运行时把函数的 `__globals__` 换成门面的模块字典——见 `install()`。
-   这样 `fn.__code__` 一个字节没变，名字解析和搬家前完全一样，也不会把门面的 200 多个
-   名字灌进本模块的命名空间。
+3. **本模块不认识门面**。搬出来的函数体要用到门面里的几百个名字（`data_payload` /
+   `TREES` / `_map_pick` …），这些函数定义在 `xuerong/api/` 里，import 门面就成环。
+   历史上靠 `install()` 在启动时把门面的名字补进各 handler 模块的 globals 解决；
+   2B 之后 handlers 全部改成显式的 `LG.xxx`（`xuerong/core/facade_bridge.py`）与正常的
+   `from xuerong.model.xxx import ...`，`install()` 已删除。这里只剩纯粹的路由表。
 
 4. **不合并重复分支**。有几个路由长得几乎一样（`*_payload` 那批），
    故意不抽公共函数：抽了就没法逐行 diff 核对「搬的是不是同一段」。
 """
-import types
-
 POST_ROUTES = {}      # path -> fn(h, body)
 GET_ROUTES = {}       # path -> fn(h, path_only)
 GET_PREFIXES = []     # [(prefix, fn(h, path_only))]，按注册顺序
@@ -70,31 +68,6 @@ def dispatch_get(h, path_only):
             f(h, path_only)
             return True
     return False
-
-
-def _rebind(fn, ns):
-    new = types.FunctionType(fn.__code__, ns, fn.__name__, fn.__defaults__, fn.__closure__)
-    if fn.__kwdefaults__:
-        new.__kwdefaults__ = fn.__kwdefaults__
-    return new
-
-
-def install(ns):
-    """把三张表里的函数重新挂到 `ns`（门面的 globals）上，返回改了几个。
-
-    只换 `__globals__`，`__code__` 不动——所以常量表、闭包、默认值全部原样。
-    """
-    n = 0
-    for path, fn in list(POST_ROUTES.items()):
-        POST_ROUTES[path] = _rebind(fn, ns)
-        n += 1
-    for path, fn in list(GET_ROUTES.items()):
-        GET_ROUTES[path] = _rebind(fn, ns)
-        n += 1
-    for i, (p, fn) in enumerate(GET_PREFIXES):
-        GET_PREFIXES[i] = (p, _rebind(fn, ns))
-        n += 1
-    return n
 
 
 def stats():

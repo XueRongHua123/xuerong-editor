@@ -41,7 +41,7 @@ from xuerong.core.paths import (_layer_dirs, _chain_layers, _start_date_for, pdx
                                 _mod_dep_chain, mod_layers, _layers_find, _replace_owner,
                                 _top_mod, write_base, is_under_game, _load_options, _layer_files,
                                 _out_path, _out_read_path, _read_bom_text, _write_bom_text,
-                                _save_options)
+                                _save_options, _LAYERS_CACHE, _MOD_ORDER_CACHE)
 from xuerong.core.i18n import ERR_RULES, classify_error
 from xuerong.model.diagnose import (_cwt_rules, _cwt_te, _diag_character_unrecruited, _diag_decision_category, _diag_division_template_missing, _diag_gfx_missing, _diag_localisation_missing, _diag_map_format, _diag_oob_not_referenced, _diag_recruit_last_line, _diag_replace_refs, _diag_replace_risk, _diag_replace_stub, _diag_schema_character, _diag_schema_decision, _diag_schema_focus, _diag_schema_ideas, _diag_schema_unknown_field, _diag_tag_def_missing, _diag_tag_undefined, _finding, _gfx_names, _is_skip_block, _loc_keys, _looks_like_scripted, diagnose)
 from xuerong.model.history import snapshot, backup, undo_last, redo_last
@@ -1915,7 +1915,13 @@ def diplomacy_save(tag, puppets=None, overlord=None, autonomy=None,
 
 # v0.66 全局 flag 配对
 def _flag_usage():
-    """扫描事件 / 国策原文 / 精神原文里的 set_global_flag 与 has_global_flag"""
+    """扫描事件 / 国策原文 / 精神原文里的 set_global_flag 与 has_global_flag
+
+    国策那一段走叠加链：只扫 ROOT 那一层时，加载纯 submod（自己没有
+    common/national_focus）会把父 mod / 原版里的 flag 全漏掉。
+    两级去重与 _focus_refs 一致：目录去重（多 root 共享同一层）+ 同名文件
+    子层优先（父层那份被整体覆盖，扫了只会把死数据当有效引用）。
+    """
     sets, haves = {}, {}
 
     def scan(raw, where):
@@ -1930,18 +1936,25 @@ def _flag_usage():
         scan(ev.get("raw", ""), "事件 " + eid)
     for iid, idea in IDEAS.items():
         scan(idea.get("raw", ""), "精神 " + iid)
+    seen_dirs, seen_files = set(), set()
     for root in ROOTS:
-        d = os.path.join(root, "common", "national_focus")
-        if not os.path.isdir(d):
-            continue
-        for fn in os.listdir(d):
-            if not fn.endswith(".txt"):
+        for _base, d in _layer_dirs("common/national_focus", root):
+            ab = os.path.abspath(d)
+            if ab in seen_dirs:
                 continue
-            try:
-                text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
-            except Exception:
-                continue
-            scan(text, "国策 " + fn)
+            seen_dirs.add(ab)
+            for fn in os.listdir(d):
+                if not fn.endswith(".txt"):
+                    continue
+                rel = os.path.join("common", "national_focus", fn)
+                if rel in seen_files:
+                    continue
+                seen_files.add(rel)
+                try:
+                    text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
+                except Exception:
+                    continue
+                scan(text, "国策 " + fn)
     return sets, haves
 
 
@@ -1955,70 +1968,192 @@ def _is_logic_word(name):
 
 
 def _scripted_defs():
-    """只扫 mod 的 scripted_triggers / scripted_effects，只认顶格定义（支持中文名）"""
+    """扫 scripted_triggers / scripted_effects，只认顶格定义（支持中文名）
+
+    走叠加链（父 mod 里定义的 trigger / effect 在子 mod 里能用），但仍然跳过
+    原版层 —— 这个清单是给「本 mod 项目」用的，把 Paradox 自带的两千多个脚本
+    定义混进来只会让检查面板全是别人的东西。_layer_dirs 子层在前，同名文件
+    按子层优先去重。"""
     out = []
     def_re = re.compile(r'(?m)^([^\W\d][\w]*)\s*=\s*\{')
-    for root in ROOTS:
-        if is_under_game(root):
-            continue
-        for kind, sub in (("trigger", "scripted_triggers"), ("effect", "scripted_effects")):
-            d = os.path.join(root, "common", sub)
-            if not os.path.isdir(d):
-                continue
-            for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
-                try:
-                    text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
-                except Exception:
+    seen_dirs, seen_files = set(), set()
+    for kind, sub in (("trigger", "scripted_triggers"), ("effect", "scripted_effects")):
+        for root in ROOTS:
+            for base, d in _layer_dirs("common/" + sub, root):
+                if is_under_game(base):
                     continue
-                for m in def_re.finditer(text):
-                    k = m.group(1)
-                    if _is_logic_word(k) or k in ("scripted_triggers", "scripted_effects"):
+                ab = os.path.abspath(d)
+                if ab in seen_dirs:
+                    continue
+                seen_dirs.add(ab)
+                for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+                    rel = sub + "/" + fn
+                    if rel in seen_files:
                         continue
-                    b = text.find('{', m.end() - 1)
-                    e = brace_match(text, b)
-                    body = text[b + 1:e - 1].strip() if e > b else ""
-                    out.append({"kind": kind, "name": k, "file": fn, "empty": not body})
+                    seen_files.add(rel)
+                    try:
+                        text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
+                    except Exception:
+                        continue
+                    for m in def_re.finditer(text):
+                        k = m.group(1)
+                        if _is_logic_word(k) or k in ("scripted_triggers", "scripted_effects"):
+                            continue
+                        b = text.find('{', m.end() - 1)
+                        e = brace_match(text, b)
+                        body = text[b + 1:e - 1].strip() if e > b else ""
+                        out.append({"kind": kind, "name": k, "file": fn, "empty": not body})
     return out
 
 
-def _script_ref_counts(names):
-    """全项目扫 `名字 =` 形式的键出现次数（含定义本身）"""
+def _script_ref_scan():
+    """一次遍历拿到「引用统计要扫的文件」+「它们的指纹」。
+
+    两个消费者共用这一次遍历：`_script_ref_counts` 要文件内容，
+    `scripted_payload` 的缓存戳要 `(相对路径, mtime_ns, size)`。枚举口径只在这里
+    定义一次——以前缓存戳只看容器长度、文件内容改了不失效，界面就会拿着旧结果
+    说「这条脚本没人引用」，属于显示的是错的。
+
+    口径与 `_script_ref_counts` 的旧实现逐条一致：
+      · 走叠加链 reversed（父 → 子），跳过原版层；
+      · 目录级去重跨 root 共享：多个 ROOTS 会命中同一条父链（同一个父 mod / 原版），
+        不共享会把同一份文件重复计数；
+      · 文件级按「相对该层根的路径」去重：HOI4 同名文件后加载的覆盖先加载的，
+        从子层往父层扫（reversed），父层被覆盖的那份根本不进游戏、不该计数。
+
+    用 `os.scandir` 而不是 `os.walk`：`DirEntry.stat()` 直接复用目录枚举返回的数据，
+    Windows 上 1957 个文件「枚举 + 取 mtime/size」约 15 ms；`os.walk` 单是枚举就要
+    54 ms，再逐个 `os.stat` 又要 17 ms。结果按 rel 排序，同样的文件集合总得到同样的
+    元组，不会因为目录遍历顺序抖动造成假失效。
+
+    返回 `(files, stamp)`：
+      files = [(相对路径, 绝对路径)]，按 rel 升序
+      stamp = (层级根元组, ((rel, mtime_ns, size), ...))
+    """
+    files, rows = [], []
+    bases, seen_bases = [], set()
+    seen_dirs, seen_files = set(), set()
+    for root in ROOTS:
+        for base in reversed(_chain_layers(root)):
+            if is_under_game(base):
+                continue
+            _ab_base = os.path.abspath(base)
+            if _ab_base in seen_bases:
+                continue
+            seen_bases.add(_ab_base)
+            bases.append(_ab_base)
+            # 目录一定在 base 底下，直接切前缀比 os.path.relpath 快 30 倍
+            # （3463 个文件：41.5 ms → 1.3 ms），结果逐字符相同。
+            _pre = _ab_base if _ab_base.endswith(os.sep) else _ab_base + os.sep
+            for sub in ("common", "events", "history"):
+                base_dir = os.path.join(_ab_base, sub)
+                if not os.path.isdir(base_dir):
+                    continue
+                if base_dir in seen_dirs:
+                    continue
+                seen_dirs.add(base_dir)
+                stack = [base_dir]
+                while stack:
+                    d = stack.pop()
+                    try:
+                        it = os.scandir(d)
+                    except Exception:
+                        continue
+                    with it:
+                        for e in it:
+                            try:
+                                if e.is_dir(follow_symlinks=False):
+                                    stack.append(e.path)
+                                    continue
+                            except Exception:
+                                continue
+                            if not e.name.endswith(".txt"):
+                                continue
+                            fp = e.path
+                            # 相对该层根的路径，比如 common/scripted_effects/foo.txt
+                            if fp.startswith(_pre):
+                                rel = fp[len(_pre):].replace(os.sep, "/")
+                            else:
+                                rel = os.path.relpath(fp, _ab_base).replace(os.sep, "/")
+                            if rel in seen_files:
+                                continue
+                            seen_files.add(rel)
+                            try:
+                                st = e.stat()
+                                rows.append((rel, st.st_mtime_ns, st.st_size))
+                            except Exception:
+                                rows.append((rel, -1, -1))
+                            files.append((rel, fp))
+    files.sort()
+    rows.sort()
+    return files, (tuple(bases), tuple(rows))
+
+
+def _script_ref_files():
+    """引用统计要扫的 .txt 清单：[(相对路径, 绝对路径)]，已按叠加链去重。
+
+    只关心文件集合的调用方用它；要连同指纹一起拿就用 `_script_ref_scan()`，
+    免得同一份枚举算两遍。
+    """
+    return _script_ref_scan()[0]
+
+
+def _script_ref_stamp():
+    """引用统计所涉文件的指纹：(层级根元组, ((rel, mtime_ns, size), ...))。
+
+    只 stat 不读内容：1957 个文件约 15 ms，未命中要 900 ms 量级，两个数量级差。
+    """
+    return _script_ref_scan()[1]
+
+
+def _script_ref_counts(names, files=None):
+    """全项目扫 `名字 =` 形式的键出现次数（含定义本身）
+
+    走叠加链：定义清单（_scripted_defs）已经能读到父 mod 里的 trigger / effect，
+    如果引用计数还只扫 ROOTS，就等于「父层那些定义一个字都找不到」—— 实测 250
+    条定义里 248 条被判成没引用，全是假警报。两个口径必须成对走链。
+
+    要扫哪些文件由 `_script_ref_files()` 决定（与缓存戳共用同一份枚举）。
+    `files` 可由调用方传入 `_script_ref_scan()` 的结果，省掉重复枚举。
+    """
     counts = dict((n, 0) for n in names)
     if not names:
         return counts
     key_re = re.compile(r'(?<!\w)([^\W\d][\w]*)\s*=')
-    for root in ROOTS:
-        if is_under_game(root):
+    for _rel, fp in (files if files is not None else _script_ref_files()):
+        try:
+            text = strip_comments(io.open(fp, encoding="utf-8",
+                                          errors="replace").read())
+        except Exception:
             continue
-        for base in ("common", "events", "history"):
-            base_dir = os.path.join(root, base)
-            if not os.path.isdir(base_dir):
-                continue
-            for dirpath, _, files in os.walk(base_dir):
-                for fn in files:
-                    if not fn.endswith(".txt"):
-                        continue
-                    try:
-                        text = strip_comments(io.open(os.path.join(dirpath, fn), encoding="utf-8",
-                                                     errors="replace").read())
-                    except Exception:
-                        continue
-                    for m in key_re.finditer(text):
-                        n = m.group(1)
-                        if n in counts:
-                            counts[n] += 1
+        for m in key_re.finditer(text):
+            n = m.group(1)
+            if n in counts:
+                counts[n] += 1
     return counts
 
 
 def scripted_payload():
-    """返回脚本清单（带缓存，数据变了才重扫）"""
-    stamp = (tuple(ROOTS), len(TREES), len(EVENTS), len(IDEAS), len(TECHS))
+    """返回脚本清单（带缓存，数据变了才重扫）
+
+    戳由两部分组成：
+      · 内存容器规模（ROOTS / TREES / EVENTS / IDEAS / TECHS）——加载、重载、增删条目后变；
+      · 引用统计涉及的每个 .txt 的 (相对路径, mtime_ns, size) 指纹，外加层级根列表——
+        用户改一个文件的内容（比如给某个 scripted trigger 加一处引用）时容器长度
+        全不变，只有这一项能发现改动。
+    少了第二部分，改了文件还能命中旧缓存，界面显示的是错的。
+
+    命中路径只做一次目录枚举 + stat（1957 个文件约 15 ms，原来是 0 ms 但答案是错的）；
+    未命中时复用同一次枚举拿到的文件清单，不重复走目录。
+    """
+    files, fs = _script_ref_scan()
+    stamp = (tuple(ROOTS), len(TREES), len(EVENTS), len(IDEAS), len(TECHS), fs)
     if SCRIPT_CACHE["stamp"] == stamp and SCRIPT_CACHE["payload"]:
         hit = dict(SCRIPT_CACHE["payload"])
         hit["cached"] = True
         return hit
     defs = _scripted_defs()
-    counts = _script_ref_counts(set(d["name"] for d in defs))
+    counts = _script_ref_counts(set(d["name"] for d in defs), files=files)
     items = []
     for d in defs:
         items.append({"name": d["name"], "kind": d["kind"], "file": d["file"],
@@ -6757,17 +6892,62 @@ def _bom_issues(root, limit=40):
     """编码规范检查（HOI4 要求）：
     - localisation/*.yml 必须带 UTF-8 BOM（否则游戏读不到本地化）
     - common / history / events 下的 .txt 不应带 BOM
-    返回 (问题列表 [(类型, 相对路径)], yml 总数, txt 总数)"""
+    返回 (问题列表 [(类型, 相对路径)], yml 总数, txt 总数)
+
+    走叠加链但**跳过原版层**：只扫 root 那一层时，加载纯 submod 会漏掉父 mod
+    里那些同样会被游戏读取的 yml；而把 Paradox 原版一起算进来，报出来的是
+    「游戏本身不遵守这套规范」—— 用户改不了，还会把真问题淹掉
+    （本机实测：只查 mod 层 415 条 / 0.4s，含原版 1679 条 / 1.0s，其中 1264
+    条来自原版自带文件）。这里只读每个文件头 3 字节，开销只跟文件个数有关。"""
     root = os.path.abspath(root)
     BOM3 = bytes((0xEF, 0xBB, 0xBF))
     issues = []
     yml_n = txt_n = 0
-    locd = os.path.join(root, "localisation")
-    if os.path.isdir(locd):
+    bad_n = 0            # 真实问题总数，与 issues 长度分开
+    # 只限制「示例条数」，不掐扫描：老代码是 issues 攒到 limit*3 就整个 break，
+    # 那时扫的文件少（几十个）从没触发，数字恰好等于真实总数；改成扫叠加链后
+    # 会提前截断并把 415 条低报成 128 条，所以总数单独计数。
+    SAMPLE_CAP = limit * 3
+    # 护栏：正常 mod 层远低于此（本机 189 yml + 3451 txt，全量扫完约 0.4s）。
+    # 真撞上说明有人把游戏目录整个当 mod 加载了，抽样截断避免 lint 面板卡死。
+    MAX_FILES = 10000
+    scanned = 0
+    stopped = False
+
+    def _note(kind, rel):
+        nonlocal bad_n
+        bad_n += 1
+        if len(issues) < SAMPLE_CAP:
+            issues.append((kind, rel))
+
+    def _rel(fp, base):
+        """多来源时带上层名，否则不同层里的同名文件看起来是同一条。"""
+        r = os.path.relpath(fp, base)
+        if os.path.abspath(base) != root:
+            r = (os.path.basename(base.rstrip("\\/")) or base) + "/" + r
+        return r
+
+    seen_dirs = set()
+
+    def _walk_dirs(sub):
+        for base, d in _layer_dirs(sub, root):
+            if is_under_game(base):
+                continue
+            ab = os.path.abspath(d)
+            if ab in seen_dirs:
+                continue
+            seen_dirs.add(ab)
+            yield base, d
+
+    for base, locd in _walk_dirs("localisation"):
         for dp, _dn, fs in os.walk(locd):
             for fn in fs:
                 if not fn.lower().endswith(".yml"):
                     continue
+                if scanned >= MAX_FILES:
+                    stopped = True
+                    break
+                scanned += 1
                 yml_n += 1
                 fp = os.path.join(dp, fn)
                 try:
@@ -6776,27 +6956,37 @@ def _bom_issues(root, limit=40):
                 except Exception:
                     continue
                 if head != BOM3:
-                    issues.append(("缺 BOM", os.path.relpath(fp, root)))
+                    _note("缺 BOM", _rel(fp, base))
+            if stopped:
+                break
+        if stopped:
+            break
     for sub in ("common", "history", "events"):
-        d0 = os.path.join(root, sub)
-        if not os.path.isdir(d0):
-            continue
-        for dp, _dn, fs in os.walk(d0):
-            for fn in fs:
-                if not fn.lower().endswith(".txt"):
-                    continue
-                txt_n += 1
-                fp = os.path.join(dp, fn)
-                try:
-                    with open(fp, "rb") as f:
-                        head = f.read(3)
-                except Exception:
-                    continue
-                if head == BOM3:
-                    issues.append(("多余 BOM", os.path.relpath(fp, root)))
-                if len(issues) >= limit * 3:
+        if stopped:
+            break
+        for base, d0 in _walk_dirs(sub):
+            for dp, _dn, fs in os.walk(d0):
+                for fn in fs:
+                    if not fn.lower().endswith(".txt"):
+                        continue
+                    if scanned >= MAX_FILES:
+                        stopped = True
+                        break
+                    scanned += 1
+                    txt_n += 1
+                    fp = os.path.join(dp, fn)
+                    try:
+                        with open(fp, "rb") as f:
+                            head = f.read(3)
+                    except Exception:
+                        continue
+                    if head == BOM3:
+                        _note("多余 BOM", _rel(fp, base))
+                if stopped:
                     break
-    return issues[:limit], yml_n, txt_n, len(issues)
+            if stopped:
+                break
+    return issues[:limit], yml_n, txt_n, bad_n
 
 
 def lint_project(limit=1500):
@@ -8562,8 +8752,16 @@ _m_character.bind(ensure_file_writable=ensure_file_writable)
 _m_replace.set_ref_scanner(_diag_replace_refs)
 
 
-# ---- P3：路由函数的 __globals__ 接到门面（必须在所有顶层名字定义完之后）----
-_n_routes = _router.install(globals())
+# ---- 路由表装配自检（必须在所有顶层名字定义完之后）----
+# P3 时代这里调 `_router.install(globals())` 把门面的名字补进各 handler 模块的 globals。
+# 2B 之后 handlers 全部改成显式的 `LG.xxx`（xuerong/core/facade_bridge.py）与正常的
+# `from xuerong.model.xxx import ...`，install() 已删除，这里改成一条装配断言：
+# 三张表任一为空就说明某个 handler 的 import 断了、那个域的装饰器没执行——
+# 那种情况下服务照常起来，只是路由变 404，很难发现，所以启动期就炸掉更好。
+_ROUTE_STATS = _router.stats()
+assert _ROUTE_STATS["post"] and _ROUTE_STATS["get"] and _ROUTE_STATS["prefix"], (
+    "路由表装配不完整：%r。检查 xuerong/api/handlers/__init__.py 的 import 名单"
+    % (_ROUTE_STATS,))
 
 if __name__ == "__main__":
     main()

@@ -42,7 +42,6 @@ jobs:
             --add-data "mascot;mascot" `
             --exclude-module "PIL._avif" `
             --exclude-module "PIL._avif_cffi" `
-            --exclude-module "numpy" `
             --exclude-module "scipy" `
             --exclude-module "pandas" `
             --exclude-module "matplotlib" `

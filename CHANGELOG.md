@@ -8,7 +8,7 @@
 重跑 `python work/tools/gen_changelog.py` 会按 `qa/release_notes_v*.md` 重新生成；
 「未发布」那段是手工维护的，脚本会原样保留。
 
-共 162 个已发布版本，最新 v1.23.45。
+共 168 个已发布版本，最新 v1.24.5。
 
 ## 未发布（开发中）
 
@@ -21,6 +21,12 @@
 
 | 版本 | 摘要 |
 |---|---|
+| [v1.24.5](work/qa/release_notes_v124500.md) | 内部架构收尾：路由处理从「靠运行时补全局名」彻底改成显式引用，同时把 numpy 打进发布包。 |
+| [v1.24.3](work/qa/release_notes_v124300.md) | qa/ 目录下有两族模块是在函数内部 import 的： |
+| [v1.24.2](work/qa/release_notes_v124200.md) | 记事本和部分编辑器保存 UTF-8 时会写 BOM（文件开头三个字节 EF BB BF）。原来读国策文件按普通 UTF-8 解，BOM 粘到第一个标识符上，于是： |
+| [v1.24.1](work/qa/release_notes_v124100.md) | 侧栏的「数据源」不再只列你自己加载的那几个目录，而是完整叠加链： |
+| [v1.23.48](work/qa/release_notes_v123480.md) | 发布日期：2026-11-05 |
+| [v1.23.47](work/qa/release_notes_v123470.md) | 上一版的地图生成会产出两张坏图： |
 | [v1.23.45](work/qa/release_notes_v123450.md) | 以前加载一个子 mod，编辑器只跟它 descriptor.mod 里写的 dependencies 走。问题在于 dependencies 不是游戏的加载链——它只是启动器用… |
 | [v1.23.44](work/qa/release_notes_v123440.md) | 这三个 bug 是同一族：mapgen 里有一批写法是 arr[labels == 0] = 海底的东西，但我们的海是真省（id 从 n+1 开始），labels 里根本没有 … |
 | [v1.23.43](work/qa/release_notes_v123430.md) | common/ 下那批共享国策（common_refugee_tech_sharing、common_adopt_powered_suits、common_experience… |

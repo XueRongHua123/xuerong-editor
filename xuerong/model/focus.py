@@ -226,45 +226,61 @@ def resolve_positions(tree):
 
 # v0.59 国策引用体检
 def _focus_refs():
-    """从 national_focus 原文里收集 add_ideas / has_idea / country_event 引用"""
+    """从 national_focus 原文里收集 add_ideas / has_idea / country_event 引用
+
+    走叠加链（原版 / 父 mod 的国策也算），只扫 root 那一层时加载纯 submod
+    会把引用全漏掉（雪绒拓展自己没有 national_focus，输出是 0 条）。
+
+    两级去重：
+    - seen_dirs：不同 root 的链可能共享同一层（都含原版），同一目录不能扫两遍；
+    - seen_files：同名的 national_focus 文件父层那份被子层整体覆盖、根本不进游戏，
+      再扫一遍只会把死数据当成有效引用报出去（本机实测 881 -> 429 条）。
+    _layer_dirs 是子 mod 在前，所以先遇到的那份就是生效的那份。"""
     ideas, events = [], []
+    seen_dirs = set()
+    seen_files = set()
     for root in state.roots():
-        d = os.path.join(root, "common", "national_focus")
-        if not os.path.isdir(d):
-            continue
-        name = os.path.basename(root.rstrip("\\/")) or root
-        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
-            rel = os.path.join("common", "national_focus", fn)
-            try:
-                text = strip_comments(_read_focus_text(os.path.join(d, fn))[0])
-            except Exception:
+        for base, d in _layer_dirs("common/national_focus", root):
+            ab = os.path.abspath(d)
+            if ab in seen_dirs:
                 continue
-            for m in re.finditer(r'(?m)^[ \t]*(?:focus|shared_focus)\s*=\s*\{', text):
-                b = text.find('{', m.end() - 1)
-                e = brace_match(text, b)
-                if e <= b:
+            seen_dirs.add(ab)
+            name = os.path.basename(base.rstrip("\\/")) or base
+            for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
+                rel = os.path.join("common", "national_focus", fn)
+                if rel in seen_files:
                     continue
-                body = text[b + 1:e - 1]
-                fid = _first(body, r'(?m)^[ \t]*id\s*=\s*"?([A-Za-z0-9_.\-]+)')
-                if not fid:
+                seen_files.add(rel)
+                try:
+                    text = strip_comments(_read_focus_text(os.path.join(d, fn))[0])
+                except Exception:
                     continue
-                tree = ""
-                for tid, t in state.trees().items():
-                    if t.get("file") == rel and t.get("source") == name:
-                        tree = tid
-                        break
-                for im in re.finditer(r'(?m)^[ \t]*add_ideas\s*=\s*([A-Za-z0-9_]+)', body):
-                    ideas.append({"focus": fid, "id": im.group(1), "where": "add_ideas",
-                                  "file": rel, "tree": tree})
-                for im in re.finditer(r'add_ideas\s*=\s*\{([^}]*)\}', body):
-                    for iid in re.findall(r'[A-Za-z0-9_]+', im.group(1)):
-                        ideas.append({"focus": fid, "id": iid, "where": "add_ideas",
+                for m in re.finditer(r'(?m)^[ \t]*(?:focus|shared_focus)\s*=\s*\{', text):
+                    b = text.find('{', m.end() - 1)
+                    e = brace_match(text, b)
+                    if e <= b:
+                        continue
+                    body = text[b + 1:e - 1]
+                    fid = _first(body, r'(?m)^[ \t]*id\s*=\s*"?([A-Za-z0-9_.\-]+)')
+                    if not fid:
+                        continue
+                    tree = ""
+                    for tid, t in state.trees().items():
+                        if t.get("file") == rel and t.get("source") == name:
+                            tree = tid
+                            break
+                    for im in re.finditer(r'(?m)^[ \t]*add_ideas\s*=\s*([A-Za-z0-9_]+)', body):
+                        ideas.append({"focus": fid, "id": im.group(1), "where": "add_ideas",
                                       "file": rel, "tree": tree})
-                for im in re.finditer(r'(?m)^[ \t]*has_idea\s*=\s*([A-Za-z0-9_]+)', body):
-                    ideas.append({"focus": fid, "id": im.group(1), "where": "has_idea",
-                                  "file": rel, "tree": tree})
-                for im in re.finditer(r'(?:country_event|news_event|state_event)\s*=\s*\{\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)', body):
-                    events.append({"focus": fid, "id": im.group(1), "file": rel, "tree": tree})
+                    for im in re.finditer(r'add_ideas\s*=\s*\{([^}]*)\}', body):
+                        for iid in re.findall(r'[A-Za-z0-9_]+', im.group(1)):
+                            ideas.append({"focus": fid, "id": iid, "where": "add_ideas",
+                                          "file": rel, "tree": tree})
+                    for im in re.finditer(r'(?m)^[ \t]*has_idea\s*=\s*([A-Za-z0-9_]+)', body):
+                        ideas.append({"focus": fid, "id": im.group(1), "where": "has_idea",
+                                      "file": rel, "tree": tree})
+                    for im in re.finditer(r'(?:country_event|news_event|state_event)\s*=\s*\{\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)', body):
+                        events.append({"focus": fid, "id": im.group(1), "file": rel, "tree": tree})
     return {"ideas": ideas, "events": events}
 
 
