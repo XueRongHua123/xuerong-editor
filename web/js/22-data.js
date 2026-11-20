@@ -66,31 +66,188 @@ async function doWorldCreate(){
   }
 }
 
+function _nmSourceLabel(src){
+  return ({loaded:'已加载', launcher:'启动器', sibling:'同级目录', local:'本地', workshop:'创意工坊', extra:'目录'})[src] || src || '本地';
+}
+
+function _nmCollectModOptions(){
+  const byPath = new Map();
+  const ordered = [];
+  const norm = p => String(p || '').replace(/[\\/]+$/, '').toLowerCase();
+  const layers = ((DATA && DATA.layers) || []).filter(l => !l.game && l.path);
+  const avail = (DATA && DATA.available_mods) || [];
+  const availMap = new Map(avail.map(m => [norm(m.path), m]));
+
+  // 当前叠加链按从顶层(最子)到基座(最父)优先排在最前，方便连续建多级 submod
+  for(let i = layers.length - 1; i >= 0; i--){
+    const l = layers[i];
+    const k = norm(l.path);
+    if(!k || byPath.has(k)) continue;
+    const extra = availMap.get(k) || {};
+    const item = {
+      path: l.path,
+      name: extra.descriptor_name || l.name || extra.folder || l.path,
+      folder: extra.folder || l.path.split(/[\\/]/).filter(Boolean).pop() || '',
+      readonly: !!l.readonly,
+      loaded: true,
+      tag: i === layers.length - 1 ? '当前顶层' : '当前链路',
+    };
+    byPath.set(k, item);
+    ordered.push(item);
+  }
+  for(const m of avail){
+    const k = norm(m.path);
+    if(!k || byPath.has(k)) continue;
+    const item = {
+      path: m.path,
+      name: m.descriptor_name || m.name || m.folder || m.path,
+      folder: m.folder || '',
+      readonly: !!m.readonly,
+      loaded: !!m.loaded,
+      tag: _nmSourceLabel(m.source),
+    };
+    byPath.set(k, item);
+    ordered.push(item);
+  }
+  // 兜底：若 available_mods 为空（极早启动阶段），补入 DATA.roots
+  for(const r of ((DATA && DATA.roots) || []).slice().reverse()){
+    const k = norm(r.path);
+    if(!k || byPath.has(k)) continue;
+    const item = {
+      path: r.path,
+      name: r.name || r.path,
+      folder: r.name || '',
+      readonly: !!r.readonly,
+      loaded: true,
+      tag: '已加载',
+    };
+    byPath.set(k, item);
+    ordered.push(item);
+  }
+  return ordered;
+}
+
+function _nmUpdateDepHint(){
+  const sel = document.getElementById('nmDepSel');
+  const dep = document.getElementById('nmDep');
+  const hint = document.getElementById('nmDepHint');
+  if(!hint) return;
+  const val = dep ? dep.value.trim() : '';
+  const hasPath = dep && dep.dataset && dep.dataset.depPath;
+  hint.style.display = 'block';
+  if(!val && (!sel || !sel.value)){
+    hint.textContent = '留空表示不依赖任何 mod，直接从原版开始制作独立 mod。';
+    return;
+  }
+  const opt = sel && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
+  if(opt && opt.value && opt.value !== '__custom__' && hasPath){
+    const ro = opt.dataset.readonly === '1' ? '（只读底层，不会改动原文件）' : '';
+    hint.textContent = '已选依赖「' + (opt.dataset.depName || val) + '」' + ro
+                     + '；将写出 descriptor 真实 name= 到 dependencies，多级 submod 可直接继承其完整链路。';
+  }else{
+    hint.textContent = '将按填写的「' + val + '」解析其 descriptor.mod 真实 name= 并写入 dependencies。';
+  }
+}
+
 function openNewMod(){
   const b = document.getElementById('nmBase');
   if(!b.value) b.value = (DATA && DATA.mod_home) || '';
   document.getElementById('nmId').value = '';
   document.getElementById('nmName').value = '';
+  document.getElementById('nmGame').value = (DATA && DATA.game_version) || '1.19.*';
   document.getElementById('nmTreeId').value = '';
   document.getElementById('nmTag').value = '';
   document.getElementById('nmTree').checked = true;
-  // 自动填「依赖本体」：取第一个非只读的已加载 mod
+
+  const sel = document.getElementById('nmDepSel');
   const dep = document.getElementById('nmDep');
-  const hint = document.getElementById('nmDepHint');
-  const mine = ((DATA && DATA.roots) || []).filter(r => !r.readonly);
-  if(dep){
-    dep.value = mine.length ? (mine[0].name || mine[0].path || '') : '';
-    if(hint){
-      if(mine.length){
-        hint.style.display = 'block';
-        hint.textContent = '已填「' + dep.value + '」。建出来的是它的 submod：加载时会自动带上本体，'
-                         + '原版数据不会漏进来。想从原版开始做，把这里清空。';
-      }else{
-        hint.style.display = 'block';
-        hint.textContent = '当前没加载任何 mod，留空就是从原版开始做一个新 mod。';
+  const mods = _nmCollectModOptions();
+
+  if(sel){
+    sel.innerHTML = '';
+    const emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = '（不依赖任何 mod，从原版开始）';
+    sel.appendChild(emptyOpt);
+
+    for(const m of mods){
+      const o = document.createElement('option');
+      o.value = m.path;
+      o.dataset.depName = m.name;
+      o.dataset.readonly = m.readonly ? '1' : '0';
+      const fPart = m.folder && m.folder !== m.name ? ' (' + m.folder + ')' : '';
+      o.textContent = m.name + fPart + ' [' + m.tag + ']';
+      sel.appendChild(o);
+    }
+    const customOpt = document.createElement('option');
+    customOpt.value = '__custom__';
+    customOpt.textContent = '（手动输入其它 mod 名或目录…）';
+    sel.appendChild(customOpt);
+
+    // 默认选中：优先叠加链最后一个已加载非只读层（支持多级 submod），其次已加载只读底层
+    const loadedWritable = mods.find(m => m.loaded && !m.readonly);
+    const loadedAny = mods.find(m => m.loaded);
+    const defMod = loadedWritable || loadedAny || null;
+
+    if(defMod){
+      sel.value = defMod.path;
+      if(dep){
+        dep.value = defMod.name;
+        dep.dataset.depPath = defMod.path;
+      }
+    }else{
+      sel.value = '';
+      if(dep){
+        dep.value = '';
+        dep.dataset.depPath = '';
       }
     }
+
+    sel.onchange = ()=>{
+      const opt = sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
+      if(!dep) return;
+      if(!sel.value){
+        dep.value = '';
+        dep.dataset.depPath = '';
+      }else if(sel.value === '__custom__'){
+        dep.dataset.depPath = '';
+        dep.focus();
+      }else{
+        dep.value = (opt && opt.dataset.depName) || '';
+        dep.dataset.depPath = sel.value;
+      }
+      _nmUpdateDepHint();
+    };
+  }else if(dep){
+    const mine = ((DATA && DATA.roots) || []).filter(r => !r.readonly);
+    const tail = mine.length ? mine[mine.length - 1] : null;
+    dep.value = tail ? (tail.name || tail.path || '') : '';
   }
+
+  if(dep){
+    dep.oninput = ()=>{
+      dep.dataset.depPath = '';
+      if(sel){
+        const v = dep.value.trim();
+        if(!v){
+          sel.value = '';
+        }else{
+          const match = Array.from(sel.options).find(
+            o => o.value && o.value !== '__custom__' &&
+                 ((o.dataset.depName || '').toLowerCase() === v.toLowerCase() ||
+                  o.value.toLowerCase() === v.toLowerCase()));
+          if(match){
+            sel.value = match.value;
+            dep.dataset.depPath = match.value;
+          }else{
+            sel.value = '__custom__';
+          }
+        }
+      }
+      _nmUpdateDepHint();
+    };
+  }
+  _nmUpdateDepHint();
   document.getElementById('newMod').classList.add('show');
 }
 
@@ -98,15 +255,21 @@ async function createNewMod(){
   const id = document.getElementById('nmId').value.trim();
   const name = document.getElementById('nmName').value.trim() || id;
   if(!id){ status('先填模组文件夹名'); return; }
+  const depEl = document.getElementById('nmDep');
+  const selEl = document.getElementById('nmDepSel');
+  let depVal = depEl ? depEl.value.trim() : '';
+  if(depEl && depEl.dataset && depEl.dataset.depPath && selEl && selEl.value === depEl.dataset.depPath){
+    depVal = depEl.dataset.depPath;
+  }
   const body = {
     base: document.getElementById('nmBase').value.trim() || (DATA && DATA.mod_home) || '',
     id, name,
     version: document.getElementById('nmVer').value.trim() || '0.1.0',
-    game_version: document.getElementById('nmGame').value.trim() || '1.19.*',
+    game_version: document.getElementById('nmGame').value.trim() || (DATA && DATA.game_version) || '',
     create_tree: document.getElementById('nmTree').checked,
     tree_id: document.getElementById('nmTreeId').value.trim() || (id + '_tree'),
     tag: document.getElementById('nmTag').value.trim().toUpperCase(),
-    dep: document.getElementById('nmDep') ? document.getElementById('nmDep').value.trim() : ''
+    dep: depVal
   };
   const r = await fetch('/api/new_mod', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
   const j = await r.json();
@@ -117,8 +280,10 @@ async function createNewMod(){
 async function addEquip(){
   const id = prompt('新装备 ID（字母数字下划线）：');
   if(!id) return;
+  const root = _writableRoot();
+  if(!root){ status('先加载或新建一个可写的模组', true); return; }
   const r = await fetch('/api/equip_add', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root: (DATA.roots[0]||{}).path, id})});
+    body: JSON.stringify({root, id})});
   const j = await r.json();
   status(j.msg || '', !j.ok);
   if(j.ok){ await loadData(); renderEquipList(''); selectEquip((DATA.equipment||[]).find(x=>x.id===id)); }
@@ -2299,3 +2464,849 @@ async function saveHistory(){
 
 
 function closeHistoryEditor(){ document.getElementById('historyModal').classList.remove('show'); }
+
+
+/* ---------- 7-2 叠加链可视化 ---------- */
+const _lcState = {
+  tab: 'files',
+  layerFilter: '',
+  rpFilter: '',
+  data: null,
+};
+
+function _lcReasonLabel(l){
+  const m = {game:'原版·只读', manual:'手动加载', dep:'dependencies 带入', launcher:'启动器带入', auto:'自动'};
+  const base = m[l.reason] || '自动';
+  return (l.readonly && l.reason !== 'game') ? (base + '·只读') : base;
+}
+
+function _lcSetTab(tab){
+  _lcState.tab = tab;
+  const fPane = document.getElementById('lcFilesPane');
+  const rPane = document.getElementById('lcReplacePane');
+  const oPane = document.getElementById('lcObjectsPane');
+  const tFiles = document.getElementById('lcTabFiles');
+  const tRep = document.getElementById('lcTabReplace');
+  const tObj = document.getElementById('lcTabObjects');
+  if(fPane) fPane.style.display = tab === 'files' ? 'flex' : 'none';
+  if(rPane) rPane.style.display = tab === 'replace' ? 'flex' : 'none';
+  if(oPane) oPane.style.display = tab === 'objects' ? 'flex' : 'none';
+  if(tFiles) tFiles.classList.toggle('primary', tab === 'files');
+  if(tRep) tRep.classList.toggle('primary', tab === 'replace');
+  if(tObj) tObj.classList.toggle('primary', tab === 'objects');
+  if(tab === 'objects') loadObjectDiff();
+}
+
+function _lcRenderFilterChip(){
+  const chip = document.getElementById('lcFilterChip');
+  if(!chip) return;
+  const parts = [];
+  if(_lcState.layerFilter !== ''){
+    const ls = (_lcState.data && _lcState.data.layers) || [];
+    const hit = ls.find(x => String(x.index) === String(_lcState.layerFilter));
+    parts.push('仅看涉及 #' + (Number(_lcState.layerFilter) + 1) + ' ' + (hit ? hit.name : ''));
+  }
+  if(_lcState.rpFilter){
+    parts.push('replace_path: ' + _lcState.rpFilter);
+  }
+  chip.innerHTML = parts.length
+    ? ('<span class="lc-badge warn">' + escapeHtml(parts.join(' · ')) +
+       ' <a href="#" id="lcClearFilter" style="color:inherit;margin-left:4px">[清除]</a></span>')
+    : '';
+  const clr = document.getElementById('lcClearFilter');
+  if(clr){
+    clr.onclick = e => {
+      e.preventDefault();
+      _lcState.layerFilter = '';
+      _lcState.rpFilter = '';
+      const kSel = document.getElementById('lcKind');
+      if(kSel && kSel.value === 'blocked') kSel.value = 'interacted';
+      loadLayerChain();
+      if(_lcState.tab === 'objects') loadObjectDiff();
+    };
+  }
+}
+
+function renderLayerChain(res){
+  _lcState.data = res;
+  const layers = res.layers || [];
+  const rules = res.replace_rules || [];
+  const files = res.files || [];
+
+  const sum = document.getElementById('lcSummary');
+  if(sum){
+    sum.textContent = layers.length + ' 层 · 总 ' + (res.total_files || 0) + ' 个文件 · 同名覆盖 '
+      + (res.overridden_count || 0) + ' · replace_path ' + rules.length + ' 条（屏蔽 ' + (res.blocked_count || 0) + ' 项）';
+  }
+  _lcRenderFilterChip();
+
+  // 1. 链条顺序卡片
+  const strip = document.getElementById('lcChainStrip');
+  if(strip){
+    if(!layers.length){
+      strip.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px">当前未加载任何游戏目录或 mod。</div>';
+    }else{
+      strip.innerHTML = layers.map((l, idx) => {
+        const active = String(_lcState.layerFilter) === String(l.index) ? ' active' : '';
+        const rpCnt = (l.replace_paths || []).length;
+        const card = '<button type="button" class="lc-card' + active + '" data-lc-layer="' + l.index + '" title="' + escapeHtml(l.path || '') + '">'
+          + '<div class="lc-card-head"><span class="lc-ord">#' + l.order + '</span><b>' + escapeHtml(l.name || l.folder) + '</b></div>'
+          + '<div class="lc-card-meta">'
+          + '<div>' + escapeHtml(_lcReasonLabel(l)) + '</div>'
+          + '<div>自有文件 ' + l.file_count + ' · 最终生效 <b style="color:var(--text)">' + l.win_count + '</b></div>'
+          + '<div>覆盖下层 ' + l.override_count + ' · replace_path ' + rpCnt + '（屏蔽下层 ' + l.blocked_others_count + '）</div>'
+          + '</div></button>';
+        return (idx > 0 ? '<div class="lc-arrow">→</div>' : '') + card;
+      }).join('');
+      strip.querySelectorAll('[data-lc-layer]').forEach(btn => {
+        btn.onclick = () => {
+          const val = btn.dataset.lcLayer;
+          _lcState.layerFilter = (String(_lcState.layerFilter) === String(val)) ? '' : val;
+          loadLayerChain();
+          if(_lcState.tab === 'objects') loadObjectDiff();
+        };
+      });
+    }
+  }
+
+  // 目录筛选下拉同步
+  const dirSel = document.getElementById('lcDir');
+  if(dirSel){
+    const prev = dirSel.value;
+    dirSel.innerHTML = '<option value="">全部目录</option>' + (res.top_dirs || []).map(d =>
+      '<option value="' + escapeHtml(d.dir === '(root)' ? '' : d.dir) + '">' + escapeHtml(d.dir) + ' (' + d.count + ')</option>'
+    ).join('');
+    if(prev) dirSel.value = prev;
+  }
+
+  // 2. 文件覆盖列表
+  const stat = document.getElementById('lcFileStat');
+  const qEl = document.getElementById('lcQuery');
+  const kEl = document.getElementById('lcKind');
+  if(stat){
+    let msg = '命中 ' + (res.matched_count || 0) + ' 项（当前展示 ' + files.length + ' 项）';
+    if((res.matched_count || 0) > files.length) msg += '，请补充关键词或目录缩小范围';
+    stat.innerHTML = '<span>' + escapeHtml(msg) + '</span>'
+      + (kEl && kEl.value !== 'all' && qEl && qEl.value.trim()
+        ? '<button type="button" class="btn" id="lcSearchAllBtn" style="padding:1px 7px;font-size:11px">在全部文件（含单层原版）中搜索</button>'
+        : '');
+    const allBtn = document.getElementById('lcSearchAllBtn');
+    if(allBtn){
+      allBtn.onclick = () => { kEl.value = 'all'; loadLayerChain(); };
+    }
+  }
+
+  const list = document.getElementById('lcFileList');
+  if(list){
+    if(!files.length){
+      list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px">当前筛选下没有匹配文件；搜索未被修改的原版文件可切换「全部文件」。</div>';
+    }else{
+      const stLabel = s => ({winner:'✓ 生效', overridden:'被覆盖', blocked:'✕ 被 replace 屏蔽', shadow_above:'⚠ 在父 replace_path 之上'})[s] || s;
+      const stCls = s => ({winner:'win', overridden:'overridden', blocked:'blocked', shadow_above:'warn'})[s] || '';
+      list.innerHTML = files.map(f => {
+        const winBadge = f.winner !== null && f.winner !== undefined
+          ? '<span class="lc-badge win">最终生效：#' + f.winner_order + ' ' + escapeHtml(f.winner_name) + '</span>'
+          : '<span class="lc-badge blocked">无生效副本（已被 #' + (f.replace_by ? f.replace_by.order + ' ' + escapeHtml(f.replace_by.name) : '') + ' 的 replace_path 屏蔽）</span>';
+        const rpTag = f.replace_by
+          ? '<span class="lc-badge warn">replace_path="' + escapeHtml(f.replace_by.path) + '"</span>'
+          : '';
+        const trail = (f.sources || []).map((s, idx) =>
+          (idx > 0 ? '<span style="color:var(--muted)">→</span>' : '')
+          + '<span class="lc-badge ' + stCls(s.state) + '">#' + s.order + ' ' + escapeHtml(s.name) + ' [' + stLabel(s.state) + ']</span>'
+        ).join('');
+        return '<div class="lc-row">'
+          + '<div class="lc-row-top"><span class="lc-path">' + escapeHtml(f.rel) + '</span>' + winBadge + rpTag + '</div>'
+          + '<div class="lc-trail">' + trail + '</div>'
+          + '</div>';
+      }).join('');
+    }
+  }
+
+  // 3. replace_path 屏蔽清单
+  const repList = document.getElementById('lcReplaceList');
+  const repTab = document.getElementById('lcTabReplace');
+  if(repTab) repTab.textContent = '③ replace_path 屏蔽下层清单 (' + rules.length + ')';
+  if(repList){
+    if(!rules.length){
+      repList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px">当前叠加链未声明任何 replace_path，所有目录均按逐文件覆盖合并。</div>';
+    }else{
+      repList.innerHTML = rules.map(rl => {
+        const bfiles = rl.blocked_files || [];
+        const fileRows = bfiles.length
+          ? '<div class="lc-rp-files">' + bfiles.slice(0, 80).map(bf =>
+              '<div>' + escapeHtml(bf.rel) + ' <span style="color:var(--muted)">← 被屏蔽自 #' + (bf.from_idx + 1) + ' ' + escapeHtml(bf.from_name) + '</span></div>'
+            ).join('') + (rl.blocked_total > 80 ? '<div style="color:var(--muted)">… 共屏蔽 ' + rl.blocked_total + ' 条下层文件，点右上按钮去文件视图筛选完整列表</div>' : '') + '</div>'
+          : '<div style="font-size:11.5px;color:var(--muted)">该 replace_path 目录在下层链中未命中需要屏蔽的文件。</div>';
+        return '<div class="lc-rp-card">'
+          + '<div class="lc-row-top">'
+          + '<span class="lc-badge warn">#' + rl.owner_order + ' ' + escapeHtml(rl.owner_name) + '</span>'
+          + '<span class="lc-path">replace_path = "' + escapeHtml(rl.path) + '"</span>'
+          + '<span class="lc-badge">本层提供 ' + rl.own_files + ' 个文件</span>'
+          + '<span class="lc-badge blocked">屏蔽下层 ' + rl.blocked_unique + ' 个路径（' + rl.blocked_total + ' 份层文件）</span>'
+          + '<button type="button" class="btn" style="margin-left:auto;padding:2px 8px;font-size:11px" data-lc-rp="' + escapeHtml(rl.path) + '">在文件视图筛选</button>'
+          + '</div>' + fileRows + '</div>';
+      }).join('');
+      repList.querySelectorAll('[data-lc-rp]').forEach(btn => {
+        btn.onclick = () => {
+          _lcState.rpFilter = btn.dataset.lcRp || '';
+          const kSel = document.getElementById('lcKind');
+          if(kSel) kSel.value = 'blocked';
+          _lcSetTab('files');
+          loadLayerChain();
+        };
+      });
+    }
+  }
+}
+
+async function loadLayerChain(opts){
+  const o = opts || {};
+  const qEl = document.getElementById('lcQuery');
+  const kEl = document.getElementById('lcKind');
+  const dEl = document.getElementById('lcDir');
+  const params = new URLSearchParams();
+  if(qEl && qEl.value.trim()) params.set('q', qEl.value.trim());
+  if(kEl && kEl.value) params.set('kind', kEl.value);
+  if(dEl && dEl.value) params.set('dir', dEl.value);
+  if(_lcState.layerFilter !== '') params.set('layer', String(_lcState.layerFilter));
+  if(_lcState.rpFilter) params.set('rp', _lcState.rpFilter);
+  if(o.refresh) params.set('refresh', '1');
+  try{
+    const r = await fetch('/api/layer_chain?' + params.toString());
+    const j = await r.json();
+    renderLayerChain(j);
+  }catch(e){
+    const list = document.getElementById('lcFileList');
+    if(list) list.innerHTML = '<div style="padding:16px;color:#ff7b7b">读取叠加链失败：' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function openLayerChain(opts){
+  const o = opts || {};
+  _lcState.layerFilter = o.layer != null ? String(o.layer) : '';
+  _lcState.rpFilter = o.rp || '';
+  const qEl = document.getElementById('lcQuery');
+  const kEl = document.getElementById('lcKind');
+  const dEl = document.getElementById('lcDir');
+  if(qEl && o.query !== undefined) qEl.value = o.query;
+  if(kEl && o.kind) kEl.value = o.kind;
+  if(dEl && o.dir !== undefined) dEl.value = o.dir;
+  _lcSetTab(o.tab || 'files');
+  document.getElementById('layerModal').classList.add('show');
+  loadLayerChain({refresh: !!o.refresh});
+}
+
+function closeLayerChain(){
+  document.getElementById('layerModal').classList.remove('show');
+}
+
+
+/* ---------- 7-3 对象级覆盖对比（国策 / 事件 / 国家精神） ---------- */
+function _odCatLabel(cat, subtype){
+  if(cat === 'focus'){
+    if(subtype === 'focus_tree') return '国策树';
+    if(subtype === 'shared_focus') return '共享国策';
+    return '国策';
+  }
+  if(cat === 'event') return '事件';
+  if(cat === 'idea') return '国家精神';
+  return cat;
+}
+
+function _odStatusInfo(it){
+  const st = it.status;
+  if(st === 'file_override') return ['win', '同名文件覆写：#' + it.winner_order + ' ' + (it.winner_name || '') + ' 生效'];
+  if(st === 'id_override') return ['win', '后加载覆写：#' + it.winner_order + ' ' + (it.winner_name || '') + ' 生效'];
+  if(st === 'cross_tree') return ['warn', '跨不同 focus_tree 同名（各树各自生效）'];
+  if(st === 'duplicate_error') return ['blocked', '⚠ 重复冲突（HOI4 报错：不同文件名重定义）'];
+  if(st === 'blocked') return ['blocked', '无生效副本（被 replace_path 屏蔽）'];
+  if(st === 'removed_by_file') return ['blocked', '无生效副本（上层同名文件覆写未保留）'];
+  return ['overridden', '仅单层：#' + it.winner_order + ' ' + (it.winner_name || '')];
+}
+
+function _odRecLabel(state){
+  return ({
+    winner: '✓ 最终生效',
+    file_replaced: '被同名文件覆写',
+    blocked_by_replace: '✕ 被 replace_path 屏蔽',
+    def_overridden: '被后加载覆写',
+    conflict_dup: '⚠ 重复报错冲突',
+    cross_tree: '跨树保留',
+  })[state] || state;
+}
+
+function _odRecCls(state){
+  return ({
+    winner: 'win',
+    file_replaced: 'overridden',
+    blocked_by_replace: 'blocked',
+    def_overridden: 'overridden',
+    conflict_dup: 'blocked',
+    cross_tree: 'warn',
+  })[state] || '';
+}
+
+function renderObjectDiff(res){
+  const stats = res.stats || {};
+  const items = res.items || [];
+  const statEl = document.getElementById('odStat');
+  const qEl = document.getElementById('odQuery');
+  const sEl = document.getElementById('odStatus');
+  if(statEl){
+    const msg = '总对象 ' + (stats.total || 0)
+      + '（国策 ' + ((stats.by_cat && stats.by_cat.focus) || 0)
+      + ' / 事件 ' + ((stats.by_cat && stats.by_cat.event) || 0)
+      + ' / 精神 ' + ((stats.by_cat && stats.by_cat.idea) || 0) + '）'
+      + ' · 交互/冲突 ' + (stats.interacted || 0)
+      + '（重复报错冲突 ' + (stats.duplicate_error || 0)
+      + ' / 同名文件覆写 ' + (stats.file_override || 0)
+      + ' / 命中 ' + (res.matched_count || 0) + '）';
+    statEl.innerHTML = '<span>' + escapeHtml(msg) + '</span>'
+      + (sEl && sEl.value !== 'all' && qEl && qEl.value.trim()
+        ? '<button type="button" class="btn" id="odSearchAllBtn" style="padding:1px 7px;font-size:11px">在全部对象（含单层未改动）中搜索</button>'
+        : '');
+    const allBtn = document.getElementById('odSearchAllBtn');
+    if(allBtn) allBtn.onclick = () => { sEl.value = 'all'; loadObjectDiff(); };
+  }
+
+  const list = document.getElementById('odList');
+  if(!list) return;
+  if(!items.length){
+    list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px">当前筛选下没有匹配对象；可切换到「全部对象」检索未改动的单层定义。</div>';
+    return;
+  }
+  list.innerHTML = items.map(it => {
+    const [bCls, bTxt] = _odStatusInfo(it);
+    const recs = (it.records || []).map(r => {
+      const fPart = r.rel ? (' · ' + r.rel) : '';
+      const sumPart = r.summary ? (' (' + r.summary + ')') : '';
+      return '<span class="lc-badge ' + _odRecCls(r.state) + '" title="' + escapeHtml(r.summary || '') + '">'
+        + '#' + r.order + ' ' + escapeHtml(r.layer_name) + escapeHtml(fPart)
+        + ' [' + _odRecLabel(r.state) + ']' + escapeHtml(sumPart)
+        + '</span>';
+    }).join('');
+    return '<div class="lc-row" data-od-row="' + escapeHtml(it.key) + '">'
+      + '<div class="lc-row-top">'
+      + '<span class="lc-badge">' + escapeHtml(_odCatLabel(it.cat, it.subtype)) + '</span>'
+      + '<span class="lc-path">' + escapeHtml(it.id) + '</span>'
+      + '<span class="lc-badge ' + bCls + '">' + escapeHtml(bTxt) + '</span>'
+      + '<button type="button" class="btn" style="margin-left:auto;padding:2px 8px;font-size:11px" data-od-detail="' + escapeHtml(it.key) + '">对比源码</button>'
+      + '</div>'
+      + '<div class="lc-trail">' + recs + '</div>'
+      + (it.rule_note ? '<div class="lc-note">' + escapeHtml(it.rule_note) + '</div>' : '')
+      + '<div class="lc-detail" style="display:none"></div>'
+      + '</div>';
+  }).join('');
+
+  list.querySelectorAll('[data-od-detail]').forEach(btn => {
+    btn.onclick = () => toggleObjectDetail(btn, btn.dataset.odDetail);
+  });
+}
+
+async function toggleObjectDetail(btn, objKey){
+  const row = btn.closest('[data-od-row]');
+  const box = row ? row.querySelector('.lc-detail') : null;
+  if(!box) return;
+  if(box.style.display !== 'none'){
+    box.style.display = 'none';
+    btn.textContent = '对比源码';
+    return;
+  }
+  if(!box.dataset.loaded){
+    btn.textContent = '读取中…';
+    try{
+      const r = await fetch('/api/object_diff?key=' + encodeURIComponent(objKey));
+      const j = await r.json();
+      if(!j.ok || !j.item){
+        box.innerHTML = '<div class="lc-note" style="color:#ff7b7b">' + escapeHtml(j.msg || '读取失败') + '</div>';
+      }else{
+        const it = j.item;
+        const blocks = (it.records || []).map(rec =>
+          '<div>'
+          + '<div class="lc-note" style="margin-bottom:3px">#' + rec.order + ' ' + escapeHtml(rec.layer_name)
+          + ' · <code>' + escapeHtml(rec.rel) + '</code> [' + escapeHtml(_odRecLabel(rec.state)) + ']</div>'
+          + '<pre class="lc-pre">' + escapeHtml(rec.raw || '（空块）') + '</pre>'
+          + '</div>'
+        ).join('');
+        const diffHtml = it.diff
+          ? '<div><div class="lc-note" style="margin-bottom:3px">行级差异（unified diff）</div><pre class="lc-pre">' + escapeHtml(it.diff) + '</pre></div>'
+          : '';
+        box.innerHTML = diffHtml + blocks;
+        box.dataset.loaded = '1';
+      }
+    }catch(e){
+      box.innerHTML = '<div class="lc-note" style="color:#ff7b7b">读取失败：' + escapeHtml(e.message) + '</div>';
+    }
+  }
+  box.style.display = 'flex';
+  btn.textContent = '收起源码';
+}
+
+async function loadObjectDiff(opts){
+  const o = opts || {};
+  const qEl = document.getElementById('odQuery');
+  const cEl = document.getElementById('odCat');
+  const sEl = document.getElementById('odStatus');
+  const params = new URLSearchParams();
+  if(qEl && qEl.value.trim()) params.set('q', qEl.value.trim());
+  if(cEl && cEl.value) params.set('cat', cEl.value);
+  if(sEl && sEl.value) params.set('status', sEl.value);
+  if(_lcState.layerFilter !== '') params.set('layer', String(_lcState.layerFilter));
+  if(o.refresh) params.set('refresh', '1');
+  try{
+    const r = await fetch('/api/object_diff?' + params.toString());
+    const j = await r.json();
+    renderObjectDiff(j);
+  }catch(e){
+    const list = document.getElementById('odList');
+    if(list) list.innerHTML = '<div style="padding:16px;color:#ff7b7b">加载对象覆盖失败：' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+
+/* ---------- 7-4 一键进游戏校验 ---------- */
+let _gvTimer = null;
+let _gvConfirmed = false;
+let _gvRunning = false;
+
+function _gvStopPoll(){
+  if(_gvTimer){ clearInterval(_gvTimer); _gvTimer = null; }
+}
+
+function renderGameVerify(st){
+  _gvConfirmed = !!st.confirmed;
+  _gvRunning = !!st.running;
+
+  const badge = document.getElementById('gvEnvBadge');
+  const envPath = document.getElementById('gvEnvPath');
+  const recBanner = document.getElementById('gvRecoverBanner');
+  const runBtn = document.getElementById('gvRunBtn');
+  const cancelBtn = document.getElementById('gvCancelBtn');
+  const progBox = document.getElementById('gvProgressBox');
+  const progMsg = document.getElementById('gvProgMsg');
+  const progBar = document.getElementById('gvProgBar');
+  const sumEl = document.getElementById('gvResultSummary');
+  const listEl = document.getElementById('gvErrList');
+
+  if(recBanner){
+    if(st.recovered_msg){
+      recBanner.style.display = 'block';
+      recBanner.className = 'gv-banner warn';
+      recBanner.textContent = '⚠ ' + st.recovered_msg;
+    }else if(!st.env_ok && st.env_reason){
+      recBanner.style.display = 'block';
+      recBanner.className = 'gv-banner err';
+      recBanner.textContent = '✖ ' + st.env_reason;
+    }else{
+      recBanner.style.display = 'none';
+    }
+  }
+
+  if(badge){
+    if(st.running){ badge.className = 'lc-badge warn'; badge.textContent = '检查进行中'; }
+    else if(st.env_ok){ badge.className = 'lc-badge win'; badge.textContent = '游戏就绪'; }
+    else{ badge.className = 'lc-badge blocked'; badge.textContent = '环境未就绪'; }
+  }
+  if(envPath){
+    const mods = (st.mod_dirs || []).map(p => p.split(/[\\/]/).filter(Boolean).pop() || p);
+    envPath.textContent = '游戏目录：' + (st.game_dir || '未检测到 hoi4.exe')
+      + ' · 待测链：' + (mods.length ? mods.join(' → ') : '（未加载 mod）');
+  }
+  if(runBtn){
+    runBtn.disabled = !!st.running || !st.env_ok || !(st.mod_dirs && st.mod_dirs.length);
+  }
+  if(cancelBtn){
+    cancelBtn.style.display = st.running ? 'inline-flex' : 'none';
+  }
+  if(progBox){
+    progBox.style.display = st.running ? 'flex' : 'none';
+  }
+  if(progMsg && st.running){ progMsg.textContent = st.msg || '检查运行中…'; }
+  if(progBar && st.running){ progBar.style.width = Math.max(4, Math.min(100, Number(st.pct || 0))) + '%'; }
+
+  const res = st.result;
+  if(sumEl){
+    if(!res){
+      sumEl.innerHTML = st.msg && !st.running ? ('<span>' + escapeHtml(st.msg) + '</span>') : '';
+    }else{
+      const cls = res.ok ? 'win' : 'blocked';
+      const head = res.ok ? '✓ 检查通过' : ('✕ 检查发现异常（' + (res.status || 'FAIL') + '）');
+      const baseNote = res.baseline && res.baseline.status === 'CACHED' ? '复用基线缓存' : ('基线 ' + ((res.baseline && res.baseline.error_count) ?? '-') + ' 行');
+      sumEl.innerHTML = '<span class="lc-badge ' + cls + '">' + escapeHtml(head) + '</span>'
+        + '<span>' + escapeHtml(res.msg || '') + '（' + escapeHtml(baseNote) + ' · 目标 error.log ' + (res.target_error_count ?? 0) + ' 行）</span>';
+    }
+  }
+  if(listEl){
+    if(!res){
+      listEl.innerHTML = '<div style="padding:18px;text-align:center;color:var(--muted);font-size:12px">点击「开始进游戏检查」后，将自动对比主菜单 error.log 并把新增报错定位到具体文件与行号。</div>';
+    }else if(res.ok){
+      listEl.innerHTML = '<div style="padding:18px;text-align:center;color:#5bd188;font-size:12.5px">✓ 主菜单启动正常，相对基线 0 条新增 error.log 报错。</div>';
+    }else{
+      const items = res.added || [];
+      if(!items.length){
+        const cr = (res.new_crashes || []).map(c => c.dir + (c.head ? (' (' + c.head + ')') : '')).join('；');
+        listEl.innerHTML = '<div class="lc-row"><div class="lc-path" style="color:#ff7b7b">'
+          + escapeHtml(res.msg || '游戏未能正常到达主菜单') + (cr ? (' · 崩溃转储：' + escapeHtml(cr)) : '')
+          + '</div></div>';
+      }else{
+        listEl.innerHTML = items.map((it, idx) => {
+          const locs = (it.locations || []).map(loc =>
+            '<div style="margin-top:4px">'
+            + '<span class="lc-badge win">' + escapeHtml(loc.layer || '') + ' · ' + escapeHtml(loc.file || loc.path)
+            + (loc.line ? (' : 第 ' + loc.line + ' 行') : '') + '</span>'
+            + (loc.excerpt ? '<pre class="lc-pre" style="margin-top:3px">' + escapeHtml(loc.excerpt) + '</pre>' : '')
+            + '</div>'
+          ).join('');
+          const noLoc = !locs
+            ? ('<div class="lc-note">未定位到具体文件' + (it.line ? ('（报错提及第 ' + it.line + ' 行）') : '') + '</div>')
+            : '';
+          return '<div class="lc-row">'
+            + '<div class="lc-row-top"><span class="lc-badge blocked">#' + (idx + 1) + '</span>'
+            + '<span class="lc-path">' + escapeHtml(it.norm || it.raw || '') + '</span></div>'
+            + (locs || noLoc)
+            + '</div>';
+        }).join('');
+      }
+    }
+  }
+}
+
+async function refreshGameVerifyStatus(){
+  try{
+    const r = await fetch('/api/game_verify/status', {cache: 'no-store'});
+    const st = await r.json();
+    renderGameVerify(st);
+    if(st.running && !_gvTimer){
+      _gvTimer = setInterval(refreshGameVerifyStatus, 1200);
+    }else if(!st.running){
+      _gvStopPoll();
+    }
+    return st;
+  }catch(e){
+    _gvStopPoll();
+    return null;
+  }
+}
+
+async function startGameVerifyFlow(withConfirm){
+  const cb = document.getElementById('gvConfirmBox');
+  if(!_gvConfirmed && !withConfirm){
+    if(cb) cb.style.display = 'block';
+    return;
+  }
+  if(cb) cb.style.display = 'none';
+  const modeEl = document.getElementById('gvBaseMode');
+  const reuseEl = document.getElementById('gvReuseBase');
+  const r = await fetch('/api/game_verify/start', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      confirm: !!withConfirm,
+      baseline_mode: modeEl ? modeEl.value : 'parents',
+      reuse_baseline: reuseEl ? !!reuseEl.checked : true,
+    }),
+  });
+  const j = await r.json();
+  if(j.need_confirm){
+    if(cb) cb.style.display = 'block';
+    return;
+  }
+  if(!j.ok){
+    status(j.msg || '无法启动检查', true);
+    await refreshGameVerifyStatus();
+    return;
+  }
+  await refreshGameVerifyStatus();
+}
+
+async function cancelGameVerifyFlow(){
+  await fetch('/api/game_verify/cancel', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+  await refreshGameVerifyStatus();
+}
+
+function openGameVerify(){
+  const cb = document.getElementById('gvConfirmBox');
+  if(cb) cb.style.display = 'none';
+  document.getElementById('gameVerifyModal').classList.add('show');
+  refreshGameVerifyStatus();
+}
+
+function closeGameVerify(){
+  _gvStopPoll();
+  document.getElementById('gameVerifyModal').classList.remove('show');
+}
+
+
+/* ---------- 7-5 打包发布 ---------- */
+let _pubPreview = null;
+
+function _pubReadOverrides(){
+  const nameEl = document.getElementById('pubName');
+  const verEl = document.getElementById('pubVer');
+  const gvEl = document.getElementById('pubGameVer');
+  const tagsEl = document.getElementById('pubTags');
+  const depsEl = document.getElementById('pubDeps');
+  return {
+    name: nameEl ? nameEl.value.trim() : '',
+    version: verEl ? verEl.value.trim() : '',
+    supported_version: gvEl ? gvEl.value.trim() : '',
+    tags: tagsEl ? tagsEl.value.trim() : '',
+    dependencies: depsEl ? depsEl.value.trim() : '',
+  };
+}
+
+function renderPublishModal(data, keepInputs){
+  _pubPreview = data;
+  const badge = document.getElementById('pubBadge');
+  const sel = document.getElementById('pubModSel');
+  const statEl = document.getElementById('pubStat');
+  const listEl = document.getElementById('pubChecklist');
+  const runBtn = document.getElementById('pubRunBtn');
+
+  if(sel){
+    const cands = data.candidates || [];
+    const curVal = data.mod_root || sel.value || '';
+    sel.innerHTML = '';
+    if(!cands.length){
+      const o = document.createElement('option');
+      o.value = '';
+      o.textContent = '（未加载本地 mod）';
+      sel.appendChild(o);
+    }else{
+      for(const c of cands){
+        const o = document.createElement('option');
+        o.value = c.path;
+        o.textContent = (c.name || c.folder) + ' (' + c.folder + ')' + (c.readonly ? ' [只读]' : '');
+        sel.appendChild(o);
+      }
+      if(curVal) sel.value = curVal;
+    }
+  }
+
+  if(!data || !data.ok){
+    if(badge){ badge.className = 'lc-badge blocked'; badge.textContent = '未就绪'; }
+    if(statEl) statEl.innerHTML = '<span>' + escapeHtml((data && data.msg) || '无法预览') + '</span>';
+    if(listEl) listEl.innerHTML = '';
+    if(runBtn) runBtn.disabled = true;
+    return;
+  }
+
+  if(runBtn) runBtn.disabled = false;
+  if(badge){
+    badge.className = 'lc-badge win';
+    badge.textContent = '预检完成 · ' + (data.included_count || 0) + ' 文件';
+  }
+
+  if(!keepInputs){
+    const meta = data.meta || {};
+    const nameEl = document.getElementById('pubName');
+    const verEl = document.getElementById('pubVer');
+    const gvEl = document.getElementById('pubGameVer');
+    const tagsEl = document.getElementById('pubTags');
+    const depsEl = document.getElementById('pubDeps');
+    const fidEl = document.getElementById('pubFolderId');
+    const outEl = document.getElementById('pubOutDir');
+    if(nameEl) nameEl.value = meta.name || '';
+    if(verEl) verEl.value = meta.version || '0.1.0';
+    if(gvEl) gvEl.value = meta.supported_version || '1.19.*';
+    if(tagsEl) tagsEl.value = (meta.tags || []).join(', ');
+    if(depsEl) depsEl.value = (meta.dependencies || []).join(', ');
+    if(fidEl && !fidEl.dataset.edited) fidEl.value = data.folder_id || '';
+    if(outEl && !outEl.value.trim()) outEl.value = data.default_out_dir || '';
+  }
+
+  const excludedCnt = data.excluded_count || 0;
+  const bomAdd = data.bom_add || [];
+  const bomStrip = data.bom_strip || [];
+  const warns = data.brace_warns || [];
+  if(statEl){
+    statEl.innerHTML = ''
+      + '<span class="lc-badge win">纳入 ' + (data.included_count || 0) + ' 个文件</span>'
+      + '<span class="lc-badge ' + (excludedCnt ? 'warn' : 'win') + '">剔除备份/缓存 ' + excludedCnt + ' 项</span>'
+      + '<span class="lc-badge ' + ((bomAdd.length + bomStrip.length) ? 'warn' : 'win') + '">自动规范 BOM ' + (bomAdd.length + bomStrip.length) + ' 个</span>'
+      + (warns.length ? '<span class="lc-badge blocked">括号异常 ' + warns.length + ' 个</span>' : '');
+  }
+
+  if(listEl){
+    const rows = [];
+    rows.push('<div class="lc-row"><div class="lc-row-top">'
+      + '<span class="lc-badge ' + (data.descriptor_exists ? 'win' : 'warn') + '">descriptor.mod</span>'
+      + '<span>' + (data.descriptor_exists ? '源目录已有 descriptor.mod，导出时将规范化字段（UTF-8 无 BOM）' : '源目录缺少 descriptor.mod，导出时将自动生成') + '</span>'
+      + '</div></div>');
+
+    rows.push('<div class="lc-row"><div class="lc-row-top">'
+      + '<span class="lc-badge ' + (data.has_picture ? 'win' : 'warn') + '">thumbnail.png</span>'
+      + '<span>' + (data.has_picture ? '已存在封面图，将随包导出' : '源目录缺少封面图，导出时将自动生成 256×256 占位图') + '</span>'
+      + '</div></div>');
+
+    const dchecks = data.dep_checks || [];
+    const sug = data.suggested_deps || [];
+    if(dchecks.length){
+      const dHtml = dchecks.map(dc =>
+        '<div><span class="lc-badge ' + (dc.found ? 'win' : 'warn') + '">'
+        + (dc.found ? '✓ 已匹配' : '⚠ 未在本地找到') + '</span> '
+        + escapeHtml(dc.resolved)
+        + (dc.changed ? (' <span class="lc-note">（原填：' + escapeHtml(dc.raw) + ' → 自动校准为真实 name=）</span>') : '')
+        + '</div>'
+      ).join('');
+      rows.push('<div class="lc-row"><div class="lc-row-top"><span class="lc-badge win">dependencies</span><span>依赖校验（' + dchecks.length + ' 项）</span></div>' + dHtml + '</div>');
+    }else if(sug.length){
+      rows.push('<div class="lc-row"><div class="lc-row-top"><span class="lc-badge warn">dependencies</span>'
+        + '<span>当前依赖为空，叠加链前层包含：' + escapeHtml(sug.join(', ')) + '</span></div></div>');
+    }
+
+    const lc = data.launcher_conflict || {};
+    if(lc.conflict){
+      rows.push('<div class="lc-row"><div class="lc-row-top"><span class="lc-badge warn">启动器 .mod 冲突</span>'
+        + '<span>启动器目录已存在同名 <code>' + escapeHtml((data.folder_id || '') + '.mod') + '</code>（指向 '
+        + escapeHtml(lc.existing_path || '其它位置') + '），可勾选「更新同名」或改用其它导出文件夹名。</span></div></div>');
+    }
+
+    if(data.target_nested_warning){
+      rows.push('<div class="lc-row"><div class="lc-row-top"><span class="lc-badge blocked">目录冲突</span>'
+        + '<span>目标导出目录不能与源 mod 目录相同或嵌套，请调整导出父目录或文件夹名。</span></div></div>');
+    }
+
+    const ex = data.excluded_files || [];
+    if(ex.length){
+      const exLines = ex.slice(0, 60).map(it => escapeHtml(it.rel) + '  —  ' + escapeHtml(it.detail || it.reason)).join('\n');
+      rows.push('<div class="lc-row"><div class="lc-row-top"><span class="lc-badge warn">将剔除的无关文件</span>'
+        + '<span>共 ' + excludedCnt + ' 项（导出时自动排除，不污染工坊包）</span></div>'
+        + '<pre class="lc-pre">' + exLines + (ex.length > 60 ? ('\n… 其余 ' + (ex.length - 60) + ' 项') : '') + '</pre></div>');
+    }
+
+    if(bomAdd.length || bomStrip.length){
+      const lines = []
+        .concat(bomAdd.map(f => '[+BOM 补全] ' + f))
+        .concat(bomStrip.map(f => '[-BOM 剥离] ' + f));
+      rows.push('<div class="lc-row"><div class="lc-row-top"><span class="lc-badge warn">编码 BOM 规范化</span>'
+        + '<span>本地化 .yml 补齐 BOM（' + bomAdd.length + '），其余文本剥离多余 BOM（' + bomStrip.length + '）</span></div>'
+        + '<pre class="lc-pre">' + escapeHtml(lines.slice(0, 60).join('\n')) + '</pre></div>');
+    }
+
+    if(warns.length){
+      rows.push('<div class="lc-row"><div class="lc-row-top"><span class="lc-badge blocked">花括号未配平</span>'
+        + '<span>以下脚本文件大括号不成对，建议进游戏前修复：</span></div>'
+        + '<pre class="lc-pre">' + escapeHtml(warns.map(w => w.rel + ' (差值 ' + w.depth + ')').join('\n')) + '</pre></div>');
+    }
+
+    listEl.innerHTML = rows.join('');
+  }
+}
+
+async function loadPublishPreview(keepInputs){
+  const sel = document.getElementById('pubModSel');
+  const outEl = document.getElementById('pubOutDir');
+  const fidEl = document.getElementById('pubFolderId');
+  const body = {
+    mod_root: sel ? sel.value : '',
+    out_dir: outEl ? outEl.value.trim() : '',
+    folder_id: (keepInputs && fidEl) ? fidEl.value.trim() : '',
+    overrides: keepInputs ? _pubReadOverrides() : null,
+  };
+  try{
+    const r = await fetch('/api/publish/preview', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    renderPublishModal(j, !!keepInputs);
+    return j;
+  }catch(e){
+    const statEl = document.getElementById('pubStat');
+    if(statEl) statEl.innerHTML = '<span style="color:#ff7b7b">预检失败：' + escapeHtml(e.message) + '</span>';
+    return null;
+  }
+}
+
+async function openPublishModal(){
+  const resBox = document.getElementById('pubResultBox');
+  if(resBox){ resBox.style.display = 'none'; resBox.innerHTML = ''; }
+  const fidEl = document.getElementById('pubFolderId');
+  if(fidEl){ delete fidEl.dataset.edited; fidEl.value = ''; }
+  const outEl = document.getElementById('pubOutDir');
+  if(outEl) outEl.value = '';
+  const sel = document.getElementById('pubModSel');
+  if(sel) sel.value = '';
+  document.getElementById('publishModal').classList.add('show');
+  await loadPublishPreview(false);
+}
+
+function closePublishModal(){
+  document.getElementById('publishModal').classList.remove('show');
+}
+
+function useLauncherModDirForPublish(){
+  const home = (DATA && DATA.mod_home) || (_pubPreview && _pubPreview.launcher_mod_dir) || '';
+  if(!home){ status('未探测到 Paradox 启动器 mod 目录', true); return; }
+  const outEl = document.getElementById('pubOutDir');
+  const fidEl = document.getElementById('pubFolderId');
+  const sel = document.getElementById('pubModSel');
+  if(outEl) outEl.value = home;
+  if(fidEl && sel && sel.value){
+    const srcNorm = sel.value.replace(/[\\/]+$/, '').toLowerCase();
+    const tgtNorm = (home.replace(/[\\/]+$/, '') + '\\' + (fidEl.value.trim() || '')).toLowerCase();
+    if(srcNorm === tgtNorm){
+      fidEl.value = (fidEl.value.trim() || 'mod') + '_release';
+      fidEl.dataset.edited = '1';
+    }
+  }
+  loadPublishPreview(true);
+}
+
+async function runPublishExport(){
+  const sel = document.getElementById('pubModSel');
+  const outEl = document.getElementById('pubOutDir');
+  const fidEl = document.getElementById('pubFolderId');
+  const regEl = document.getElementById('pubRegLauncher');
+  const ovModEl = document.getElementById('pubOverwriteMod');
+  const zipEl = document.getElementById('pubAlsoZip');
+  const resBox = document.getElementById('pubResultBox');
+
+  const body = {
+    mod_root: sel ? sel.value : '',
+    out_dir: outEl ? outEl.value.trim() : '',
+    folder_id: fidEl ? fidEl.value.trim() : '',
+    register_launcher: regEl ? !!regEl.checked : true,
+    overwrite_launcher_mod: ovModEl ? !!ovModEl.checked : false,
+    also_zip: zipEl ? !!zipEl.checked : false,
+    overrides: _pubReadOverrides(),
+  };
+  const r = await fetch('/api/publish/export', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  const j = await r.json();
+  if(resBox){
+    resBox.style.display = 'block';
+    if(j.ok){
+      resBox.className = 'gv-banner';
+      resBox.innerHTML = '<div style="font-weight:600;color:#5bd188;margin-bottom:4px">✓ ' + escapeHtml(j.msg || '导出成功') + '</div>'
+        + '<div style="font-size:11.5px;line-height:1.6">'
+        + '<div><b>工坊导出目录：</b><code>' + escapeHtml(j.export_dir || '') + '</code></div>'
+        + (j.launcher_mod ? ('<div><b>官方启动器 .mod：</b><code>' + escapeHtml(j.launcher_mod) + '</code></div>') : '')
+        + (j.zip_path ? ('<div><b>ZIP 压缩包：</b><code>' + escapeHtml(j.zip_path) + '</code></div>') : '')
+        + '<div style="color:var(--muted);margin-top:4px">下一步：打开 Paradox 官方启动器 → 所有已安装模组 → 上传模组，即可在列表中选择并上传到 Steam 创意工坊。</div>'
+        + '</div>';
+      status(j.msg || '打包发布成功');
+    }else{
+      resBox.className = 'gv-banner err';
+      resBox.textContent = '✖ ' + (j.msg || '导出失败');
+      status(j.msg || '导出失败', true);
+    }
+  }
+}
+
+async function runLegacyPatchExport(){
+  const r = await fetch('/api/export', {method:'POST'});
+  const j = await r.json();
+  status(j.path ? ('覆盖包已导出：' + j.path) : ('导出失败：' + j.msg), !j.path);
+  const resBox = document.getElementById('pubResultBox');
+  if(resBox){
+    resBox.style.display = 'block';
+    resBox.className = j.path ? 'gv-banner' : 'gv-banner err';
+    resBox.textContent = j.path ? ('✓ 本次改动覆盖包已导出：' + j.path) : ('✖ ' + (j.msg || '没有改动'));
+  }
+}

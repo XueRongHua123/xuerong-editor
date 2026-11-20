@@ -1,7 +1,98 @@
 // 20-panels：弹窗开合（P4）
 // 本地化检查 / 日志 / 备份 / 卸载 / 文件夹选择 / 编辑面板索引条 / 诊断面板。
 
+function _locEsc(t){
+  return String(t==null?'':t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+async function _loadLocBrowse(){
+  const listEl = document.getElementById('locBrowseList');
+  const statEl = document.getElementById('locBrowseStat');
+  if(!listEl) return;
+  const q = (document.getElementById('locSearch')?.value || '').trim();
+  const scope = document.getElementById('locScope')?.value || 'all';
+  const lang = document.getElementById('locLang')?.value || 'simp_chinese';
+  listEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">查询中…</div>';
+  try{
+    const url = '/api/loc_list?q=' + encodeURIComponent(q) + '&scope=' + encodeURIComponent(scope) + '&lang=' + encodeURIComponent(lang) + '&limit=120';
+    const r = await (await fetch(url)).json();
+    if(!r.ok){ listEl.innerHTML = '<div style="padding:12px;color:var(--muted)">查询失败</div>'; return; }
+    const items = r.items || [];
+    if(statEl){
+      statEl.textContent = '共匹配 ' + (r.total || 0) + ' 条' + (r.truncated ? '（显示前 ' + items.length + ' 条，请缩小关键词）' : '');
+    }
+    if(!items.length){
+      listEl.innerHTML = '<div style="padding:18px;text-align:center;color:var(--muted);font-size:12px">没有匹配的本地化条目</div>';
+      return;
+    }
+    listEl.innerHTML = items.map((it, idx)=>{
+      const tag = it.edited ? '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--accent) 20%,transparent);color:var(--accent)">本mod</span>' : '';
+      return '<div class="loc-browse-row" data-loc-key="' + _locEsc(it.key) + '" style="display:flex;gap:6px;align-items:center;padding:5px 4px;border-bottom:1px solid var(--line);font-size:12px">'
+        + '<div style="width:230px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,Consolas,monospace;font-size:11px" title="' + _locEsc(it.key) + '">'
+        + _locEsc(it.key) + ' ' + tag + '</div>'
+        + '<input class="loc-val-inp" data-idx="' + idx + '" value="' + _locEsc(it.text || '') + '" style="flex:1;min-width:0;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:4px;padding:3px 6px;font-size:12px">'
+        + '<button class="btn loc-save-btn" data-key="' + _locEsc(it.key) + '" style="font-size:11px;padding:2px 8px">保存</button>'
+        + '</div>';
+    }).join('');
+  }catch(e){
+    listEl.innerHTML = '<div style="padding:12px;color:var(--muted)">请求失败：' + _locEsc(e) + '</div>';
+  }
+}
+
+function _switchLocTab(tab){
+  const bPane = document.getElementById('locBrowsePane');
+  const mPane = document.getElementById('locMissingPane');
+  const bBtn = document.getElementById('locTabBrowse');
+  const mBtn = document.getElementById('locTabMissing');
+  const isBrowse = (tab !== 'missing');
+  if(bPane) bPane.style.display = isBrowse ? '' : 'none';
+  if(mPane) mPane.style.display = isBrowse ? 'none' : '';
+  if(bBtn) bBtn.classList.toggle('primary', isBrowse);
+  if(mBtn) mBtn.classList.toggle('primary', !isBrowse);
+}
+
+(function(){
+  const bBtn = document.getElementById('locTabBrowse');
+  const mBtn = document.getElementById('locTabMissing');
+  const qBtn = document.getElementById('locBrowseBtn');
+  const qInp = document.getElementById('locSearch');
+  const scSel = document.getElementById('locScope');
+  const lgSel = document.getElementById('locLang');
+  const bList = document.getElementById('locBrowseList');
+  if(bBtn) bBtn.onclick = ()=>{ _switchLocTab('browse'); _loadLocBrowse(); };
+  if(mBtn) mBtn.onclick = ()=>{ _switchLocTab('missing'); };
+  if(qBtn) qBtn.onclick = _loadLocBrowse;
+  if(scSel) scSel.onchange = _loadLocBrowse;
+  if(lgSel) lgSel.onchange = _loadLocBrowse;
+  if(qInp) qInp.addEventListener('keydown', e=>{ if(e.key === 'Enter') _loadLocBrowse(); });
+  if(bList){
+    bList.addEventListener('click', async e=>{
+      const btn = e.target.closest('.loc-save-btn');
+      if(!btn) return;
+      const row = btn.closest('.loc-browse-row');
+      const inp = row ? row.querySelector('.loc-val-inp') : null;
+      const key = btn.dataset.key || '';
+      const lang = document.getElementById('locLang')?.value || 'simp_chinese';
+      if(!key || !inp) return;
+      const root = (typeof _writableRoot === 'function' ? _writableRoot() : '') || (DATA && DATA.roots && DATA.roots[0]) || '';
+      if(!root){ status('没有可写的模组目录', true); return; }
+      const entries = {}; entries[lang] = {}; entries[lang][key] = inp.value;
+      btn.disabled = true;
+      try{
+        const r = await (await fetch('/api/loc_save', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({root, entries})})).json();
+        status(r.ok ? ('已保存本地化：' + key) : ('保存失败：' + (r.msg || '')), !r.ok);
+        if(r.ok) _loadLocBrowse();
+      }catch(err){
+        status('保存失败：' + err, true);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+  }
+})();
+
 async function openLocCheck(){
+  _switchLocTab('browse');
   const r = await fetch('/api/missing_loc');
   const j = await r.json();
   const box = document.getElementById('locList');
@@ -25,6 +116,7 @@ async function openLocCheck(){
     });
   }
   document.getElementById('locModal').classList.add('show');
+  await _loadLocBrowse();
 }
 
 async function openLog(){
@@ -289,6 +381,8 @@ function treeOptions(){
   const list  = document.getElementById('diagList');
   const cnt   = document.getElementById('diagCount');
   const bar   = document.getElementById('diagFixBar');
+  const ignBtn = document.getElementById('diagIgnoredBtn');
+  const ignBox = document.getElementById('diagIgnoredBox');
 
   const SEV = { error:['#e05','严重'], warning:['#e90','警告'], info:['#39c','提示'] };
 
@@ -297,19 +391,21 @@ function treeOptions(){
   }
 
   // 后端 fix.options 里有哪几个就渲染哪几个，名字只在这里翻译
-  const OPT_LABEL = { drop_replace:'撤销 replace', adopt_ref_dir:'接管该目录', ignore:'忽略' };
-  const OPT_ACT   = { drop_replace:'drop', adopt_ref_dir:'adopt', ignore:'ignore' };
+  const OPT_LABEL = { drop_replace:'撤销 replace', adopt_ref_dir:'接管该目录', adopt_file:'接管这个文件', ignore:'忽略' };
+  const OPT_ACT   = { drop_replace:'drop', adopt_ref_dir:'adopt', adopt_file:'adopt-file', ignore:'ignore' };
 
   function fixButtons(f){
     const fx = f.fix;
     if(!fx || !fx.options || !fx.options.length) return '';
     const subs = (fx.subs && fx.subs.length ? fx.subs : [fx.sub]).filter(Boolean).join(',');
+    const filesAttr = fx.adopt_files != null ? String(fx.adopt_files) : '';
     return '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center">'
       + fx.options.map(function(o){
           const act = OPT_ACT[o] || o;
           return '<button class="btn" style="font-size:11px;padding:2px 7px"'
             + ' data-act="'+act+'" data-subs="'+esc(subs)+'" data-ref="'+esc(fx.ref_dir||'')+'"'
-            + ' data-group="'+esc(fx.group||'')+'">'
+            + ' data-group="'+esc(fx.group||'')+'" data-file="'+esc(fx.ref_file||'')+'"'
+            + ' data-from="'+esc(fx.adopt_from||'')+'" data-files="'+esc(filesAttr)+'">'
             + esc(OPT_LABEL[o] || o) + '</button>';
         }).join('')
       + (fx.note ? '<span style="font-size:10.5px;color:var(--muted)">'+esc(fx.note)+'</span>' : '')
@@ -362,15 +458,26 @@ function treeOptions(){
       return;
     }
     bar.style.display = 'block';
-    const adoptable = dg.filter(function(x){
-      return ((x.fix||{}).options||[]).indexOf('adopt_ref_dir') >= 0; }).length;
+    const adoptItems = dg.filter(function(x){
+      return ((x.fix||{}).options||[]).indexOf('adopt_ref_dir') >= 0; });
+    const adoptable = adoptItems.length;
+    const seenRef = {};
+    let adoptDirs = 0, adoptTotalFiles = 0;
+    adoptItems.forEach(function(x){
+      const fx = x.fix || {};
+      const rd = fx.ref_dir || '';
+      if(rd && seenRef[rd]) return;
+      if(rd) seenRef[rd] = 1;
+      adoptDirs++;
+      adoptTotalFiles += Number(fx.adopt_files || 0);
+    });
     bar.innerHTML = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;'
       + 'background:color-mix(in srgb,#e05577 10%,var(--panel2));border:1px solid color-mix(in srgb,#e05577 35%,var(--line));'
       + 'padding:7px 9px;border-radius:5px;font-size:12px">'
       + '<span>检测到 <b>'+dg.length+'</b> 个目录引用了已被 replace 替换掉的内容</span>'
       + '<span style="flex:1"></span>'
       + '<button class="btn" data-act="drop-all" style="font-size:11px;padding:2px 7px">全部撤销 replace</button>'
-      + (adoptable ? '<button class="btn" data-act="adopt-all" style="font-size:11px;padding:2px 7px">全部接管（'+adoptable+' 个）</button>' : '')
+      + (adoptable ? '<button class="btn" data-act="adopt-all" data-dirs="'+adoptDirs+'" data-files="'+adoptTotalFiles+'" style="font-size:11px;padding:2px 7px">全部接管（'+adoptable+' 个）</button>' : '')
       + '</div>'
       + msgHtml();
   }
@@ -381,21 +488,99 @@ function treeOptions(){
     return r;
   }
 
-  async function act(actName, subs, ref, group){
+  function fmtTs(ts){
+    if(ts == null || ts === '') return '';
+    if(typeof ts === 'number'){
+      const d = new Date(ts < 1e12 ? ts * 1000 : ts);
+      if(!isNaN(d.getTime())) return d.toLocaleString();
+    }
+    return String(ts);
+  }
+
+  function renderIgnored(items){
+    const arr = items || [];
+    if(ignBtn) ignBtn.textContent = '已忽略（' + arr.length + '）';
+    if(!ignBox) return;
+    if(!arr.length){
+      ignBox.innerHTML = '<div style="font-size:11.5px;color:var(--muted)">暂无已忽略的条目</div>';
+      return;
+    }
+    ignBox.innerHTML = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
+      + '<b style="font-size:11.5px">已忽略列表（' + arr.length + ' 条）</b>'
+      + '<span style="flex:1"></span>'
+      + '<button class="btn" data-ign-act="clear" style="font-size:11px;padding:2px 7px">全部清空</button>'
+      + '</div>'
+      + arr.map(function(it){
+          const subsTxt = Array.isArray(it.subs) ? it.subs.join(', ') : (it.subs || it.sub || '');
+          const refTxt = it.group || it.ref_dir || '';
+          const tsTxt = fmtTs(it.ts);
+          return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-top:1px solid var(--line);font-size:11px">'
+            + '<span style="font-family:ui-monospace,Consolas,monospace">' + esc(subsTxt || '-') + '</span>'
+            + '<span style="color:var(--muted)">引用方：' + esc(refTxt || '-') + '</span>'
+            + (tsTxt ? '<span style="color:var(--muted)">' + esc(tsTxt) + '</span>' : '')
+            + '<span style="flex:1"></span>'
+            + '<button class="btn" data-ign-act="remove" data-key="' + esc(it.key || '') + '" style="font-size:11px;padding:2px 7px">恢复</button>'
+            + '</div>';
+        }).join('');
+  }
+
+  async function loadIgnored(){
+    try{
+      const r = await post('/api/replace_ignore', {act:'list'});
+      if(r && r.ok !== false) renderIgnored(r.items || []);
+    }catch(e){}
+  }
+
+  async function act(actName, subs, ref, group, file, from, files, dirs){
     const subList = (subs||'').split(',').filter(Boolean);
+    let busyOn = false;
+    const withBusy = function(label){
+      if(typeof startLoading === 'function'){
+        busyOn = true;
+        startLoading(label);
+      }
+    };
+    const endBusy = function(msg, isErr){
+      if(busyOn && typeof stopLoading === 'function'){
+        busyOn = false;
+        stopLoading(msg, isErr);
+      }
+    };
     try{
       if(actName === 'drop' || actName === 'drop-all'){
         setStatus('正在撤销 replace…');
+        if(actName === 'drop-all') withBusy('正在批量撤销 replace…');
         const r = await post('/api/replace_fix_all', {kind:'drop_replace', subs: actName==='drop' ? subList : null});
+        endBusy(r.msg || '完成', r.ok === false);
         setStatus(r.msg || (r.ok === false ? '失败' : '完成'));
         const bad = (r.done||[]).filter(function(d){ return !d.ok; });
         if(bad.length) setStatus((r.msg||'') + '　' + bad.map(function(d){ return d.sub+'：'+d.msg; }).join('；'));
+        if(r.ok && typeof loadData === 'function') await loadData();
       }else if(actName === 'adopt' || actName === 'adopt-all'){
-        if(!confirm('接管会把引用方目录整个复制进本 mod，并写入 replace_path。\n文件多时会有几百个，确定继续？')) return;
-        setStatus('正在接管…');
+        if(actName === 'adopt'){
+          const fromName = from || '父层';
+          const fileCount = files !== '' && files != null ? Number(files) : 0;
+          if(!confirm('接管会复制 ' + fromName + ' 的全部 ' + ref + '（共 ' + fileCount + ' 个文件）到当前 mod 并写入 replace_path，确认吗？')) return;
+        }else{
+          const dirCount = dirs !== '' && dirs != null ? Number(dirs) : 0;
+          const fileCount = files !== '' && files != null ? Number(files) : 0;
+          if(!confirm('接管会复制全部 ' + dirCount + ' 个可接管目录（共 ' + fileCount + ' 个文件）到当前 mod 并写入 replace_path，确认吗？')) return;
+        }
+        setStatus('正在扫描并接管目录…');
+        withBusy(actName === 'adopt' ? ('正在接管 ' + ref + '…') : '正在批量接管目录…');
         const r = await post('/api/replace_fix_all', {kind:'adopt_ref_dir',
           subs: actName==='adopt' ? [ref] : null, force:true});
+        endBusy(r.msg || '完成', r.ok === false);
         setStatus((r.msg||'') + '　引用仍需自行修改，或点「忽略」');
+        const bad = (r.done||[]).filter(function(d){ return !d.ok; });
+        if(bad.length) setStatus((r.msg||'') + '　' + bad.map(function(d){ return d.sub+'：'+d.msg; }).join('；'));
+        if(r.ok && typeof loadData === 'function') await loadData();
+      }else if(actName === 'adopt-file'){
+        if(!file){ setStatus('缺少文件路径'); return; }
+        if(!confirm('仅复制单文件 ' + file + ' 到当前 mod（不写 replace_path），确认吗？')) return;
+        setStatus('正在接管文件…');
+        const r = await post('/api/replace_fix_all', {kind:'adopt_file', subs:[file]});
+        setStatus(r.msg || (r.ok === false ? '失败' : '完成'));
         const bad = (r.done||[]).filter(function(d){ return !d.ok; });
         if(bad.length) setStatus((r.msg||'') + '　' + bad.map(function(d){ return d.sub+'：'+d.msg; }).join('；'));
       }else if(actName === 'ignore'){
@@ -404,41 +589,79 @@ function treeOptions(){
         setStatus(r.msg || '完成');
       }
     }catch(e){
+      endBusy('请求失败', true);
       setStatus('请求失败：' + e);
       return;
+    }finally{
+      endBusy();
     }
     await run();
+    await loadIgnored();
   }
 
   if(bar){
     bar.addEventListener('click', function(e){
       const b = e.target.closest('button[data-act]');
       if(!b) return;
-      act(b.dataset.act, b.dataset.subs || '', b.dataset.ref || '', b.dataset.group || '');
+      act(b.dataset.act, b.dataset.subs || '', b.dataset.ref || '', b.dataset.group || '',
+          b.dataset.file || '', b.dataset.from || '', b.dataset.files || '', b.dataset.dirs || '');
     });
   }
   list.addEventListener('click', function(e){
     const b = e.target.closest('button[data-act]');
     if(!b) return;
-    act(b.dataset.act, b.dataset.subs || '', b.dataset.ref || '', b.dataset.group || '');
+    act(b.dataset.act, b.dataset.subs || '', b.dataset.ref || '', b.dataset.group || '',
+        b.dataset.file || '', b.dataset.from || '', b.dataset.files || '', b.dataset.dirs || '');
   });
 
+  if(ignBtn && ignBox){
+    ignBtn.onclick = function(){
+      const show = ignBox.style.display === 'none' || !ignBox.style.display;
+      ignBox.style.display = show ? 'block' : 'none';
+      if(show) loadIgnored();
+    };
+    ignBox.addEventListener('click', async function(e){
+      const b = e.target.closest('button[data-ign-act]');
+      if(!b) return;
+      const ia = b.dataset.ignAct;
+      try{
+        if(ia === 'remove'){
+          const r = await post('/api/replace_ignore', {act:'remove', key: b.dataset.key || ''});
+          setStatus(r.msg || '已恢复');
+        }else if(ia === 'clear'){
+          const r = await post('/api/replace_ignore', {act:'clear'});
+          setStatus(r.msg || '已清空忽略表');
+        }
+      }catch(err){
+        setStatus('请求失败：' + err);
+        return;
+      }
+      await loadIgnored();
+      await run();
+    });
+  }
+
+  const fullScope = document.getElementById('diagFullScope');
+
   async function run(){
-    cnt.textContent = '扫描中…';
+    const useAll = !!(fullScope && fullScope.checked);
+    cnt.textContent = useAll ? '全链扫描中（含地图与父层，较慢）…' : '扫描当前 mod 中…';
     try{
-      const r = await post('/api/diagnose', {});
-      if(r.ok === false){ cnt.textContent = r.msg || '失败'; render([]); renderBar([]); return; }
+      const r = await post('/api/diagnose', {scope: useAll ? 'all' : 'current'});
+      if(r.ok === false){ cnt.textContent = r.msg || '失败'; render([]); renderBar([]); await loadIgnored(); return; }
       const items = r.findings || [];
       const bad = items.filter(function(x){ return x.severity === 'error'; }).length;
       const warn = items.filter(function(x){ return x.severity === 'warning'; }).length;
-      cnt.textContent = items.length
+      const secTxt = (r.elapsed_ms != null) ? (' · ' + (r.elapsed_ms / 1000).toFixed(2) + 's') : '';
+      cnt.textContent = (items.length
         ? (items.length + ' 项（严重 ' + bad + ' / 警告 ' + warn + '）')
-        : '没有发现问题';
+        : '没有发现问题') + secTxt;
       renderBar(items);
       render(items);
     }catch(e){
       cnt.textContent = '请求失败';
     }
+    await loadIgnored();
   }
 
   entry.onclick = function(){ panel.style.display = 'block'; run(); };

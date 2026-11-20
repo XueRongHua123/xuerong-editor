@@ -15,7 +15,7 @@ import re
 
 from xuerong import state
 from xuerong.core import paths
-from xuerong.core.paths import _layer_dirs, mod_layers
+from xuerong.core.paths import _layer_dirs, mod_layers, unique_editor_filename
 from xuerong.core.text import (_atomic_write, _bom_for, _strip_keep_len, brace_match,
                                braces_balanced, find_blocks, set_raw_block, set_scalar,
                                strip_comments, top_items)
@@ -330,12 +330,39 @@ def save_equipment(root, rel, eid, raw, name="", desc="", name_ja="", desc_ja=""
 
 
 
+def _ensure_script_enum_equipment(root, eid):
+    """确保新装备 id 登记在 script_enum_equipment_bonus_type，避免 HOI4 启动报错。"""
+    src, _ = paths._layers_find("common/script_enums.txt", paths.mod_layers(root))
+    if not src or not os.path.isfile(src):
+        return
+    dst = os.path.join(root, "common", "script_enums.txt")
+    if not os.path.isfile(dst):
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        raw = io.open(src, "rb").read()
+        _atomic_write(dst, raw)
+    txt = io.open(dst, encoding="utf-8-sig", errors="replace", newline="").read()
+    m = re.search(r'(?m)^\s*script_enum_equipment_bonus_type\s*=\s*\{', txt)
+    if not m:
+        return
+    b = txt.find("{", m.start())
+    e = brace_match(txt, b)
+    body = txt[b + 1:e - 1]
+    if re.search(r'(?m)^\s*%s(?:\s|$|#)' % re.escape(eid), body):
+        return
+    snapshot(dst)
+    has_bom = io.open(dst, "rb").read(3) == b"\xef\xbb\xbf"
+    new_txt = txt[:e - 1].rstrip("\r\n") + "\n\t%s\n" % eid + txt[e - 1:]
+    _atomic_write(dst, (b"\xef\xbb\xbf" if has_bom else b"") + new_txt.encode("utf-8"))
+    state.changed()[dst] = os.path.join("common", "script_enums.txt")
+
+
 def add_equipment(root, eid):
     if not re.match(r'^[A-Za-z0-9_]+$', eid or ""):
         return False, "id 只能字母数字下划线"
     d = os.path.join(root, "common", "units", "equipment")
     os.makedirs(d, exist_ok=True)
-    path = os.path.join(d, "zz_focus_editor_equipment.txt")
+    fn = unique_editor_filename(root, "common/units/equipment", "zz_focus_editor_equipment.txt")
+    path = os.path.join(d, fn)
     text = io.open(path, encoding="utf-8", errors="replace", newline="").read() if os.path.exists(path) else "equipments = {\n}\n"
     if re.search(r'(?m)^\s*%s\s*=\s*\{' % re.escape(eid), text):
         return False, "装备已存在"
@@ -345,7 +372,8 @@ def add_equipment(root, eid):
              "\t\tbuild_cost_ic = 1.0\n\t}\n" % eid)
     snapshot(path)
     io.open(path, "w", encoding="utf-8", newline="").write(text[:end - 1] + block + text[end - 1:])
-    state.changed()[path] = os.path.join("common", "units", "equipment", "zz_focus_editor_equipment.txt")
+    state.changed()[path] = os.path.join("common", "units", "equipment", fn)
+    _ensure_script_enum_equipment(root, eid)
     _reload()
     return True, "已新建装备 " + eid
 

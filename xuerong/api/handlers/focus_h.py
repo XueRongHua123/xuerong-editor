@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 from xuerong.api.router import get, post
 from xuerong.core import facade_bridge as LG
+from xuerong import state
 from xuerong.model.focus import (
     add_focus, delete_focus, focus_complete_add, focus_complete_delete,
     focus_tree_graph, focus_tree_list)
@@ -104,7 +105,7 @@ def r_api_focus(h, path_only):
     qs = parse_qs(urlparse(h.path).query)
     tid = qs.get("tree", [""])[0]
     fid = qs.get("id", [""])[0]
-    t = LG.TREES.get(tid)
+    t = state.trees().get(tid)
     node = None
     if t:
         for f in t.get("focuses", []):
@@ -112,7 +113,7 @@ def r_api_focus(h, path_only):
                 node = f
                 break
     if node:
-        h._send({"desc": LG.LOC.get(fid + "_desc", ""),
+        h._send({"desc": state.loc().get(fid + "_desc", ""),
                     "effect": node.get("effect", ""),
                     "select_effect": node.get("select_effect", "")})
     else:

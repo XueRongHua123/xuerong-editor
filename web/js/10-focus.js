@@ -546,9 +546,10 @@ async function saveLoc(f){
 async function addTree(){
   const id = prompt('新国策树 ID（例如 my_new_tree）：');
   if(!id) return;
-  const t = curTree();
+  const root = _writableRoot();
+  if(!root){ status('先加载或新建一个可写的模组', true); return; }
   const r = await fetch('/api/add_tree', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root: rootOf(t), id})});
+    body: JSON.stringify({root, id})});
   const j = await r.json();
   status(j.ok ? ('已新建树 ' + id) : ('新建失败：' + j.msg), !j.ok);
   if(j.ok) await loadData();
@@ -647,7 +648,11 @@ function fillIdeaDatalist(){
 }
 
 function rootByName(n){
-  return (DATA.roots.find(r=>r.name===n)||DATA.roots[0]||{}).path;
+  const hitRoot = ((DATA && DATA.roots) || []).find(r=>r.name===n);
+  if(hitRoot && hitRoot.path) return hitRoot.path;
+  const hitLayer = ((DATA && DATA.layers) || []).find(l=>l.name===n);
+  if(hitLayer && hitLayer.path) return hitLayer.path;
+  return _writableRoot();
 }
 
 function renderIdeaList(q){
@@ -718,7 +723,9 @@ async function saveIdea(){
       name: document.getElementById('ideaNameZ').value,
       desc: document.getElementById('ideaDescZ').value,
       name_ja: document.getElementById('ideaNameJa').value,
-      desc_ja: document.getElementById('ideaDescJa').value})});
+      desc_ja: document.getElementById('ideaDescJa').value,
+      name_en: document.getElementById('ideaNameEn').value,
+      desc_en: document.getElementById('ideaDescEn').value})});
   const j = await r.json();
   status(j.ok ? '国家精神已保存' : ('保存失败：' + j.msg), !j.ok);
   if(j.ok){ await loadData(); renderIdeaList(document.getElementById('ideaSearch').value); }
@@ -727,7 +734,8 @@ async function saveIdea(){
 async function addIdea(){
   const id = prompt('新国家精神 ID（字母、数字、下划线）：');
   if(!id) return;
-  const root = (DATA.roots[0]||{}).path;
+  const root = _writableRoot();
+  if(!root){ status('先加载或新建一个可写的模组', true); return; }
   const r = await fetch('/api/add_idea', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({root, id})});
   const j = await r.json();

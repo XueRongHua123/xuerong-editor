@@ -15,6 +15,7 @@ import io
 import json
 import os
 import re
+import time
 
 from xuerong import state
 from xuerong.core import paths
@@ -70,14 +71,34 @@ _ADOPT_DIR = None
 _SNAPSHOT = None
 _RELOAD = None
 _REF_SCAN = None
+_ENSURE_WRITABLE = None
+_PROGRESS = {"fn": None, "begin": None, "done": None, "fail": None}
 
 
-def bind(adopt_dir, snapshot, reload_data):
-    """门面启动时回注三个横切依赖（见模块 doc）。"""
-    global _ADOPT_DIR, _SNAPSHOT, _RELOAD
+def bind(adopt_dir, snapshot, reload_data, ensure_file_writable=None):
+    """门面启动时回注横切依赖（见模块 doc）。"""
+    global _ADOPT_DIR, _SNAPSHOT, _RELOAD, _ENSURE_WRITABLE
     _ADOPT_DIR = adopt_dir
     _SNAPSHOT = snapshot
     _RELOAD = reload_data
+    _ENSURE_WRITABLE = ensure_file_writable
+
+
+def set_progress_hook(fn, begin=None, done=None, fail=None):
+    """门面启动期注入批量接管进度上报钩子；model 层不 import 门面。"""
+    _PROGRESS["fn"] = fn
+    _PROGRESS["begin"] = begin
+    _PROGRESS["done"] = done
+    _PROGRESS["fail"] = fail
+
+
+def _tick(stage, sub="", pct=0):
+    fn = _PROGRESS.get("fn")
+    if fn:
+        try:
+            fn(stage, sub, pct)
+        except Exception:
+            pass
 
 
 def set_ref_scanner(fn):
@@ -98,10 +119,13 @@ def _snap(path):
     return _SNAPSHOT(path) if _SNAPSHOT else None
 
 
-def _adopt(mod_root, sub, force=False):
+def _adopt(mod_root, sub, force=False, reload=True):
     if _ADOPT_DIR is None:
-        return None, "adopt_dir 未注入（门面没调 bind）"
-    return _ADOPT_DIR(mod_root, sub, force=force)
+        return {"ok": False, "msg": "adopt_dir 未注入（门面没调 bind）"}
+    try:
+        return _ADOPT_DIR(mod_root, sub, force=force, reload=reload)
+    except TypeError:
+        return _ADOPT_DIR(mod_root, sub, force=force)
 
 
 def _reload():
@@ -191,13 +215,27 @@ def _replace_ignored(root):
     return {x.get("key") for x in _replace_ignore_all() if x.get("key")}
 
 
+def _save_replace_ignore(data):
+    os.makedirs(os.path.dirname(_REPLACE_IGNORE_FILE), exist_ok=True)
+    _atomic_write(_REPLACE_IGNORE_FILE,
+                  json.dumps(data, ensure_ascii=False, indent=1).encode("utf-8"))
+
+
+def _ignore_root_key(root):
+    return os.path.abspath(root).replace("\\", "/").lower() if root else ""
+
+
+def _resolve_ignore_root(root=None):
+    return paths._pick(root) if root else (state.roots()[-1] if state.roots() else None)
+
+
 def replace_ignore(root, sub="", ref_dir="", subs=None, group="", remove=False):
     """把一条 replace.dangling_refs 标记为已知问题，不再提示。
 
     记录只存在本地（work/cache/replace_ignore.json），不写进 mod，
     也不改变游戏行为——它只让诊断闭嘴。remove=True 是恢复提示。
     """
-    root = paths._pick(root) if root else (state.roots()[-1] if state.roots() else None)
+    root = _resolve_ignore_root(root)
     if not root:
         return {"ok": False, "msg": "没有打开的 mod"}
     ss = list(subs) if isinstance(subs, (list, tuple, set)) and subs else [sub]
@@ -215,17 +253,74 @@ def replace_ignore(root, sub="", ref_dir="", subs=None, group="", remove=False):
         data = kept + [{"key": key, "root": os.path.abspath(root),
                         "subs": sorted({_replace_norm(x) for x in ss if _replace_norm(x)}),
                         "ref_dir": _replace_norm(ref_dir),
-                        "group": (group or "").replace("\\", "/")}]
+                        "group": (group or "").replace("\\", "/"),
+                        "ts": time.strftime("%Y-%m-%d %H:%M:%S")}]
     try:
-        os.makedirs(os.path.dirname(_REPLACE_IGNORE_FILE), exist_ok=True)
-        _atomic_write(_REPLACE_IGNORE_FILE,
-                      json.dumps(data, ensure_ascii=False, indent=1).encode("utf-8"))
+        _save_replace_ignore(data)
     except Exception as e:
         return {"ok": False, "msg": "忽略记录写入失败：%s" % e}
     return {"ok": True, "msg": msg, "key": key, "count": len(data)}
 
 
-def replace_drop(root, sub):
+def replace_ignore_list(root=None):
+    """查看已忽略的 replace.dangling_refs 条目（传入或当前有 root 时按 root 过滤）。"""
+    root = _resolve_ignore_root(root)
+    target = _ignore_root_key(root)
+    items = []
+    for x in _replace_ignore_all():
+        xr = (x.get("root") or "").strip()
+        if target and xr and _ignore_root_key(xr) != target:
+            continue
+        items.append({
+            "key": x.get("key") or "",
+            "root": xr,
+            "subs": list(x.get("subs") or []),
+            "ref_dir": x.get("ref_dir") or "",
+            "group": x.get("group") or "",
+            "ts": x.get("ts") or "",
+        })
+    return {"ok": True, "items": items, "count": len(items)}
+
+
+def replace_ignore_remove(key, root=None):
+    """按 key 单条删除忽略记录并写回 replace_ignore.json。"""
+    data = _replace_ignore_all()
+    if not key:
+        return {"ok": False, "removed": 0, "count": len(data), "msg": "缺少忽略项 key"}
+    kept = [x for x in data if x.get("key") != key]
+    removed = len(data) - len(kept)
+    if removed:
+        try:
+            _save_replace_ignore(kept)
+        except Exception as e:
+            return {"ok": False, "removed": 0, "count": len(data),
+                    "msg": "忽略记录写入失败：%s" % e}
+    msg = ("已移除 %d 条忽略记录" % removed) if removed else "未找到对应的忽略记录"
+    return {"ok": True, "removed": removed, "count": len(kept), "msg": msg}
+
+
+def replace_ignore_clear(root=None):
+    """清空当前 root 下（无 root 则全部）忽略项。"""
+    root = _resolve_ignore_root(root)
+    target = _ignore_root_key(root)
+    data = _replace_ignore_all()
+    if target:
+        kept = [x for x in data
+                if (x.get("root") or "").strip() and _ignore_root_key(x.get("root")) != target]
+    else:
+        kept = []
+    removed = len(data) - len(kept)
+    if removed:
+        try:
+            _save_replace_ignore(kept)
+        except Exception as e:
+            return {"ok": False, "removed": 0, "count": len(data),
+                    "msg": "忽略记录写入失败：%s" % e}
+    msg = ("已清空 %d 条忽略记录" % removed) if removed else "当前没有可清空的忽略记录"
+    return {"ok": True, "removed": removed, "count": len(kept), "msg": msg}
+
+
+def replace_drop(root, sub, reload=True):
     """从 descriptor.mod 删掉一条 replace_path。
 
     只动本 mod（链顶）自己的 descriptor，父 mod 和原版一行不碰：
@@ -284,10 +379,11 @@ def replace_drop(root, sub):
         return {"ok": False, "msg": "写 descriptor.mod 失败：%s" % e, "removed": 0}
 
     _invalidate_layers()
-    try:
-        _reload()
-    except Exception:
-        pass
+    if reload:
+        try:
+            _reload()
+        except Exception:
+            pass
 
     msg = "已从 descriptor.mod 删掉 replace_path=\"%s\"" % sub
     still = _replace_owner(top, sub)
@@ -303,8 +399,9 @@ def replace_fix_all(root, kind="drop_replace", subs=None, force=False):
     kind:
       "drop_replace"  —— 对每个危险目录，删掉它的 replace_path
       "adopt_ref_dir" —— 对每个危险目录，把引用方目录接管进本 mod
+      "adopt_file"    —— 对单个引用文件做单文件接管（只拷贝该文件，不写 replace_path）
 
-    subs: 只处理这些目录（被 replace 的目录名，或引用方目录名都认），None 表示全部
+    subs: 只处理这些目录（被 replace 的目录名、引用方目录名或 ref_file 都认），None 表示全部
     force: 接管时允许覆盖本 mod 里已有的同名文件（界面上已 confirm 过）
 
     返回 {"ok", "kind", "done": [{sub, action, ok, msg}], "left": 剩余危险目录数, "msg"}
@@ -312,74 +409,161 @@ def replace_fix_all(root, kind="drop_replace", subs=None, force=False):
     root = paths._pick(root) if root else (state.roots()[-1] if state.roots() else None)
     if not root:
         return {"ok": False, "msg": "没有打开的 mod", "done": [], "left": 0}
-    kind = kind if kind in ("drop_replace", "adopt_ref_dir") else "drop_replace"
+    kind = kind if kind in ("drop_replace", "adopt_ref_dir", "adopt_file") else "drop_replace"
 
     want = set()
+    raw_subs = []
     if subs:
         if isinstance(subs, str):
             subs = [subs]
-        want = {_replace_norm(s) for s in subs if _replace_norm(s)}
+        raw_subs = [str(s) for s in subs if s]
+        want = {_replace_norm(s) for s in raw_subs if _replace_norm(s)}
 
-    findings = [f for f in _refs(root)
-                if f.get("code") == "replace.dangling_refs" and (f.get("fix") or {})]
-    if not findings:
-        return {"ok": True, "kind": kind, "done": [], "left": 0,
-                "msg": "没有需要处理的 replace 断链"}
+    _beg = _PROGRESS.get("begin")
+    if _beg:
+        try:
+            _beg("replace")
+        except Exception:
+            pass
+    _ok = False
+    try:
+        _tick("扫描 replace 断链", "", 10)
+        findings = [f for f in _refs(root)
+                    if f.get("code") == "replace.dangling_refs" and (f.get("fix") or {})]
+        if not findings and not (kind == "adopt_file" and raw_subs):
+            _ok = True
+            return {"ok": True, "kind": kind, "done": [], "left": 0,
+                    "msg": "没有需要处理的 replace 断链"}
 
-    top = _top_mod(root)
-    done, seen = [], set()
-    for f in findings:
-        fx = f["fix"]
-        fsubs = [s for s in (fx.get("subs") or [fx.get("sub") or ""]) if s]
-        ref = fx.get("ref_dir") or ""
-        if want and not (want & {_replace_norm(s) for s in fsubs} or _replace_norm(ref) in want):
-            continue
-        if kind == "drop_replace":
-            targets = fsubs
-        else:
-            # 不是每个分组都能接管：选项里没有 adopt_ref_dir 的（顶层桶目录、
-            # music/units/country_tags 这类禁做目录）直接跳过，别硬搬。
-            targets = [ref] if ref and "adopt_ref_dir" in (fx.get("options") or []) else []
-        for t in targets:
-            key = "drop:" + _replace_norm(t) if kind == "drop_replace" else "adopt:" + _replace_norm(t)
-            if key in seen:          # 多个目录引用同一个被 replace 目录时只处理一次
+        top = _top_mod(root)
+        done, seen, jobs = [], set(), []
+        for f in findings:
+            fx = f["fix"]
+            fsubs = [s for s in (fx.get("subs") or [fx.get("sub") or ""]) if s]
+            ref = fx.get("ref_dir") or ""
+            ref_file = fx.get("ref_file") or ""
+            if want and not (
+                want & {_replace_norm(s) for s in fsubs}
+                or _replace_norm(ref) in want
+                or (ref_file and _replace_norm(ref_file) in want)
+            ):
                 continue
-            seen.add(key)
             if kind == "drop_replace":
-                r = replace_drop(root, t)
+                targets = fsubs
+            elif kind == "adopt_file":
+                targets = [ref_file] if ref_file and "adopt_file" in (fx.get("options") or []) else []
+            else:
+                targets = [ref] if ref and "adopt_ref_dir" in (fx.get("options") or []) else []
+            for t in targets:
+                if kind == "drop_replace":
+                    key = "drop:" + _replace_norm(t)
+                elif kind == "adopt_file":
+                    key = "adopt_file:" + _replace_norm(t)
+                else:
+                    key = "adopt:" + _replace_norm(t)
+                if key in seen:
+                    continue
+                seen.add(key)
+                jobs.append(t)
+
+        # 若直接传入了相对文件路径（如 "common/achievements.txt"），兜底按单文件接管处理
+        if kind == "adopt_file" and raw_subs:
+            for s in raw_subs:
+                t_norm = s.replace("\\", "/").strip("/")
+                if "/" not in t_norm or "." not in t_norm.rsplit("/", 1)[1]:
+                    continue
+                key = "adopt_file:" + _replace_norm(t_norm)
+                if key in seen:
+                    continue
+                seen.add(key)
+                jobs.append(t_norm)
+
+        def _run_adopt_file(target_rel):
+            t_norm = target_rel.replace("\\", "/").strip("/")
+            if "/" not in t_norm:
+                done.append({"sub": t_norm, "action": "adopt_file",
+                             "ok": False, "msg": "单文件接管需要相对文件路径（如 common/achievements.txt）",
+                             "copied": 0})
+                return
+            if _ENSURE_WRITABLE is None:
+                done.append({"sub": t_norm, "action": "adopt_file",
+                             "ok": False, "msg": "ensure_file_writable 未注入（门面没调 bind）",
+                             "copied": 0})
+                return
+            sub_part, base_part = t_norm.rsplit("/", 1)
+            dst, emsg = _ENSURE_WRITABLE(top, sub_part, base_part)
+            done.append({"sub": t_norm, "action": "adopt_file",
+                         "ok": bool(dst), "msg": emsg or "",
+                         "copied": 1 if (dst and emsg != "已存在") else 0})
+
+        total = len(jobs)
+        for idx, t in enumerate(jobs, 1):
+            _tick("正在处理 %d/%d" % (idx, total), t, 20 + int(55 * idx / max(1, total)))
+            if kind == "drop_replace":
+                r = replace_drop(root, t, reload=False)
                 done.append({"sub": t, "action": "drop_replace",
                              "ok": bool(r.get("ok")), "msg": r.get("msg") or ""})
+            elif kind == "adopt_file":
+                _run_adopt_file(t)
             else:
                 why = _replace_adopt_block(t)
                 if why:
                     done.append({"sub": t, "action": "adopt_ref_dir",
                                  "ok": False, "msg": why})
                     continue
-                r = _adopt(top, t, force=bool(force))
+                r = _adopt(top, t, force=bool(force), reload=False)
                 done.append({"sub": t, "action": "adopt_ref_dir",
                              "ok": bool(r.get("ok")),
                              "msg": r.get("msg") or "",
                              "copied": r.get("copied", 0)})
 
-    ok_n = len([d for d in done if d["ok"]])
-    if kind == "drop_replace":
-        msg = "撤销 %d 条 replace_path" % ok_n
-    else:
-        copied = sum(int(d.get("copied") or 0) for d in done if d["ok"])
-        msg = "接管 %d 个目录，拷贝 %d 个文件" % (ok_n, copied)
-    if len(done) > ok_n:
-        msg += "；%d 条未成功（原因见列表）" % (len(done) - ok_n)
+        ok_n = len([d for d in done if d["ok"]])
+        if ok_n and kind in ("drop_replace", "adopt_ref_dir"):
+            _tick("重载 mod 数据", "", 80)
+            try:
+                _reload()
+            except Exception:
+                pass
 
-    # 全部做完再看还剩多少：不能拿旧清单算，撤销一条会连带别的条目一起消失
-    left = 0
-    if done:
-        try:
-            left = len([f for f in _refs(root)
-                        if f.get("code") == "replace.dangling_refs"])
-        except Exception:
-            left = 0
-        msg += "，剩余 %d 个危险目录" % left
-    else:
-        left = len(findings)
-        msg = "没有匹配到要处理的目录"
-    return {"ok": True, "kind": kind, "done": done, "left": left, "msg": msg}
+        if kind == "drop_replace":
+            msg = "撤销 %d 条 replace_path" % ok_n
+        elif kind == "adopt_file":
+            copied = sum(int(d.get("copied") or 0) for d in done if d["ok"])
+            msg = "单文件接管 %d 个文件（新拷贝 %d 个）" % (ok_n, copied)
+        else:
+            copied = sum(int(d.get("copied") or 0) for d in done if d["ok"])
+            msg = "接管 %d 个目录，拷贝 %d 个文件" % (ok_n, copied)
+        if len(done) > ok_n:
+            msg += "；%d 条未成功（原因见列表）" % (len(done) - ok_n)
+
+        # 全部做完再看还剩多少：不能拿旧清单算，撤销一条会连带别的条目一起消失
+        left = 0
+        if done:
+            _tick("复核剩余断链", "", 92)
+            try:
+                left = len([f for f in _refs(root)
+                            if f.get("code") == "replace.dangling_refs"])
+            except Exception:
+                left = 0
+            msg += "，剩余 %d 个危险目录" % left
+        else:
+            left = len(findings)
+            msg = "没有匹配到要处理的目录"
+        _ok = True
+        return {"ok": True, "kind": kind, "done": done, "left": left, "msg": msg}
+    except Exception as _err:
+        _fail = _PROGRESS.get("fail")
+        if _fail:
+            try:
+                _fail(_err)
+            except Exception:
+                pass
+        raise
+    finally:
+        if _ok:
+            _done = _PROGRESS.get("done")
+            if _done:
+                try:
+                    _done()
+                except Exception:
+                    pass

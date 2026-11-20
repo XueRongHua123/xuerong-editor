@@ -23,7 +23,7 @@ from xuerong.model.event import (
     add_event, delete_event, event_detail, event_edit, event_graph,
     event_space_create, event_space_delete, save_event)
 from xuerong.model.idea import add_idea, delete_idea, save_idea
-from xuerong.model.loc import save_loc
+from xuerong.model.loc import loc_browse, save_loc
 from xuerong.model.map import _map_pick
 from xuerong.model.tech import (
     add_tech, delete_tech, save_tech, tech_link, tech_move, tech_tree_graph)
@@ -129,7 +129,7 @@ def r_api_characters(h, body):
 @post("/api/character_add")
 def r_api_character_add(h, body):
     h._send(character_add(body.get("root") or None, body.get("id"),
-                             body.get("name"), body.get("type"),
+                             body.get("name"), body.get("type") or "corps_commander",
                              body.get("skill", 3), body.get("attack", 3),
                              body.get("defense", 3), body.get("planning", 3),
                              body.get("logistics", 3),
@@ -314,6 +314,22 @@ def r_api_gfx_missing(h, path_only):
     _q = parse_qs(urlparse(h.path).query)
     h._send(LG.gfx_missing(_q.get("root", [None])[0],
                            int(_q.get("limit", ["600"])[0])))
+
+
+@get("/api/loc_list")
+def r_api_loc_list(h, path_only):
+    _q = parse_qs(urlparse(h.path).query)
+    try:
+        _lim = int(_q.get("limit", ["150"])[0])
+    except Exception:
+        _lim = 150
+    h._send(loc_browse(
+        _q.get("root", [None])[0],
+        q=_q.get("q", [""])[0],
+        scope=_q.get("scope", ["all"])[0],
+        lang=_q.get("lang", ["simp_chinese"])[0],
+        limit=_lim,
+    ))
 
 
 @get("/api/loc_missing")

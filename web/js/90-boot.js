@@ -4,7 +4,74 @@
 // 立即执行语句的相对顺序与拆分前完全一致（同一文件内按原行号顺序）。
 
 async function loadData(){ const r = await fetch('/api/data'); DATA = await r.json(); dirty.clear(); linkSrc = null; selId = null; cpCache = null; COUNTRY_DATA = null; LINT_DATA = null; if(!DATA.trees || current >= DATA.trees.length) current = 0; renderAll(); applySavedSkin(); updateWelcome(); if(typeof renderGuide === 'function') renderGuide(); if(typeof updateSourceBox === 'function') updateSourceBox(); if(typeof bindOptions === 'function') bindOptions(); if(typeof bindStepBar === 'function'){ bindStepBar(); renderStepBar(); }
-  if(typeof bindGuideToggles === 'function') bindGuideToggles(); if(typeof loadOptions === 'function') loadOptions(); const _fp=document.getElementById('ftPick'); if(_fp){ delete _fp.dataset.loaded; _fp.innerHTML=''; } const _fsvg=document.getElementById('ftSvg'); if(_fsvg) _fsvg.innerHTML=''; const _finfo=document.getElementById('ftInfo'); if(_finfo) _finfo.textContent=''; }
+  if(typeof bindGuideToggles === 'function') bindGuideToggles(); if(typeof loadOptions === 'function') loadOptions(); const _fp=document.getElementById('ftPick'); if(_fp){ delete _fp.dataset.loaded; _fp.innerHTML=''; } const _fsvg=document.getElementById('ftSvg'); if(_fsvg) _fsvg.innerHTML=''; const _finfo=document.getElementById('ftInfo'); if(_finfo) _finfo.textContent='';
+  if(typeof window.techRefreshFolders === 'function') window.techRefreshFolders();
+  if(typeof window.mapRefreshTerrainTypes === 'function') window.mapRefreshTerrainTypes(); }
+
+// 启动等待：后端 main() 现在先起端口、再在后台线程里读 mod，所以页面会先出来。
+// 加载期间数据类 /api/* 一律回 503（reload_data 要原地清 12 个容器，读到半清空的会崩），
+// 所以这段必须在 loadData() 之前，而且只认 ready / failed，不看 active。
+const BOOT_TIMEOUT_MS = 180000;
+
+// 其它脚本想在「mod 数据就绪后」再跑一次的登记处。boot 期间后端对数据类接口
+// 统一回 503，谁要是在这个时候抢跑，拿到的是 503 载荷而不是数据——所以这里排个队。
+window.XRBOOT = {
+  ready: false,
+  queue: [],
+  after: function(fn){
+    if(typeof fn !== 'function') return;
+    if(window.XRBOOT.ready){ try{ fn(); }catch(e){} }
+    else window.XRBOOT.queue.push(fn);
+  }
+};
+
+function bootPaint(j){
+  const tr = document.querySelector('.busy-track');
+  if(tr){
+    tr.classList.add('det');
+    const i = tr.querySelector('i');
+    if(i) i.style.width = Math.max(2, Math.min(100, j.pct || 0)) + '%';
+  }
+  const parts = [];
+  if(j.stage) parts.push(j.stage);
+  if(j.sub) parts.push(j.sub);
+  if(parts.length) updateLoading(parts.join(' · '));
+}
+
+async function bootWait(){
+  const t0 = Date.now();
+  startLoading('正在读取 mod 数据…');
+  // startLoading 自带一个查 /api/load_progress 的轮询，那个有 10 秒陈旧兜底
+  // （超过 10 秒没更新就谎报「已结束」），启动期不能信，换成本函数的 300ms 轮询。
+  clearInterval(progTimer); progTimer = null;
+  for(;;){
+    if(Date.now() - t0 > BOOT_TIMEOUT_MS){
+      stopLoading('启动超时：后端 180 秒内没报告就绪，请看控制台输出', true);
+      return;
+    }
+    let j = null;
+    try{
+      const r = await fetch('/api/boot_status', {cache: 'no-store'});
+      j = await r.json();
+    }catch(e){ j = null; }
+    if(j && j.failed){
+      stopLoading('启动失败：' + (j.error || '后端报错，请看控制台'), true);
+      return;
+    }
+    if(j && j.ready){
+      stopLoading();
+      await loadData();
+      // 数据到位了才放行排队的预取（地形类型、科技目录等）
+      window.XRBOOT.ready = true;
+      const q = window.XRBOOT.queue.splice(0);
+      for(const fn of q){ try{ fn(); }catch(e){} }
+      return;
+    }
+    if(j && j.loading) bootPaint(j);
+    await new Promise(res => setTimeout(res, 300));
+  }
+}
+
 
 function updateWelcome(){
   const w = document.getElementById('welcome'); if(!w) return;
@@ -93,7 +160,9 @@ function updateLoading(text){
   const sec = ((Date.now() - loadStartedAt) / 1000).toFixed(1) + 's';
   if(sub) sub.textContent = text || '';
   if(!st) return;
-  st.innerHTML = '<span class="spin"></span>' + escapeHtml(text) + ' <b>' + sec + '</b>';
+  // 这里的 <b> 必须带 id="loadSec"，否则 startLoading 起的计时器每 100ms 找不到目标，
+  // 秒数会永远停在 0.0s。
+  st.innerHTML = '<span class="spin"></span>' + escapeHtml(text) + ' <b id="loadSec">' + sec + '</b>';
 }
 
 
@@ -186,12 +255,17 @@ function updateSourceBox(){
             escapeHtml(sw.slice(0, 12).join('\n')) +
             (sw.length > 12 ? '\n…' : '') + '">⚠ ' + sw.length + '</span>'
           : '';
-        return '<div class="src-row src-' + reason + '" title="' + escapeHtml(l.path) + '">' +
+        return '<div class="src-row src-' + reason + '" data-src-idx="' + layers.indexOf(l) + '" style="cursor:pointer" title="' + escapeHtml(l.path) + '（点击打开叠加链详情）">' +
                '<span class="src-dot"></span>' +
                '<span class="src-name">' + escapeHtml(l.name || l.path) + '</span>' +
                warn +
                '<span class="src-tag">' + escapeHtml(tag) + '</span>' + x + '</div>';
       }).join('');
+      chain.querySelectorAll('[data-src-idx]').forEach(function(row){
+        row.onclick = function(){
+          if(typeof openLayerChain === 'function') openLayerChain({layer: row.dataset.srcIdx});
+        };
+      });
       chain.querySelectorAll('[data-src-unload]').forEach(function(b){
         b.onclick = function(ev){
           ev.stopPropagation();
@@ -400,10 +474,7 @@ document.getElementById('delTreeBtn').onclick = delTree;
 
 document.getElementById('saveAll').onclick = saveAll;
 
-document.getElementById('exportBtn').onclick = async ()=>{
-  const r = await fetch('/api/export', {method:'POST'}); const j = await r.json();
-  status(j.path ? ('覆盖包已导出：' + j.path) : ('导出失败：' + j.msg), !j.path);
-};
+document.getElementById('exportBtn').onclick = openPublishModal;
 
 document.getElementById('showMutex').onchange = renderTree;
 
@@ -1008,6 +1079,55 @@ document.getElementById('lintSyntax').onclick = ()=>openReport();
 
 document.getElementById('lintModal').addEventListener('click', e=>{ if(e.target.id === 'lintModal') closeLint(); });
 
+document.getElementById('layerViewBtn').onclick = ()=>openLayerChain();
+document.getElementById('objDiffBtn').onclick = ()=>openLayerChain({tab:'objects'});
+document.getElementById('layerClose').onclick = closeLayerChain;
+document.getElementById('lcRefresh').onclick = ()=>{
+  loadLayerChain({refresh:true});
+  if(_lcState.tab === 'objects') loadObjectDiff({refresh:true});
+};
+document.getElementById('lcTabFiles').onclick = ()=>_lcSetTab('files');
+document.getElementById('lcTabReplace').onclick = ()=>_lcSetTab('replace');
+document.getElementById('lcTabObjects').onclick = ()=>_lcSetTab('objects');
+document.getElementById('lcKind').addEventListener('change', ()=>loadLayerChain());
+document.getElementById('lcDir').addEventListener('change', ()=>loadLayerChain());
+let _lcTimer = null;
+document.getElementById('lcQuery').addEventListener('input', ()=>{
+  clearTimeout(_lcTimer);
+  _lcTimer = setTimeout(()=>loadLayerChain(), 180);
+});
+document.getElementById('odCat').addEventListener('change', ()=>loadObjectDiff());
+document.getElementById('odStatus').addEventListener('change', ()=>loadObjectDiff());
+let _odTimer = null;
+document.getElementById('odQuery').addEventListener('input', ()=>{
+  clearTimeout(_odTimer);
+  _odTimer = setTimeout(()=>loadObjectDiff(), 180);
+});
+document.getElementById('layerModal').addEventListener('click', e=>{ if(e.target.id === 'layerModal') closeLayerChain(); });
+
+document.getElementById('gameVerifyEntry').onclick = openGameVerify;
+document.getElementById('gameVerifyBtn').onclick = openGameVerify;
+document.getElementById('gvClose').onclick = closeGameVerify;
+document.getElementById('gvRunBtn').onclick = ()=>startGameVerifyFlow(false);
+document.getElementById('gvConfirmYes').onclick = ()=>startGameVerifyFlow(true);
+document.getElementById('gvConfirmNo').onclick = ()=>{ document.getElementById('gvConfirmBox').style.display = 'none'; };
+document.getElementById('gvCancelBtn').onclick = cancelGameVerifyFlow;
+document.getElementById('gameVerifyModal').addEventListener('click', e=>{ if(e.target.id === 'gameVerifyModal') closeGameVerify(); });
+
+document.getElementById('publishBtn').onclick = openPublishModal;
+document.getElementById('pubClose').onclick = closePublishModal;
+document.getElementById('pubRefreshBtn').onclick = ()=>loadPublishPreview(true);
+document.getElementById('pubModSel').onchange = ()=>{
+  const fidEl = document.getElementById('pubFolderId');
+  if(fidEl){ delete fidEl.dataset.edited; fidEl.value = ''; }
+  loadPublishPreview(false);
+};
+document.getElementById('pubFolderId').addEventListener('input', e=>{ e.target.dataset.edited = '1'; });
+document.getElementById('pubUseModHomeBtn').onclick = useLauncherModDirForPublish;
+document.getElementById('pubRunBtn').onclick = runPublishExport;
+document.getElementById('pubPatchZipBtn').onclick = runLegacyPatchExport;
+document.getElementById('publishModal').addEventListener('click', e=>{ if(e.target.id === 'publishModal') closePublishModal(); });
+
 document.getElementById('cmdBtn').onclick = openCmd;
 
 document.getElementById('keysClose').onclick = closeKeys;
@@ -1035,4 +1155,5 @@ initMascotFloatSize();
 
 initDensity();
 
-loadData();
+// 不直接 loadData()：启动期后端还在后台读 mod，先等它报 ready
+bootWait();

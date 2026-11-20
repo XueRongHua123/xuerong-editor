@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import sys
 
 from xuerong import state
 from xuerong.core.text import _atomic_write, _read_text
@@ -27,6 +28,7 @@ _DESC_CACHE = {}
 _SEARCH_BASES_CACHE = {}
 _MOD_ORDER_CACHE = {}
 _LAYERS_CACHE = {}
+_CHAIN_SCAN_CACHE = {}
 
 # 应用目录（打包后是 exe 目录，源码运行是 work/）。由门面在 import 后写入；
 # 没写就用本文件往上三级推导，保证 `python -c "import xuerong.core.paths"` 也能用。
@@ -37,6 +39,49 @@ def app_dir():
     if APP_DIR:
         return APP_DIR
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def qa_dir():
+    """qa/ 目录在哪。
+
+    四种部署形态都覆盖：源码仓库是 work/qa（公开仓库是 tools/qa），
+    打包成 onefile exe 后是平铺的 _MEIPASS/qa，-D 模式是 exe 同级的 qa/。
+    三个 base × 两个相对路径依次试，全找不到就返回 app_dir()/qa，让调用方
+    自己碰错——比在这里抛异常好定位。
+
+    以前门面、diagnose.py 各写了一份一模一样的实现（map/world 又各转发一次），
+    合并到这里之后三处调用方都只认这一个。
+    """
+    here = app_dir()
+    for base in (getattr(sys, "_MEIPASS", "") or "", here, os.path.dirname(here)):
+        for rel in (("qa",), ("tools", "qa")):
+            p = os.path.join(base, *rel) if base else ""
+            if p and os.path.isdir(p):
+                return p
+    return os.path.join(here, "qa")
+
+
+def _dir_mtime(p):
+    """目录下所有 .txt 的最大 mtime（秒，整型）；目录不存在或读不了返回 0。
+
+    只看 .txt 是因为调用方（地图缓存键、脚本引用缓存键）关心的都是脚本文件，
+    .bmp/.png 这些大文件由别的路径单独判新鲜度。单个文件 getmtime 失败不
+    影响其它文件——逐文件 try 而不是整段 try，是为了一个坏链接不至于让整个
+    目录的缓存永远失效。
+    """
+    if not os.path.isdir(p):
+        return 0
+    mt = 0
+    try:
+        for fn in os.listdir(p):
+            if fn.endswith(".txt"):
+                try:
+                    mt = max(mt, int(os.path.getmtime(os.path.join(p, fn))))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return mt
 
 
 # ---------------------------------------------------------------- root 选择钩子
@@ -98,6 +143,69 @@ def _layer_dirs(sub, root):
         seen.add(ab)
         out.append((base, d))
     return out
+
+
+def effective_layer_files(sub, root, exts=(".txt",)):
+    """按 HOI4 实机规则返回某目录下有效文件 [(base, dirpath, filename), ...]（底层在前、顶层在后）。
+
+    1) 经过 `_layer_dirs` 自动拦截 `replace_path` 下层；
+    2) 同相对路径同名文件（大小写不敏感）由最高层整文件覆写，跳过下层同名文件；
+    3) 反转成底层 → 顶层顺序返回。
+    """
+    seen_fn = set()
+    picked = []
+    for base, d in _layer_dirs(sub, root):
+        try:
+            fns = sorted(f for f in os.listdir(d) if f.lower().endswith(exts))
+        except Exception:
+            continue
+        for fn in fns:
+            fk = fn.lower()
+            if fk in seen_fn:
+                continue
+            seen_fn.add(fk)
+            picked.append((base, d, fn))
+    picked.reverse()
+    return picked
+
+
+def unique_editor_filename(root, sub_rel, default_filename):
+    """为新建内容挑选不与下层撞名的文件名，避免多级 submod 同名整文件覆写下层新建文件。
+
+    1) 若当前 `root` 自己已建过 `default_filename` 或专属派生名，沿用该文件；
+    2) 若更下层均不存在 `default_filename`，直接沿用 `default_filename`（保持单层兼容性）；
+    3) 否则按当前 mod 目录名派生 `zz_fe_<slug>_<rest>`（冲突时加序号后缀）。
+    """
+    ab_root = os.path.abspath(root or "")
+    sub_n = (sub_rel or "").replace("\\", "/").strip("/")
+    sub_dir = os.path.join(ab_root, sub_n.replace("/", os.sep))
+    if os.path.isfile(os.path.join(sub_dir, default_filename)):
+        return default_filename
+    slug = re.sub(r"[^A-Za-z0-9_]", "", os.path.basename(ab_root.rstrip("\\/")) or "sub").lower() or "sub"
+    rest = default_filename[3:] if default_filename.lower().startswith("zz_") else default_filename
+    pref = "zz_fe_%s_%s" % (slug, rest)
+    if os.path.isfile(os.path.join(sub_dir, pref)):
+        return pref
+    lower_names = set()
+    for base in (mod_layers(ab_root) or []):
+        if os.path.normcase(os.path.abspath(base)) == os.path.normcase(ab_root):
+            continue
+        dp = os.path.join(base, sub_n.replace("/", os.sep))
+        if os.path.isdir(dp):
+            try:
+                for fn in os.listdir(dp):
+                    lower_names.add(fn.lower())
+            except Exception:
+                pass
+    if default_filename.lower() not in lower_names:
+        return default_filename
+    cand = pref
+    stem, ext = os.path.splitext(pref)
+    n = 2
+    while cand.lower() in lower_names or os.path.isfile(os.path.join(sub_dir, cand)):
+        cand = "%s_%d%s" % (stem, n, ext)
+        n += 1
+    return cand
 
 # ---------------------------------------------------------------- _chain_layers
 
@@ -405,42 +513,125 @@ def _enabled_mod_order():
     _MOD_ORDER_CACHE["k"] = (sig, list(out))
     return out
 
-# ---------------------------------------------------------------- _find_mod_by_name
+# ---------------------------------------------------------------- _iter_mod_candidates / _find_mod_by_name
+
+def _iter_mod_candidates(extra_roots=(), require_descriptor=False):
+    """按优先级收集候选 mod 目录，yield (abspath, source)。
+
+    顺序：已加载/指定 root → 启动器启用的 mod → 已加载/指定 root 的同级目录（自定义工作区下的多级 submod）
+    → 本地 mod 目录 / Steam workshop（_mod_search_bases）。
+    """
+    seen = set()
+
+    def _emit(p, src, must_desc=False):
+        if not p:
+            return None
+        try:
+            ab = os.path.abspath(p)
+        except Exception:
+            return None
+        key = os.path.normcase(ab)
+        if key in seen or not os.path.isdir(ab):
+            return None
+        if must_desc and not os.path.isfile(os.path.join(ab, "descriptor.mod")):
+            return None
+        seen.add(key)
+        return (ab, src)
+
+    roots_and_extra = []
+    for r in (state.roots() or []):
+        if r:
+            roots_and_extra.append((r, "loaded"))
+    for r in (extra_roots or ()):
+        if r:
+            roots_and_extra.append((r, "extra"))
+
+    for r, src in roots_and_extra:
+        item = _emit(r, src, must_desc=False)
+        if item:
+            yield item
+
+    for p in _enabled_mod_order():
+        item = _emit(p, "launcher", must_desc=False)
+        if item:
+            yield item
+
+    # 同级目录扫描（S8：独立重启自定义目录下的 submod 时，发现同级父/祖父 mod）
+    parent_seen = set()
+    for r, _ in roots_and_extra:
+        try:
+            ab = os.path.abspath(r)
+            if is_under_game(ab):
+                continue
+            parent = os.path.dirname(ab)
+            pkey = os.path.normcase(parent)
+            if not parent or pkey in parent_seen or parent == os.path.dirname(parent) or not os.path.isdir(parent):
+                continue
+            parent_seen.add(pkey)
+            for d in sorted(os.listdir(parent)):
+                item = _emit(os.path.join(parent, d), "sibling", must_desc=True)
+                if item:
+                    yield item
+        except Exception:
+            continue
+
+    for base in _mod_search_bases():
+        b_norm = base.replace("\\", "/").lower()
+        src = "workshop" if "/steamapps/workshop/" in b_norm else "local"
+        try:
+            for d in os.listdir(base):
+                item = _emit(os.path.join(base, d), src, must_desc=require_descriptor)
+                if item:
+                    yield item
+        except Exception:
+            continue
+
 
 def _find_mod_by_name(name, extra_roots=()):
     """按 mod 名（descriptor 里的 name）找目录。
 
-    查找顺序：已加载的 root → 启动器里启用的（最可靠，游戏就是这么认的）→
-    扫本地 mod 目录与各 Steam 库的 workshop。**不写死盘符。**
+    查找顺序：已加载 root → 启动器启用 → 同级目录 → 本地 mod 与 Steam workshop。**不写死盘符。**
     """
     want = (name or "").strip().lower()
     if not want:
         return None
-    cands = []
-    for r in list(state.roots()) + list(extra_roots):
-        if r:
-            cands.append(os.path.abspath(r))
-    cands.extend(_enabled_mod_order())
-    for base in _mod_search_bases():
-        try:
-            for d in os.listdir(base):
-                p = os.path.join(base, d)
-                if os.path.isdir(p):
-                    cands.append(p)
-        except Exception:
-            continue
-    seen = set()
+    cands = [p for p, _ in _iter_mod_candidates(extra_roots=extra_roots, require_descriptor=False)]
+    # 先按 descriptor name= 精确匹配，避免被同级无关文件夹名截走
     for p in cands:
-        if p in seen:
-            continue
-        seen.add(p)
         d = _mod_descriptor(p)
         if d["name"] and d["name"].strip().lower() == want:
             return p
-        # 也允许目录名直接等于 mod 名
+    # 再允许目录名直接等于 mod 名
+    for p in cands:
         if os.path.basename(p.rstrip("\\/")).lower() == want:
             return p
     return None
+
+
+def discover_mods():
+    """列出所有已识别的非原版 mod（供新建 submod 向导选择依赖等使用）。"""
+    loaded_keys = {os.path.normcase(os.path.abspath(r)) for r in (state.roots() or []) if r}
+    launcher_keys = {os.path.normcase(os.path.abspath(p)) for p in _enabled_mod_order() if p}
+    out = []
+    for p, src in _iter_mod_candidates(require_descriptor=True):
+        if is_under_game(p):
+            continue
+        desc = _mod_descriptor(p)
+        dname = (desc.get("name") or "").strip()
+        folder = os.path.basename(p.rstrip("\\/")) or p
+        key = os.path.normcase(p)
+        out.append({
+            "name": dname or folder,
+            "descriptor_name": dname,
+            "folder": folder,
+            "path": p,
+            "readonly": is_readonly_mod(p),
+            "loaded": key in loaded_keys,
+            "in_launcher": key in launcher_keys,
+            "source": src,
+            "deps": list(desc.get("deps") or []),
+        })
+    return out
 
 # ---------------------------------------------------------------- _mod_display_name
 
@@ -478,7 +669,7 @@ def _mod_dep_chain(r, depth=3):
         seen.add(ab)
         desc = _mod_descriptor(ab)
         for dep in desc["deps"]:
-            p = _find_mod_by_name(dep, extra_roots=[r])
+            p = _find_mod_by_name(dep, extra_roots=[r, ab] + order)
             if p:
                 walk(p, d - 1)
         if ab not in order:
@@ -699,6 +890,34 @@ def is_under_game(p):
     except Exception:
         return False
 
+
+def is_readonly_mod(p):
+    """原版目录和创意工坊目录都不该被写（与门面 `_is_readonly_root` 共用）。"""
+    ab = os.path.abspath(p or "")
+    if not ab:
+        return False
+    if is_under_game(ab):
+        return True
+    return "/steamapps/workshop/" in ab.replace("\\", "/").lower()
+
+
+def detect_game_version(game_dir=None):
+    """从游戏目录 launcher-settings.json 读取主版本号（如 '1.19.*'），读不到回退 '1.19.*'。"""
+    gd = game_dir or state.game()
+    if gd:
+        p = os.path.join(gd, "launcher-settings.json")
+        if os.path.isfile(p):
+            try:
+                obj = json.loads(_read_text(p))
+                for key in ("rawVersion", "version"):
+                    raw = str(obj.get(key) or "")
+                    m = re.search(r"(\d+)\.(\d+)", raw)
+                    if m:
+                        return "%s.%s.*" % (m.group(1), m.group(2))
+            except Exception:
+                pass
+    return "1.19.*"
+
 def _out_path(path):
     """输出模式下把 mod 内的路径映射到 output/<mod名>/<相对路径>。
     不在任何 mod 内的路径（新建文件等）保持原样。"""
@@ -744,20 +963,27 @@ def _out_read_path(path):
 
 def _layer_files(rel_dir, layers, exts=(".txt",)):
     """按叠加链收集某个目录下的文件。
-    - 某层声明了 replace_path 覆盖该目录时：只看那一层（整目录替换，不合并）
-    - 否则从链尾往链首收集，同名文件子层优先
-    返回 (文件路径列表, 是否被 replace_path 接管)"""
+    - 某层声明了 replace_path 覆盖该目录时：屏蔽该层之下（含原版），保留该层及其上全部子层
+    - 从链尾（最顶层子 mod）往链首收集，同名文件子层优先覆写下层
+    返回 (文件路径列表, 是否存在 replace_path 截断)"""
     from collections import OrderedDict
     rel_n = rel_dir.replace(chr(92), "/").strip("/")
+    layers_list = list(layers or [])
     repl = None
-    for r in reversed(layers or []):
+    for r in reversed(layers_list):
         for rp in _mod_descriptor(r)["replace"]:
             if rp.replace(chr(92), "/").strip("/") == rel_n:
                 repl = r
                 break
         if repl:
             break
-    scan = [repl] if repl else list(reversed(layers or []))
+    if repl:
+        try:
+            scan = list(reversed(layers_list[layers_list.index(repl):]))
+        except ValueError:
+            scan = [repl]
+    else:
+        scan = list(reversed(layers_list))
     seen = OrderedDict()
     for r in scan:
         dpath = os.path.join(r, rel_n.replace("/", os.sep))
@@ -789,3 +1015,306 @@ def _write_bom_text(path, text, has_bom):
     target = _out_path(path)             # 输出模式下写到 output/，源文件不动
     os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
     _atomic_write(target, data)
+
+
+# ---------------------------------------------------------------- analyze_layer_chain (7-2)
+_CHAIN_SKIP_DIRS = {
+    ".git", ".svn", ".hg", "__pycache__", "cache", "tmp",
+    "output", "backup", "backups", ".xr_backups",
+}
+_CHAIN_SKIP_FILES = {"descriptor.mod", "thumbnail.png"}
+_CHAIN_SKIP_EXTS = (".bak", ".tmp", ".pyc", ".log")
+
+
+def invalidate_chain_cache():
+    """清空叠加链文件索引缓存，文件写入或切换层后调用。"""
+    _CHAIN_SCAN_CACHE.clear()
+
+
+def _walk_layer_files(layer_dir):
+    """扫描单层模组目录，返回 [(rel_display, size), ...]（跳过备份与隐藏元数据目录）。"""
+    ab = os.path.abspath(layer_dir or "")
+    if not os.path.isdir(ab):
+        return []
+    out = []
+    for cur, dirs, files in os.walk(ab, topdown=True):
+        dirs[:] = sorted(
+            d for d in dirs
+            if not d.startswith(".") and d.lower() not in _CHAIN_SKIP_DIRS
+        )
+        at_root = (os.path.abspath(cur) == ab)
+        for fn in sorted(files):
+            low = fn.lower()
+            if at_root and low in _CHAIN_SKIP_FILES:
+                continue
+            if low.endswith(_CHAIN_SKIP_EXTS):
+                continue
+            full = os.path.join(cur, fn)
+            rel = os.path.relpath(full, ab).replace("\\", "/")
+            try:
+                sz = os.path.getsize(full)
+            except Exception:
+                sz = 0
+            out.append((rel, sz))
+    return out
+
+
+def _build_chain_index(layers):
+    """复用 mod_layers 与 _mod_descriptor 解析整条叠加链的文件覆盖与 replace_path 屏蔽关系。"""
+    norm_layers = [os.path.abspath(r) for r in (layers or []) if r and os.path.isdir(r)]
+    layer_meta = []
+    rp_rules = []
+    file_buckets = {}
+
+    for idx, ab in enumerate(norm_layers):
+        desc = _mod_descriptor(ab)
+        rpaths = []
+        rseen = set()
+        for rp in (desc.get("replace") or []):
+            rp_n = (rp or "").replace("\\", "/").strip("/")
+            rp_l = rp_n.lower()
+            if rp_l and rp_l not in rseen:
+                rseen.add(rp_l)
+                rpaths.append(rp_n)
+                rp_rules.append({
+                    "id": "%d:%s" % (idx, rp_l),
+                    "owner_idx": idx,
+                    "owner_name": _mod_display_name(ab),
+                    "owner_path": ab,
+                    "path": rp_n,
+                    "_low": rp_l,
+                    "own_files": 0,
+                    "blocked_total": 0,
+                    "blocked_unique": 0,
+                    "blocked_files": [],
+                    "_blocked_rels": set(),
+                })
+        files = _walk_layer_files(ab)
+        layer_meta.append({
+            "index": idx,
+            "order": idx + 1,
+            "name": _mod_display_name(ab),
+            "folder": os.path.basename(ab.rstrip("\\/")) or ab,
+            "path": ab,
+            "deps": list(desc.get("deps") or []),
+            "replace_paths": rpaths,
+            "file_count": len(files),
+            "win_count": 0,
+            "override_count": 0,
+            "overridden_count": 0,
+            "blocked_others_count": 0,
+            "blocked_self_count": 0,
+        })
+        for rel, sz in files:
+            rk = rel.lower()
+            b = file_buckets.get(rk)
+            if b is None:
+                b = {"rel": rel, "hits": []}
+                file_buckets[rk] = b
+            b["hits"].append((idx, rel, sz))
+
+    # 让 replace_path 同名路径下层也有清晰归属；按 (rp_low, rule_idx) 查匹配
+    entries = []
+    dir_counts = {}
+    for rk in sorted(file_buckets):
+        bucket = file_buckets[rk]
+        hits = bucket["hits"]
+        rel_disp = hits[-1][1]
+        present_map = {h[0]: h for h in hits}
+
+        # 找所有命中此路径的 replace_path 规则（按层级从低到高）
+        matched_rules = [
+            rl for rl in rp_rules
+            if rk == rl["_low"] or rk.startswith(rl["_low"] + "/")
+        ]
+        for rl in matched_rules:
+            r_idx = rl["owner_idx"]
+            if r_idx in present_map:
+                rl["own_files"] += 1
+            for h_idx, h_rel, _ in hits:
+                if h_idx < r_idx:
+                    rl["blocked_total"] += 1
+                    if rk not in rl["_blocked_rels"]:
+                        rl["_blocked_rels"].add(rk)
+                        rl["blocked_unique"] += 1
+                    if len(rl["blocked_files"]) < 500:
+                        rl["blocked_files"].append({
+                            "rel": h_rel,
+                            "from_idx": h_idx,
+                            "from_name": layer_meta[h_idx]["name"],
+                        })
+
+        win_rule = matched_rules[-1] if matched_rules else None
+        if win_rule is not None:
+            rep_idx = win_rule["owner_idx"]
+            winner_idx = rep_idx if rep_idx in present_map else None
+        else:
+            winner_idx = hits[-1][0]
+
+        if winner_idx is not None:
+            layer_meta[winner_idx]["win_count"] += 1
+
+        sources = []
+        has_blocked = False
+        has_shadow_above = False
+        for h_idx, h_rel, sz in hits:
+            if win_rule is not None:
+                rep_idx = win_rule["owner_idx"]
+                if h_idx == winner_idx:
+                    st = "winner"
+                elif h_idx < rep_idx:
+                    st = "blocked"
+                    has_blocked = True
+                    layer_meta[rep_idx]["blocked_others_count"] += 1
+                    layer_meta[h_idx]["blocked_self_count"] += 1
+                else:
+                    st = "shadow_above"
+                    has_shadow_above = True
+            else:
+                if h_idx == winner_idx:
+                    st = "winner"
+                else:
+                    st = "overridden"
+                    layer_meta[h_idx]["overridden_count"] += 1
+            sources.append({
+                "layer": h_idx,
+                "order": h_idx + 1,
+                "name": layer_meta[h_idx]["name"],
+                "rel": h_rel,
+                "size": sz,
+                "state": st,
+            })
+
+        if win_rule is None and len(hits) > 1:
+            layer_meta[winner_idx]["override_count"] += 1
+
+        if has_blocked or (win_rule is not None and winner_idx is None):
+            status = "blocked"
+        elif has_shadow_above:
+            status = "blocked"
+        elif len(hits) > 1:
+            status = "overridden"
+        else:
+            status = "unique"
+
+        parts = rel_disp.split("/")
+        top_dir = "/".join(parts[:2]) if len(parts) > 2 else (parts[0] if len(parts) > 1 else "(root)")
+        dir_counts[top_dir] = dir_counts.get(top_dir, 0) + 1
+
+        entries.append({
+            "rel": rel_disp,
+            "rk": rk,
+            "dir": top_dir,
+            "status": status,
+            "winner": winner_idx,
+            "winner_order": (winner_idx + 1) if winner_idx is not None else None,
+            "winner_name": layer_meta[winner_idx]["name"] if winner_idx is not None else "",
+            "replace_by": {
+                "layer": win_rule["owner_idx"],
+                "order": win_rule["owner_idx"] + 1,
+                "name": win_rule["owner_name"],
+                "path": win_rule["path"],
+            } if win_rule is not None else None,
+            "sources": sources,
+        })
+
+    clean_rules = []
+    for rl in rp_rules:
+        clean_rules.append({
+            "id": rl["id"],
+            "owner_idx": rl["owner_idx"],
+            "owner_order": rl["owner_idx"] + 1,
+            "owner_name": rl["owner_name"],
+            "owner_path": rl["owner_path"],
+            "path": rl["path"],
+            "own_files": rl["own_files"],
+            "blocked_total": rl["blocked_total"],
+            "blocked_unique": rl["blocked_unique"],
+            "blocked_files": rl["blocked_files"],
+        })
+
+    top_dirs = sorted(
+        [{"dir": k, "count": v} for k, v in dir_counts.items()],
+        key=lambda x: (-x["count"], x["dir"]),
+    )
+    return {
+        "layers": layer_meta,
+        "replace_rules": clean_rules,
+        "entries": entries,
+        "top_dirs": top_dirs,
+    }
+
+
+def analyze_layer_chain(layers=None, query="", kind="interacted", dir_filter="",
+                        layer_filter="", replace_filter="", limit=200, refresh=False):
+    """分析当前叠加链：每层顺序、文件生效与覆盖来源、每条 replace_path 屏蔽清单。"""
+    if layers is None:
+        layers = mod_layers(None) or ([state.game()] if state.game() else [])
+    norm_layers = [os.path.abspath(r) for r in (layers or []) if r and os.path.isdir(r)]
+    ck = tuple(
+        (r, tuple(_mod_descriptor(r).get("replace") or []))
+        for r in norm_layers
+    )
+    if refresh or ck not in _CHAIN_SCAN_CACHE:
+        if len(_CHAIN_SCAN_CACHE) >= 4:
+            _CHAIN_SCAN_CACHE.clear()
+        _CHAIN_SCAN_CACHE[ck] = _build_chain_index(norm_layers)
+    idx = _CHAIN_SCAN_CACHE[ck]
+
+    q = (query or "").strip().lower()
+    df = (dir_filter or "").replace("\\", "/").strip("/").lower()
+    rf = (replace_filter or "").replace("\\", "/").strip("/").lower()
+    lf = None
+    if str(layer_filter).strip() != "":
+        try:
+            lf = int(layer_filter)
+        except Exception:
+            lf = None
+    k = (kind or "interacted").strip().lower()
+    lim = max(1, min(int(limit or 200), 1000))
+
+    entries = idx["entries"]
+    matched = []
+    cnt_overridden = 0
+    cnt_blocked = 0
+    for e in entries:
+        st = e["status"]
+        if st == "overridden":
+            cnt_overridden += 1
+        elif st == "blocked":
+            cnt_blocked += 1
+
+        if k == "interacted" and st not in ("overridden", "blocked"):
+            continue
+        if k == "overridden" and st != "overridden":
+            continue
+        if k == "blocked" and st != "blocked":
+            continue
+        if k == "non_vanilla":
+            w = e["winner"]
+            if w is None or is_under_game(idx["layers"][w]["path"]):
+                continue
+
+        rk = e["rk"]
+        if q and q not in rk:
+            continue
+        if df and not (rk == df or rk.startswith(df + "/")):
+            continue
+        if rf and not (rk == rf or rk.startswith(rf + "/")):
+            continue
+        if lf is not None and not any(s["layer"] == lf for s in e["sources"]):
+            continue
+        matched.append(e)
+
+    # 仅返回前端所需字段，剔除内部 rk 键
+    files_out = [{k2: v2 for k2, v2 in e.items() if k2 != "rk"} for e in matched[:lim]]
+    return {
+        "layers": idx["layers"],
+        "replace_rules": idx["replace_rules"],
+        "files": files_out,
+        "total_files": len(entries),
+        "matched_count": len(matched),
+        "overridden_count": cnt_overridden,
+        "blocked_count": cnt_blocked,
+        "top_dirs": idx["top_dirs"][:40],
+    }

@@ -39,7 +39,11 @@ from xuerong.core.paths import (_layer_dirs, _chain_layers, _start_date_for, pdx
                                 _resolve_mod_path, _steam_libraries, _mod_search_bases,
                                 _enabled_mod_order, _find_mod_by_name, _mod_display_name, _mod_descriptor,
                                 _mod_dep_chain, mod_layers, _layers_find, _replace_owner,
-                                _top_mod, write_base, is_under_game, _load_options, _layer_files,
+                                _top_mod, write_base, is_under_game, is_readonly_mod,
+                                detect_game_version, discover_mods,
+                                analyze_layer_chain, invalidate_chain_cache,
+                                _load_options, _layer_files, effective_layer_files,
+                                unique_editor_filename,
                                 _out_path, _out_read_path, _read_bom_text, _write_bom_text,
                                 _save_options, _LAYERS_CACHE, _MOD_ORDER_CACHE)
 from xuerong.core.i18n import ERR_RULES, classify_error
@@ -80,6 +84,10 @@ from xuerong.model.character import (portrait_import, load_characters, _char_wri
                                     character_add, character_set, character_delete,
                                     characters_payload)
 from xuerong.model.country import _country_hist_file, _country_hist_write_base, _politics_write
+from xuerong.model.object_diff import analyze_objects, invalidate_object_cache
+from xuerong.model.game_verify import (cancel_game_verify, get_verify_status,
+                                        recover_pending_dlc_load, start_game_verify)
+from xuerong.model.mod_publish import export_publish, preview_publish
 from xuerong.model import state as _m_state
 from xuerong.model.state import (
     state_save, state_create, state_province_edit, state_refine_preview, state_refine_apply,
@@ -116,21 +124,25 @@ from xuerong.api import router as _router, routes_get, routes_post
 _paths.APP_DIR = _HERE          # options.json 等仍写在 work/ 下，不跟着模块跑
 _paths.set_root_picker(lambda: _map_pick(None))   # core 不认识 map 层，用钩子回注
 
+# 贴图 / 图标 / 编码规范：实现在 xuerong/core/gfx.py 与 core/loc.py。
+# 四个容器（SPRITE_MAP / ICONS / EQUIP_ICONS / TECH_ICONS）与 _GFX_CACHE / GFX_KINDS
+# 都是 core 里的对象本体，这里 import 的是同一份 —— 门面不能再各 new 一个，
+# 否则表会分裂成两份，图标全丢（state.py 的访问器靠对象身份）。
+from xuerong.core.gfx import (                                    # noqa: E402
+    GFX_KINDS, SPRITE_MAP, ICONS, EQUIP_ICONS, TECH_ICONS, _GFX_CACHE,
+    set_snapshot_hook,
+    parse_gfx_file, gfx_list, gfx_sprite_new, gfx_import, gfx_registered,
+    gfx_missing, _gfx_collect, _gfx_refs, _gfx_texture_exists,
+    all_goal_icons, icon_png, build_icons,
+)
+from xuerong.core.loc import missing_loc, _bom_issues                # noqa: E402
 
-def _qa_dir():
-    """qa 目录的位置。
+# snapshot 是 model 层的东西，core 不能 import model —— 启动期注入钩子。
+set_snapshot_hook(snapshot)
 
-    源码仓库里 qa 在 tools/qa（公开仓库的目录结构），
-    打包成 exe 后是平铺的 _MEIPASS/qa，开发目录是 work/qa。
-    三个位置都试，找不到就返回默认值，交给调用方报错。
-    """
-    for base in (getattr(sys, "_MEIPASS", "") or "", _HERE,
-                 os.path.dirname(_HERE)):
-        for rel in (("qa",), ("tools", "qa")):
-            p = os.path.join(base, *rel) if base else ""
-            if p and os.path.isdir(p):
-                return p
-    return os.path.join(_HERE, "qa")
+# qa/ 目录的实现原来在门面与 model/diagnose.py 各写了一份（map/world 又各转发一次），
+# 三处逻辑等价，已合并到 core.paths.qa_dir。门面不再保留这个名字——
+# 需要的人直接从 core 取，少一层。
 W = os.path.dirname(_HERE) if os.path.basename(_HERE).lower() == "work" else _HERE
 
 # 版本号：打包时由 make_release.py 生成 _build_version.py 注入；源码运行则回退到 git tag
@@ -183,10 +195,6 @@ BACKUP_DIR = os.path.join(WORK, "backups")
 os.makedirs(BACKUP_DIR, exist_ok=True)
 ICON_DIR = os.path.join(WORK, "icons")
 os.makedirs(ICON_DIR, exist_ok=True)
-ICONS = {}
-EQUIP_ICONS = {}
-TECH_ICONS = {}
-SPRITE_MAP = {}
 GAME = DEFAULT_GAME
 MASCOTS = [
     {"id": "card", "name": "经典", "file": "mascot_card.png", "thumb": "mascot_face.png"},
@@ -254,26 +262,32 @@ def ensure_file_writable(root, sub, basename):
         cand = lay[-1] if lay else r
         if cand and not is_under_game(cand):
             top = cand
+    if not top and root:
+        cand = _top_mod(root)
+        if cand and not is_under_game(cand):
+            top = cand
     if not top:
         return None, "找不到可写的 mod 目录"
 
     owner = _replace_owner(root, sub)
     if owner and os.path.abspath(owner) != os.path.abspath(top):
-        nm = os.path.basename(owner.rstrip("\\/")) or owner
-        return None, ("%s 被 %s 的 replace_path 独占，需要先在「诊断 → 目录写入目标」里"
-                      "接管该目录（独占后只读那一层，单文件复制不生效）" % (sub, nm))
+        chain = [os.path.abspath(x) for x in (mod_layers(root) or []) if x]
+        ab_top = os.path.abspath(top)
+        ab_own = os.path.abspath(owner)
+        if ab_own in chain and ab_top in chain and chain.index(ab_own) > chain.index(ab_top):
+            nm = os.path.basename(owner.rstrip("\\/")) or owner
+            return None, ("%s 被 %s 的 replace_path 独占，需要先在「诊断 → 目录写入目标」里"
+                          "接管该目录（独占后只读那一层，单文件复制不生效）" % (sub, nm))
 
     rel = os.path.join(sub.replace("/", os.sep), basename)
     dst = os.path.join(top, rel)
     if os.path.exists(dst):
         return dst, "已存在"
 
-    # 找源文件：从生效链里倒着找第一个有它的层
+    # 找源文件：沿 _layer_dirs（已按 replace_path 截断）从子到父找第一个存在它的层
     src = None
-    for b in reversed(mod_layers(root) or []):
-        if not b:
-            continue
-        cand = os.path.join(b, rel)
+    for _b, d in (_layer_dirs(sub, root) or []):
+        cand = os.path.join(d, basename)
         if os.path.isfile(cand):
             src = cand
             break
@@ -317,7 +331,26 @@ def load_game_loc():
 
 
 
-LOAD_PROGRESS = {"active": False, "stage": "", "sub": "", "pct": 0, "t": 0.0}
+LOAD_PROGRESS = {
+    "active": False,      # 有没有加载在跑
+    "ready": False,       # 启动期的数据是否全部到位。换 mod 的 reload 不改它
+    "failed": False,      # 上一轮加载是不是抛异常了
+    "error": "",          # 抛的是什么
+    "phase": "",          # boot / mod / reload / map / export
+    "stage": "", "sub": "", "pct": 0, "t": 0.0,
+    "started_at": 0.0,    # 本 phase 开始的时刻，用来算 elapsed
+    "stages": [],         # [{"key", "name", "pct", "done_ms"}]，最多 40 条
+}
+
+
+def _lp_begin(phase):
+    """开一个新的加载 phase，清掉上一轮的阶段记录。"""
+    LOAD_PROGRESS["phase"] = phase
+    LOAD_PROGRESS["started_at"] = time.time()
+    LOAD_PROGRESS["stages"] = []
+    LOAD_PROGRESS["failed"] = False
+    LOAD_PROGRESS["error"] = ""
+
 
 def _lp(stage, sub="", pct=0):
     """上报加载阶段。前端轮询 /api/load_progress 读这个，做确定性进度条。"""
@@ -325,13 +358,54 @@ def _lp(stage, sub="", pct=0):
     LOAD_PROGRESS["stage"] = stage
     LOAD_PROGRESS["sub"] = sub
     LOAD_PROGRESS["pct"] = max(0, min(100, int(pct)))
-    LOAD_PROGRESS["t"] = time.time()
+    now = time.time()
+    LOAD_PROGRESS["t"] = now
+    # 同一 (stage, sub) 连续上报只更新最后一条，不刷屏；阶段记录给 boot 页显示「哪几步过了」
+    key = "%s|%s" % (stage, sub)
+    st = LOAD_PROGRESS["stages"]
+    base = LOAD_PROGRESS["started_at"] or now
+    if st and st[-1].get("key") == key:
+        st[-1]["pct"] = LOAD_PROGRESS["pct"]
+    else:
+        st.append({"key": key, "name": stage, "pct": LOAD_PROGRESS["pct"],
+                   "done_ms": int((now - base) * 1000)})
+        del st[:-40]
+
 
 def _lp_done():
     LOAD_PROGRESS["active"] = False
     LOAD_PROGRESS["stage"] = ""
     LOAD_PROGRESS["sub"] = ""
     LOAD_PROGRESS["pct"] = 100
+
+
+def _lp_fail(err):
+    """加载抛异常时调。别让它停在 active=True —— 旧的 10 秒兜底会把「炸了」显示成「已完成」。"""
+    LOAD_PROGRESS["active"] = False
+    LOAD_PROGRESS["failed"] = True
+    LOAD_PROGRESS["error"] = str(err)
+
+
+# 启动期后台加载还没跑完时，数据类请求一律 503，避免读到 reload_data 半清空的容器。
+# 这几个路径放行：页面本身、进度查询、选项、AI 配置——前端要靠它们把进度条显示出来。
+_BOOT_OK_PATHS = ("/api/boot_status", "/api/load_progress", "/api/options", "/api/ai_config")
+
+
+def _boot_gate(path_only):
+    """返回 None 表示放行，返回 dict 表示该拦（调用方直接把这个 dict 按 503 发回去）。"""
+    if not LOAD_PROGRESS.get("active") or LOAD_PROGRESS.get("ready"):
+        return None
+    if path_only in _BOOT_OK_PATHS:
+        return None
+    if not path_only.startswith("/api/"):
+        return None   # 静态资源照常，页面得先出来
+    return {"ok": False, "code": "LOADING", "loading": True,
+            "msg": "编辑器正在读取 mod 数据，请稍候",
+            "phase": LOAD_PROGRESS.get("phase") or "",
+            "pct": LOAD_PROGRESS.get("pct") or 0,
+            "stage": LOAD_PROGRESS.get("stage") or ""}
+
+
 def _prune_roots():
     """F13：删掉已经不存在的根目录。
 
@@ -455,19 +529,6 @@ def reload_data():
 
 IDEAS = {}
 
-
-
-
-def missing_loc():
-    out = []
-    for tid in TREE_ORDER:
-        t = TREES.get(tid)
-        if not t:
-            continue
-        for f in t["focuses"]:
-            if f["id"] not in LOC or not LOC.get(f["id"], "").strip():
-                out.append({"tree": tid, "id": f["id"], "key": f["id"], "file": t["file"]})
-    return out
 
 def _log_loc(ln):
     """从一行日志里抠出「文件 + 行号」。HOI4 常见两种写法：
@@ -1586,25 +1647,24 @@ def _diplo_index():
 
 
 def _diplo_block_text(target, autonomy):
-    """照原版 DEN 的写法：DLC 在时按自治度，不在时降级成 puppet。"""
+    """照原版 DEN 的写法：DLC 在时按自治度，不在时降级成 puppet（else 必须在 if 块内部）。"""
     return ("\nif = {\n"
             "\tlimit = { has_dlc = \"Together for Victory\" }\n"
             "\tset_autonomy = {\n"
             "\t\ttarget = %s\n"
             "\t\tautonomous_state = %s\n"
             "\t}\n"
-            "}\n"
-            "else = {\n"
-            "\tpuppet = %s\n"
+            "\telse = {\n"
+            "\t\tpuppet = %s\n"
+            "\t}\n"
             "}\n") % (target, autonomy, target)
 
 
 def _diplo_drop_blocks(text, targets=None):
     """删掉 set_autonomy 块；targets=None 表示全删。
 
-    只删 set_autonomy 会留下它配套的 `else = { puppet = TAG }`，
-    再写一遍就变成「同一个国家两块 puppet」，游戏里读哪个不好说。
-    所以顺带把配套的 else 和空掉的 if 壳一起清掉。
+    同时清掉配套 else 里的对应 puppet = TAG，以及因此变成空壳的 else / if 块
+    （用 brace_match 处理嵌套 limit = { OR = { ... } }）。
     """
     blocks = [b for b in _diplo_autonomy_blocks(text)
               if targets is None or b["target"] in targets]
@@ -1612,15 +1672,50 @@ def _diplo_drop_blocks(text, targets=None):
     for blk in sorted(blocks, key=lambda x: -x["start"]):
         st = text.rfind("\n", 0, blk["start"]) + 1
         en = blk["end"]
-        while en < len(text) and text[en] in " \t\r\n":
+        while en < len(text) and text[en] in " \t":
+            en += 1
+        if en < len(text) and text[en:en + 2] == "\r\n":
+            en += 2
+        elif en < len(text) and text[en] in "\r\n":
             en += 1
         text = text[:st] + text[en:]
         gone.add(blk["target"])
-    for tg in gone:
-        text = re.sub(r'(?m)^[ \t]*else\s*=\s*\{\s*\n?[ \t]*puppet\s*=\s*%s[ \t]*\n?[ \t]*\}[ \t]*\r?\n?'
-                      % re.escape(tg), "", text)
-    text = re.sub(r'(?m)^[ \t]*if\s*=\s*\{\s*\n?[ \t]*limit\s*=\s*\{[^{}]*\}[ \t]*\n?[ \t]*\}[ \t]*\r?\n?',
-                  "", text)
+    if gone:
+        for tg in gone:
+            text = re.sub(r'(?m)^[ \t]*puppet\s*=\s*%s[ \t]*\r?\n?' % re.escape(tg), "", text)
+        # 删掉变空的 else = { ... }（仅剩空白与注释）
+        for m in reversed(list(re.finditer(r'(?im)^[ \t]*else\s*=\s*\{', text))):
+            b = text.find("{", m.start())
+            e = brace_match(text, b)
+            inner = strip_comments(text[b + 1:e - 1]).strip()
+            if not inner:
+                en = e
+                while en < len(text) and text[en] in " \t":
+                    en += 1
+                if en < len(text) and text[en:en + 2] == "\r\n":
+                    en += 2
+                elif en < len(text) and text[en] in "\r\n":
+                    en += 1
+                text = text[:m.start()] + text[en:]
+        # 删掉仅剩 limit = { ... } 空壳的 if = { ... }
+        for m in reversed(list(re.finditer(r'(?im)^[ \t]*if\s*=\s*\{', text))):
+            b = text.find("{", m.start())
+            e = brace_match(text, b)
+            inner = strip_comments(text[b + 1:e - 1])
+            lm = re.match(r'\s*limit\s*=\s*\{', inner, re.I)
+            if not lm:
+                continue
+            lb = inner.find("{", lm.start())
+            le = brace_match(inner, lb)
+            if not inner[le:].strip():
+                en = e
+                while en < len(text) and text[en] in " \t":
+                    en += 1
+                if en < len(text) and text[en:en + 2] == "\r\n":
+                    en += 2
+                elif en < len(text) and text[en] in "\r\n":
+                    en += 1
+                text = text[:m.start()] + text[en:]
     return text
 
 
@@ -2174,21 +2269,7 @@ _state.set_map_var("MAP_ASSETS", ("base.png", "province.png", "edges.png", "stat
 
 
 
-def _dir_mtime(p):
-    """目录下所有 .txt 的最大 mtime（文件内容变动也会反映出来）"""
-    if not os.path.isdir(p):
-        return 0
-    mt = 0
-    try:
-        for fn in os.listdir(p):
-            if fn.endswith(".txt"):
-                try:
-                    mt = max(mt, int(os.path.getmtime(os.path.join(p, fn))))
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return mt
+_dir_mtime = _paths._dir_mtime     # 实现在 core.paths，这里只留名字给本文件第 1550 行附近用
 
 
 
@@ -2941,7 +3022,7 @@ def write_note(mod_root, sub):
 
 
 
-def adopt_dir(mod_root, sub, force=False):
+def adopt_dir(mod_root, sub, force=False, reload=True):
     """在自己的 mod 里接管某个目录。
 
     这是 CNsub 对 CN 做法的自动化：
@@ -3042,9 +3123,11 @@ def adopt_dir(mod_root, sub, force=False):
     # 清缓存，让下次读取按新结构走
     try:
         _LAYERS_CACHE.clear()
+        _paths._DESC_CACHE.clear()
     except Exception:
         pass
-    reload_data()
+    if reload:
+        reload_data()
 
     src_name = os.path.basename(src.rstrip("\\/")) or src
     # 接管立刻校验：replace_path 会让上级目录失效，漏一个文件就少一份数据
@@ -3318,241 +3401,6 @@ def battalions_payload(root=None):
 
 # 这几类目录整体替换后游戏直接起不来（实测，见 DEV_LESSONS 里 replace_path 那条）：
 # 只允许「撤销 replace」，不允许接管。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-GFX_KINDS = {
-    "goal":  {"dir": "gfx/interface/goals",   "prefix": "GFX_goal_",   "label": "国策"},
-    "idea":  {"dir": "gfx/interface/ideas",   "prefix": "GFX_idea_",   "label": "想法"},
-    "tech":  {"dir": "gfx/interface/technologies", "prefix": "GFX_",    "label": "科技"},
-    "generic": {"dir": "gfx/interface",       "prefix": "GFX_",         "label": "通用"},
-}
-
-
-def gfx_list(root=None, kind="goal"):
-    """列出某类图标目录下已有的图片文件。"""
-    root = _map_pick(root)
-    k = GFX_KINDS.get(kind) or GFX_KINDS["goal"]
-    d = os.path.join(root, k["dir"].replace("/", os.sep)) if root else ""
-    items = []
-    if d and os.path.isdir(d):
-        for fn in sorted(os.listdir(d)):
-            low = fn.lower()
-            if low.endswith((".dds", ".tga", ".png", ".jpg", ".jpeg")):
-                p = os.path.join(d, fn)
-                items.append({"file": fn, "size": os.path.getsize(p),
-                              "sprite": k["prefix"] + os.path.splitext(fn)[0]})
-    return {"ok": True, "kind": kind, "dir": k["dir"], "items": items,
-            "count": len(items), "prefix": k["prefix"],
-            "msg": "%s：%d 张图（前缀 %s）" % (k["label"], len(items), k["prefix"])}
-
-
-def gfx_sprite_new(root, name, texturefile):
-    """往 interface 里写一条 spriteType 注册。"""
-    root = _map_pick(root)
-    top = None
-    for r in (ROOTS or []):
-        lay = mod_layers(r) or [r]
-        cand = lay[-1] if lay else r
-        if cand and not is_under_game(cand):
-            top = cand
-    if not top:
-        return {"ok": False, "msg": "找不到可写的 mod 目录"}
-    if not name or not texturefile:
-        return {"ok": False, "msg": "name 和 texturefile 都要给"}
-    d = os.path.join(top, "interface")
-    os.makedirs(d, exist_ok=True)
-    p = os.path.join(d, "zz_editor_icons.gfx")
-    block = ('\nspriteTypes = {\n'
-             '\tspriteType = {\n'
-             '\t\tname = "%s"\n'
-             '\t\ttexturefile = "%s"\n'
-             '\t}\n'
-             '}\n') % (name, texturefile.replace("\\", "/"))
-    if os.path.exists(p):
-        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
-        if ('"%s"' % name) in raw:
-            return {"ok": True, "msg": "%s 已经注册过了" % name}
-        new_text = raw.rstrip() + "\n" + block
-    else:
-        new_text = block.lstrip("\n")
-    if os.path.exists(p):
-        snapshot(p)
-    _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
-    return {"ok": True, "msg": "已注册 sprite %s → %s" % (name, texturefile),
-            "file": "interface/zz_editor_icons.gfx"}
-
-
-def gfx_import(root, src_path, kind="goal", name=None, sprite_name=None,
-               size=None, overwrite=False):
-    """把一张图导入成 HOI4 图标：转 DDS + 放到对应目录 + 注册 sprite。
-
-    src_path  可以是 png / jpg / dds / tga，统一转成 DDS 存进去
-    size      目标边长（正方形），不给就按 HOI4 惯例：goal 64、idea 64、tech 64
-    """
-    root = _map_pick(root)
-    k = GFX_KINDS.get(kind) or GFX_KINDS["goal"]
-    if not src_path or not os.path.isfile(src_path):
-        return {"ok": False, "msg": "源文件不存在：%s" % src_path}
-    top = None
-    for r in (ROOTS or []):
-        lay = mod_layers(r) or [r]
-        cand = lay[-1] if lay else r
-        if cand and not is_under_game(cand):
-            top = cand
-    if not top:
-        return {"ok": False, "msg": "找不到可写的 mod 目录"}
-
-    base = name or os.path.splitext(os.path.basename(src_path))[0]
-    base = re.sub(r'[^A-Za-z0-9_\-]', '_', base)
-    if not base:
-        return {"ok": False, "msg": "文件名里没有可用的字符"}
-
-    side = int(size) if size else 64
-    side = max(16, min(512, side))
-
-    try:
-        from PIL import Image
-        Image.MAX_IMAGE_PIXELS = None
-        im = Image.open(src_path).convert("RGBA")
-        # 保持比例缩放到正方形画布
-        im.thumbnail((side, side), Image.LANCZOS)
-        canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
-        canvas.paste(im, ((side - im.width) // 2, (side - im.height) // 2), im)
-    except Exception as e:
-        return {"ok": False, "msg": "读图失败：%s" % e}
-
-    d = os.path.join(top, k["dir"].replace("/", os.sep))
-    os.makedirs(d, exist_ok=True)
-    dst = os.path.join(d, base + ".dds")
-    if os.path.exists(dst) and not overwrite:
-        return {"ok": False, "need_confirm": True,
-                "msg": "目标已存在：%s，要覆盖吗？" % os.path.join(k["dir"], base + ".dds")}
-    try:
-        if os.path.exists(dst):
-            snapshot(dst)
-        canvas.save(dst, format="DDS")
-    except Exception as e:
-        return {"ok": False, "msg": "写 DDS 失败：%s" % e}
-
-    texture = "%s/%s.dds" % (k["dir"], base)
-    sprite = sprite_name or (k["prefix"] + base)
-    r2 = gfx_sprite_new(top, sprite, texture)
-    if not r2.get("ok"):
-        return {"ok": False, "msg": "图已转好但注册失败：%s" % r2.get("msg")}
-
-    return {"ok": True, "sprite": sprite, "texture": texture,
-            "size": "%dx%d" % (side, side), "file": os.path.join(k["dir"], base + ".dds"),
-            "msg": "已导入 %s：%dx%d DDS + 注册 %s" % (base, side, side, sprite)}
-
-
-def gfx_registered(root=None, pattern=""):
-    """列出 interface 里已注册的 spriteType（可选按名字过滤）。"""
-    root = _map_pick(root)
-    top = None
-    for r in (ROOTS or []):
-        lay = mod_layers(r) or [r]
-        cand = lay[-1] if lay else r
-        if cand and not is_under_game(cand):
-            top = cand
-    files, _r = _layer_files("interface", mod_layers(root))
-    out, seen = [], set()
-    pat = (pattern or "").lower()
-    for p in (files or []):
-        if not p.lower().endswith(".gfx"):
-            continue
-        try:
-            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
-        except Exception:
-            continue
-        text = _strip_keep_len(raw)
-        for a, b, body in find_blocks(text, "spriteType"):
-            nm = _first(body, r'(?m)^\s*name\s*=\s*"([^"]*)"')
-            tf = _first(body, r'(?m)^\s*texturefile\s*=\s*"([^"]*)"')
-            if not nm or nm in seen:
-                continue
-            if pat and pat not in nm.lower() and pat not in (tf or "").lower():
-                continue
-            seen.add(nm)
-            out.append({"name": nm, "texture": tf, "file": os.path.basename(p)})
-    return {"ok": True, "items": out[:500], "count": len(out),
-            "msg": "已注册 %d 个 sprite（显示前 500）" % len(out)}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def country_tags_payload(root=None):
@@ -5276,11 +5124,18 @@ def write_targets(root=None):
     items = []
     for sub, label in subs:
         base, why = write_base(root, sub)
+        file_count = 0
+        if why == "replace_path" and base:
+            target_dir = os.path.join(base, sub.replace("/", os.sep))
+            if os.path.isdir(target_dir):
+                for _dp, _dn, _fns in os.walk(target_dir):
+                    file_count += len(_fns)
         items.append({
             "sub": sub, "label": label,
             "base": base or "",
             "mod": os.path.basename((base or "").rstrip("\\/")) or "",
             "blocked": why == "replace_path",
+            "file_count": file_count,
             "note": write_note(root, sub),
         })
     return {"ok": True, "items": items,
@@ -5458,212 +5313,6 @@ _state.set_map_var("_REGION_CACHE", {})
 
 # v0.85 地图完整性检查
 # v1.2 地形层：游戏配色 + 高度图山体阴影（全 Pillow，快 70 倍）
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ref: CWTools validator "referenced sprites and graphics files exist"
-_GFX_CACHE = {}
-
-
-def _gfx_collect(root, layers, include_vanilla=True):
-    """收集 sprite 定义 → {spriteName: texturefile}，以及 texture 文件集合
-
-    原版的 interface/*.gfx 有 145 个文件、几万个 sprite，只在第一次调用时扫一遍。"""
-    key = (os.path.abspath(root or ""), include_vanilla)
-    hit = _GFX_CACHE.get(key)
-    if hit:
-        return hit
-
-    sprites = {}
-    textures = set()
-
-    def _scan(base):
-        d = os.path.join(base or "", "interface")
-        if not os.path.isdir(d):
-            return
-        for _dp, _dn, files in os.walk(d):
-            for fn in files:
-                if not fn.endswith(".gfx"):
-                    continue
-                p = os.path.join(_dp, fn)
-                try:
-                    text = strip_comments(io.open(p, encoding="utf-8-sig",
-                                                  errors="replace").read())
-                except Exception:
-                    continue
-                # 用 brace 配对取每个 spriteType 块：块内还有 frames/instances 等嵌套，
-                # 非贪婪正则会在第一个 } 处截断，导致大量 sprite 漏收。
-                # 变体：spriteType / corneredTileSpriteType / frameAnimatedSpriteType / progressbartype
-                for m in re.finditer(r'(?m)^\s*([A-Za-z_]*[Ss]priteType|progressbartype)\s*=\s*\{',
-                                     text):
-                    b = text.find("{", m.end() - 1)
-                    e = brace_match(text, b)
-                    if e <= b:
-                        continue
-                    body = text[b + 1:e - 1]
-                    # name 可以带引号也可以不带（name = GFX_xxx）
-                    nm = re.search(r'(?m)^\s*name\s*=\s*"?([^"\s\}]+)"?', body)
-                    if not nm:
-                        continue
-                    name = nm.group(1)
-                    tx = re.search(r'(?m)^\s*texturefile\s*=\s*"?([^"\s\}]+)"?', body)
-                    sprites[name] = tx.group(1) if tx else ""
-                    if tx:
-                        textures.add(tx.group(1).replace(chr(92), "/").lower())
-
-    if include_vanilla and GAME:
-        _scan(GAME)
-    for b in (layers or []):
-        if b:
-            _scan(b)
-    _GFX_CACHE[key] = (sprites, textures)
-    return sprites, textures
-
-
-def _gfx_refs(root, layers):
-    """扫 mod 脚本里的 sprite 引用 → {spriteName: (位置描述, 文件)}"""
-    refs = {}
-
-    def _note(name, where, f):
-        name = (name or "").strip()
-        if len(name) <= 4 or not name.startswith("GFX_"):
-            return          # icon = aluminium / generic 这种不是 sprite；GFX_ 空名也跳过
-        if name not in refs:
-            refs[name] = [where, f]
-
-    # 国策 icon / 精神 picture / 事件 picture / 决议 icon / 装备 picture
-    # sprite 名可能带非 ASCII（GFX_94式戦車 这种），[A-Za-z0-9_.-] 会把名字截断
-    patterns = [
-        (r'icon\s*=\s*"?([^"\s\}]+)"?', "icon"),
-        (r'picture\s*=\s*"?([^"\s\}]+)"?', "picture"),
-    ]
-    for rel_dir in ("common/national_focus", "common/ideas", "common/decisions",
-                    "common/decisions/categories", "events", "common/units/equipment"):
-        d = os.path.join(root, rel_dir)
-        if not os.path.isdir(d):
-            continue
-        for _dp, _dn, files in os.walk(d):
-            for fn in files:
-                if not fn.endswith(".txt"):
-                    continue
-                p = os.path.join(_dp, fn)
-                try:
-                    text = strip_comments(io.open(p, encoding="utf-8-sig",
-                                                  errors="replace").read())
-                except Exception:
-                    continue
-                for pat, where in patterns:
-                    for m in re.finditer(pat, text):
-                        _note(m.group(1), where, os.path.basename(p))
-    return refs
-
-
-def gfx_missing(root=None, limit=600):
-    """列出引用了但没定义的 sprite，以及定义了但贴图文件不存在的 sprite"""
-    root = _map_pick(root)
-    layers = mod_layers(root)
-    sprites, textures = _gfx_collect(root, layers)
-    refs = _gfx_refs(root, layers)
-    if not refs:
-        return {"ok": True, "total": 0, "missing": [],
-                "msg": "脚本里没有找到 sprite 引用"}
-
-    missing = []
-    by_kind = {}
-    for name, (where, f) in refs.items():
-        if name in sprites:
-            continue
-        # 纯色/文字类的值不是 sprite（比如 icon = 3 已被正则过滤，这里防空）
-        missing.append({"name": name, "where": where, "file": f})
-        by_kind[where] = by_kind.get(where, 0) + 1
-    missing.sort(key=lambda x: (x["where"], x["name"]))
-
-    # 顺带查：mod 自己定义的 sprite，贴图文件是否真的存在
-    mod_sprites = {}
-    for b in (layers or []):
-        if not b or os.path.abspath(b) == os.path.abspath(GAME or ""):
-            continue
-        s2, _t2 = _gfx_collect(b, [], include_vanilla=False)
-        mod_sprites.update(s2)
-    bad_texture = []
-    for name, tx in mod_sprites.items():
-        if not tx:
-            continue
-        if not _gfx_texture_exists(tx, layers):
-            bad_texture.append({"name": name, "texture": tx})
-
-    return {"ok": True, "total": len(missing), "by_kind": by_kind,
-            "refs": len(refs), "defined": len(sprites),
-            "missing": missing[:limit], "truncated": len(missing) > limit,
-            "bad_texture": bad_texture[:limit],
-            "bad_texture_total": len(bad_texture),
-            "msg": "引用 %d 个 sprite，缺 %d 个；贴图文件缺失 %d 个" % (
-                len(refs), len(missing), len(bad_texture))}
-
-
-def _gfx_texture_exists(rel, layers):
-    """贴图文件是否存在于某一层（忽略大小写，游戏在 Windows 上不区分）"""
-    rel = (rel or "").replace(chr(92), "/").strip("/")
-    if not rel:
-        return True
-    low = rel.lower()
-    for base in (layers or []):
-        if not base:
-            continue
-        cand = os.path.join(base, rel.replace("/", os.sep))
-        if os.path.exists(cand):
-            return True
-        # 大小写不一致时按目录列举比对
-        d = os.path.dirname(cand)
-        if os.path.isdir(d):
-            try:
-                for fn in os.listdir(d):
-                    if fn.lower() == os.path.basename(cand).lower():
-                        return True
-            except Exception:
-                pass
-    return False
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _refine_state_warnings(pid, prov2state):
@@ -6888,107 +6537,6 @@ def read_error_log(path=None, limit_files=40):
             "items": items, "files": sorted(files.items(), key=lambda kv: -kv[1])[:limit_files]}
 
 
-def _bom_issues(root, limit=40):
-    """编码规范检查（HOI4 要求）：
-    - localisation/*.yml 必须带 UTF-8 BOM（否则游戏读不到本地化）
-    - common / history / events 下的 .txt 不应带 BOM
-    返回 (问题列表 [(类型, 相对路径)], yml 总数, txt 总数)
-
-    走叠加链但**跳过原版层**：只扫 root 那一层时，加载纯 submod 会漏掉父 mod
-    里那些同样会被游戏读取的 yml；而把 Paradox 原版一起算进来，报出来的是
-    「游戏本身不遵守这套规范」—— 用户改不了，还会把真问题淹掉
-    （本机实测：只查 mod 层 415 条 / 0.4s，含原版 1679 条 / 1.0s，其中 1264
-    条来自原版自带文件）。这里只读每个文件头 3 字节，开销只跟文件个数有关。"""
-    root = os.path.abspath(root)
-    BOM3 = bytes((0xEF, 0xBB, 0xBF))
-    issues = []
-    yml_n = txt_n = 0
-    bad_n = 0            # 真实问题总数，与 issues 长度分开
-    # 只限制「示例条数」，不掐扫描：老代码是 issues 攒到 limit*3 就整个 break，
-    # 那时扫的文件少（几十个）从没触发，数字恰好等于真实总数；改成扫叠加链后
-    # 会提前截断并把 415 条低报成 128 条，所以总数单独计数。
-    SAMPLE_CAP = limit * 3
-    # 护栏：正常 mod 层远低于此（本机 189 yml + 3451 txt，全量扫完约 0.4s）。
-    # 真撞上说明有人把游戏目录整个当 mod 加载了，抽样截断避免 lint 面板卡死。
-    MAX_FILES = 10000
-    scanned = 0
-    stopped = False
-
-    def _note(kind, rel):
-        nonlocal bad_n
-        bad_n += 1
-        if len(issues) < SAMPLE_CAP:
-            issues.append((kind, rel))
-
-    def _rel(fp, base):
-        """多来源时带上层名，否则不同层里的同名文件看起来是同一条。"""
-        r = os.path.relpath(fp, base)
-        if os.path.abspath(base) != root:
-            r = (os.path.basename(base.rstrip("\\/")) or base) + "/" + r
-        return r
-
-    seen_dirs = set()
-
-    def _walk_dirs(sub):
-        for base, d in _layer_dirs(sub, root):
-            if is_under_game(base):
-                continue
-            ab = os.path.abspath(d)
-            if ab in seen_dirs:
-                continue
-            seen_dirs.add(ab)
-            yield base, d
-
-    for base, locd in _walk_dirs("localisation"):
-        for dp, _dn, fs in os.walk(locd):
-            for fn in fs:
-                if not fn.lower().endswith(".yml"):
-                    continue
-                if scanned >= MAX_FILES:
-                    stopped = True
-                    break
-                scanned += 1
-                yml_n += 1
-                fp = os.path.join(dp, fn)
-                try:
-                    with open(fp, "rb") as f:
-                        head = f.read(3)
-                except Exception:
-                    continue
-                if head != BOM3:
-                    _note("缺 BOM", _rel(fp, base))
-            if stopped:
-                break
-        if stopped:
-            break
-    for sub in ("common", "history", "events"):
-        if stopped:
-            break
-        for base, d0 in _walk_dirs(sub):
-            for dp, _dn, fs in os.walk(d0):
-                for fn in fs:
-                    if not fn.lower().endswith(".txt"):
-                        continue
-                    if scanned >= MAX_FILES:
-                        stopped = True
-                        break
-                    scanned += 1
-                    txt_n += 1
-                    fp = os.path.join(dp, fn)
-                    try:
-                        with open(fp, "rb") as f:
-                            head = f.read(3)
-                    except Exception:
-                        continue
-                    if head == BOM3:
-                        _note("多余 BOM", _rel(fp, base))
-                if stopped:
-                    break
-            if stopped:
-                break
-    return issues[:limit], yml_n, txt_n, bad_n
-
-
 def lint_project(limit=1500):
 
 
@@ -7149,61 +6697,6 @@ def item_raw(kind, iid):
     m = {"idea": IDEAS, "equip": EQUIPMENTS, "tech": TECHS, "event": EVENTS}.get(kind) or {}
     return {"raw": m.get(iid, {}).get("raw", "")}
 
-def all_goal_icons():
-    out = []
-    for g, (tex, frames) in SPRITE_MAP.items():
-        tl = tex.lower().replace("\\", "/")
-        if "/interface/goals/" in tl:
-            out.append(g)
-    return sorted(out)
-
-def icon_png(gfx):
-    ent = SPRITE_MAP.get(gfx)
-    if not ent:
-        return None
-    tex, frames = ent
-    rel = tex.replace("/", os.sep)
-    # 找**实际生效的那份**：子 mod 覆盖父 mod，所以按链倒着找（子优先）。
-    # 和 build_icons 的读取顺序相反——那边是「后读覆盖先读」，这边是「先找到就用」。
-    cands = []
-    _seen_i = set()
-    for r in ROOTS:
-        for ab in reversed(_chain_layers(r)):
-            p = os.path.join(ab, rel)
-            if p not in _seen_i:
-                _seen_i.add(p)
-                cands.append(p)
-    if GAME:
-        p = os.path.join(GAME, rel)
-        if p not in _seen_i:
-            _seen_i.add(p)
-            cands.append(p)
-    dlc = os.path.join(GAME, "dlc")
-    if os.path.isdir(dlc):
-        for x in os.listdir(dlc):
-            p = os.path.join(dlc, x, rel)
-            if p not in _seen_i:
-                _seen_i.add(p)
-                cands.append(p)
-    src = next((c for c in cands if os.path.exists(c)), None)
-    if not src:
-        return None
-    png_name = re.sub(r'[^A-Za-z0-9_.-]', '_', gfx) + "_" + \
-        hashlib.md5((os.path.abspath(src) + str(os.path.getmtime(src))).encode("utf-8")).hexdigest()[:8] + ".png"
-    png = os.path.join(ICON_DIR, png_name)
-    try:
-        if not os.path.exists(png):
-            from PIL import Image
-            im = Image.open(src)
-            if frames > 1:
-                w, h = im.size
-                im = im.crop((0, 0, w // frames, h))
-            im = im.convert("RGBA")
-            im.thumbnail((64, 64))
-            im.save(png)
-        return png
-    except Exception:
-        return None
 
 def expand_shared_trees():
     byid = {}
@@ -7490,8 +6983,131 @@ def data_payload():
             # auto=True 表示「自动带进来的」（启动器启用 / dependencies 补的），
             # 前端把它淡一点显示，用户才知道数据是从哪来的。
             "layers": _payload_layers(),
+            "available_mods": discover_mods(),
+            "game_version": detect_game_version(),
             "layer_shadow": layer_shadow_stats(),
             "deps_hint": _deps_hint()}
+
+
+def layer_chain_payload(query="", kind="interacted", dir_filter="",
+                        layer_filter="", replace_filter="", limit=200, refresh=False):
+    """7-2 叠加链可视化：汇总链顺序、文件覆盖去向与 replace_path 屏蔽明细。"""
+    pl = _payload_layers()
+    raw_layers = [x.get("path") for x in pl if x.get("path")]
+    if not raw_layers:
+        raw_layers = mod_layers(None) or ([GAME] if GAME and os.path.isdir(GAME) else [])
+    res = analyze_layer_chain(
+        layers=raw_layers,
+        query=query,
+        kind=kind,
+        dir_filter=dir_filter,
+        layer_filter=layer_filter,
+        replace_filter=replace_filter,
+        limit=limit,
+        refresh=refresh,
+    )
+    pl_by_path = {os.path.normcase(os.path.abspath(x["path"])): x for x in pl if x.get("path")}
+    for lm in res.get("layers") or []:
+        ab = os.path.normcase(os.path.abspath(lm.get("path") or ""))
+        extra = pl_by_path.get(ab)
+        if extra:
+            lm["reason"] = extra.get("reason", "auto")
+            lm["readonly"] = bool(extra.get("readonly"))
+            lm["game"] = bool(extra.get("game"))
+            lm["auto"] = bool(extra.get("auto"))
+        else:
+            g = bool(GAME) and ab == os.path.normcase(os.path.abspath(GAME))
+            lm["reason"] = "game" if g else "auto"
+            lm["readonly"] = bool(_readonly_flag(lm.get("path") or ""))
+            lm["game"] = g
+            lm["auto"] = not g
+    return res
+
+
+def object_diff_payload(cat="all", status="interacted", query="",
+                        layer_filter="", obj_key="", limit=200, refresh=False):
+    """7-3 对象级覆盖对比：国策 / 事件 / 国家精神跨层定义与实机冲突分析。"""
+    pl = _payload_layers()
+    raw_layers = [x.get("path") for x in pl if x.get("path")]
+    if not raw_layers:
+        raw_layers = mod_layers(None) or ([GAME] if GAME and os.path.isdir(GAME) else [])
+    return analyze_objects(
+        layers=raw_layers,
+        cat=cat,
+        status=status,
+        query=query,
+        layer_filter=layer_filter,
+        obj_key=obj_key,
+        limit=limit,
+        refresh=refresh,
+    )
+
+
+def game_verify_status(game_dir="", docs_dir=""):
+    """7-4 进游戏检查：返回环境预检、首次确认状态、当前进度与最近报错报告。"""
+    pl = _payload_layers()
+    raw_layers = [x.get("path") for x in pl if x.get("path")]
+    if not raw_layers:
+        raw_layers = mod_layers(None) or []
+    return get_verify_status(layers=raw_layers, game_dir=game_dir or GAME or "", docs_dir=docs_dir)
+
+
+def game_verify_start(body=None):
+    """7-4 启动进游戏检查（未确认前拦回 need_confirm=True，避免静默改 dlc_load.json）。"""
+    b = body or {}
+    pl = _payload_layers()
+    raw_layers = [x.get("path") for x in pl if x.get("path")]
+    if not raw_layers:
+        raw_layers = mod_layers(None) or []
+    return start_game_verify(
+        layers=raw_layers,
+        confirm=bool(b.get("confirm", False)),
+        baseline_mode=(b.get("baseline_mode") or "parents"),
+        reuse_baseline=bool(b.get("reuse_baseline", True)),
+        game_dir=b.get("game_dir") or GAME or "",
+        docs_dir=b.get("docs_dir") or "",
+    )
+
+
+def game_verify_cancel():
+    return cancel_game_verify()
+
+
+def publish_preview(body=None):
+    """7-5 打包发布预检：解析目标 mod 元数据、依赖校验、剔除列表与 BOM 修正。"""
+    b = body or {}
+    pl = _payload_layers()
+    raw_layers = [x.get("path") for x in pl if x.get("path")]
+    if not raw_layers:
+        raw_layers = mod_layers(None) or list(ROOTS or [])
+    return preview_publish(
+        mod_root=b.get("mod_root") or "",
+        layers=raw_layers,
+        out_dir=b.get("out_dir") or "",
+        folder_id=b.get("folder_id") or "",
+        docs_dir=b.get("docs_dir") or "",
+        overrides=b.get("overrides"),
+    )
+
+
+def publish_export(body=None):
+    """7-5 打包发布导出：输出工坊就绪目录、可选启动器 .mod 与 .zip 压缩包。"""
+    b = body or {}
+    pl = _payload_layers()
+    raw_layers = [x.get("path") for x in pl if x.get("path")]
+    if not raw_layers:
+        raw_layers = mod_layers(None) or list(ROOTS or [])
+    return export_publish(
+        mod_root=b.get("mod_root") or "",
+        layers=raw_layers,
+        out_dir=b.get("out_dir") or "",
+        folder_id=b.get("folder_id") or "",
+        docs_dir=b.get("docs_dir") or "",
+        register_launcher=bool(b.get("register_launcher", True)),
+        overwrite_launcher_mod=bool(b.get("overwrite_launcher_mod", False)),
+        also_zip=bool(b.get("also_zip", False)),
+        overrides=b.get("overrides"),
+    )
 
 
 
@@ -7526,7 +7142,8 @@ def add_tree(root, tree_id):
         return False, "参数不完整：缺少树 id"
     d = os.path.join(root, "common", "national_focus")
     os.makedirs(d, exist_ok=True)
-    path = os.path.join(d, "zz_focus_editor_trees.txt")
+    fn = unique_editor_filename(root, "common/national_focus", "zz_focus_editor_trees.txt")
+    path = os.path.join(d, fn)
     text = io.open(path, encoding="utf-8", errors="replace", newline="").read() if os.path.exists(path) else ""
     if re.search(r'(?m)^\s*id\s*=\s*"?%s"?' % re.escape(tree_id), text):
         return False, "树已存在: " + tree_id
@@ -7534,7 +7151,7 @@ def add_tree(root, tree_id):
     backup(path)
     snapshot(path)
     io.open(path, "w", encoding="utf-8", newline="").write(text + block)
-    CHANGED[path] = os.path.join("common", "national_focus", "zz_focus_editor_trees.txt")
+    CHANGED[path] = os.path.join("common", "national_focus", fn)
     reload_data()
     return True, "已新建树 " + tree_id
 
@@ -7559,98 +7176,6 @@ def delete_tree(root, file, tree_id):
             reload_data()
             return True, "已删除树 " + tree_id
     return False, "未找到树 " + tree_id
-
-# ---------------- 图标 ----------------
-def parse_gfx_file(path):
-    s = io.open(path, encoding="utf-8-sig", errors="replace").read()
-    out = {}
-    for m in re.finditer(r'spriteType\s*=\s*\{', s, re.I):
-        b = m.end() - 1
-        e = brace_match(s, b)
-        body = s[b + 1:e - 1]
-        name = re.search(r'name\s*=\s*"?([^"\s]+)"?', body, re.I)
-        tex = re.search(r'texturefile\s*=\s*"?([^"\s]+)"?', body, re.I)
-        frames = re.search(r'noOfFrames\s*=\s*(\d+)', body, re.I)
-        if name and tex:
-            out[name.group(1)] = (tex.group(1), int(frames.group(1)) if frames else 1)
-    return out
-
-def build_icons(roots, game):
-    global ICONS, SPRITE_MAP, TECH_ICONS
-    sprite_map = {}
-    dirs = []
-    seen = set()
-
-    # v1.23.46：sprite 索引必须扫**整条叠加链**。
-    # 只扫 ROOTS 的话，子 mod 自己没有 interface/ 时 sprite_map 就是空的，
-    # 于是每个国策节点都变成破图（KaiserReich 子 mod 实测 230 棵树、3253 个图标、
-    # SPRITE_MAP 0 条）。
-    #
-    # 读取顺序（后读覆盖先读）：DLC → 原版 → 父 mod → 子 mod。
-    # `_chain_layers` 已经把原版排在最前，所以 DLC 单独补在更前面。
-    dlc = os.path.join(game, "dlc")
-    if os.path.isdir(dlc):
-        for x in sorted(os.listdir(dlc)):
-            p = os.path.join(dlc, x, "interface")
-            if os.path.isdir(p):
-                ap = os.path.abspath(p)
-                if ap not in seen:
-                    seen.add(ap)
-                    dirs.append(p)
-    for r in roots:
-        for ab in _chain_layers(r):
-            d = os.path.join(ab, "interface")
-            if os.path.isdir(d):
-                ap = os.path.abspath(d)
-                if ap not in seen:
-                    seen.add(ap)
-                    dirs.append(d)
-    base = os.path.join(game, "interface")
-    if os.path.isdir(base):
-        ap = os.path.abspath(base)
-        if ap not in seen:
-            seen.add(ap)
-            dirs.append(base)
-    for d in dirs:
-        # **必须递归**：HOI4 会加载 interface/ 子目录里的 .gfx，Kaiserreich 的国策图标
-        # 全在 interface/kaiserreich/goals.gfx，只 listdir 顶层的话 3000 多个图标一个都读不到。
-        for dirpath, _subdirs, _files in os.walk(d):
-            for fn in sorted(_files):
-                if fn.lower().endswith(".gfx"):
-                    try:
-                        sprite_map.update(parse_gfx_file(os.path.join(dirpath, fn)))
-                    except Exception:
-                        pass
-    from PIL import Image
-    SPRITE_MAP = sprite_map
-    used = set()
-    for tid in TREE_ORDER:
-        for f in TREES[tid]["focuses"]:
-            if f.get("icon"):
-                used.add(f["icon"])
-    langs = os.listdir(dlc) if os.path.isdir(dlc) else []
-    for gfx in used:
-        if gfx in sprite_map:
-            ICONS[gfx] = "/api/icon?gfx=" + gfx
-    print("icons:", len(ICONS), "/", len(used))
-    global EQUIP_ICONS
-    EQUIP_ICONS = {}
-    for gfx, (tex, frames) in sprite_map.items():
-        tl = tex.lower().replace("\\", "/")
-        if "/interface/equipment/" in tl:
-            EQUIP_ICONS[gfx] = "/api/icon?gfx=" + gfx
-    print("equip icons:", len(EQUIP_ICONS))
-    TECH_ICONS = {}
-    for gfx, (tex, frames) in sprite_map.items():
-        tl = tex.lower().replace("\\", "/")
-        gl = gfx.lower()
-        if ("/interface/technologies/" in tl or "/interface/tech/" in tl
-                or gl.startswith("gfx_tech") or gl.endswith("_tab")
-                or "_technology_" in gl):
-            TECH_ICONS[gfx] = "/api/icon?gfx=" + gfx
-    print("tech icons:", len(TECH_ICONS))
-
-
 
 
 # ---------------- 树级设置 ----------------
@@ -8090,12 +7615,7 @@ def _is_readonly_root(p):
     创意工坊路径形如 <Steam>/steamapps/workshop/content/<appid>/<modid>，
     Steam 会在校验时把它改回去，写进去等于白改，还会污染订阅内容。
     """
-    ab = os.path.abspath(p or "")
-    if not ab:
-        return False
-    if is_under_game(ab):
-        return True
-    return "/steamapps/workshop/" in ab.replace("\\", "/").lower()
+    return is_readonly_mod(p)
 
 
 def entry_source(root, file, layer=None):
@@ -8415,7 +7935,8 @@ def add_shared_focus(root, sid):
         return False, "id 只能字母数字下划线"
     d = os.path.join(root, "common", "national_focus")
     os.makedirs(d, exist_ok=True)
-    path = os.path.join(d, "zz_focus_editor_shared.txt")
+    fn = unique_editor_filename(root, "common/national_focus", "zz_focus_editor_shared.txt")
+    path = os.path.join(d, fn)
     text = io.open(path, encoding="utf-8", errors="replace", newline="").read() if os.path.exists(path) else ""
     if re.search(r'(?m)^\s*id\s*=\s*"?%s"?' % re.escape(sid), text):
         return False, "共享焦点已存在"
@@ -8423,7 +7944,7 @@ def add_shared_focus(root, sid):
              "\tx = 0\n\ty = 0\n\tcost = 1\n}\n" % sid)
     snapshot(path)
     io.open(path, "w", encoding="utf-8", newline="").write(text + block)
-    CHANGED[path] = os.path.join("common", "national_focus", "zz_focus_editor_shared.txt")
+    CHANGED[path] = os.path.join("common", "national_focus", fn)
     reload_data()
     return True, "已新建共享焦点 " + sid
 
@@ -8445,6 +7966,12 @@ def delete_shared_focus(root, rel, sid):
 
 # ---------------- HTTP 服务 ----------------
 INDEX = os.path.join(RES_DIR, "focus_editor_index.html")
+
+# 2C：三个启动期路径写进 state 的槽位，handlers 从此不必为了读目录去摸门面。
+# RES_DIR 在打包后是 sys._MEIPASS（解压目录），ICON_DIR 跟着可写的 WORK，INDEX 跟着 RES_DIR。
+_state.set_path_var("RES_DIR", RES_DIR)
+_state.set_path_var("ICON_DIR", ICON_DIR)
+_state.set_path_var("INDEX", INDEX)
 
 # ---------- v1.24.0 错误码 ----------
 # 529 个失败分支不可能逐个改。在 _send 出口按文案归类，前端拿 code 翻成人话；
@@ -8505,11 +8032,29 @@ def _prepare_post(h):
     return body
 
 
+def _log_server_error(tag, path, err, tb):
+    """未捕获请求异常同时写 stderr 与 work/logs/server_error.log，方便事后查完整堆栈。"""
+    msg = "[%s] %s %s -> %s\n%s\n" % (
+        time.strftime("%Y-%m-%d %H:%M:%S"), tag, path, err, tb.rstrip())
+    try:
+        sys.stderr.write(msg)
+        sys.stderr.flush()
+    except Exception:
+        pass
+    try:
+        log_dir = os.path.join(WORK, "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        with io.open(os.path.join(log_dir, "server_error.log"), "a", encoding="utf-8", newline="\n") as f:
+            f.write(msg)
+    except Exception:
+        pass
+
+
 class Handler(SimpleHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-    def _send(self, obj, code=200, ctype="application/json; charset=utf-8"):
+    def _send(self, obj, code=200, ctype="application/json; charset=utf-8", extra=None):
         # v1.24.1：防重发。崩溃兜底层和内层都会调 _send，一个请求只能回一次；
         # 多发一次的后果是浏览器把第二次响应当成下一个请求的响应，整条连接错位。
         if getattr(self, "_sent", False):
@@ -8541,6 +8086,9 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         for k, v in hdrs:
             self.send_header(k, v)
+        if extra:
+            for k, v in extra:
+                self.send_header(k, v)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -8574,17 +8122,18 @@ class Handler(SimpleHTTPRequestHandler):
         # 网络层错误，看不到 code。这里兜住，至少回一个能读的错误。
         try:
             path_only = self.path.split("?")[0]
+            gate = _boot_gate(path_only)
+            if gate is not None:
+                # 加载中：告诉浏览器 1 秒后重试，别把 503 缓存成失败
+                self._send(gate, 503, extra=[("Retry-After", "1"), ("Cache-Control", "no-store")])
+                return
             if not routes_get.dispatch(self, path_only):
                 self._send({"err": "not found"}, 404)
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             self.close_connection = True
         except Exception as e:
             import traceback
-            try:
-                sys.stderr.write("[do_GET] %s\n%s\n" % (e, traceback.format_exc()))
-                sys.stderr.flush()
-            except Exception:
-                pass
+            _log_server_error("do_GET", self.path, e, traceback.format_exc())
             if not getattr(self, "_sent", False):
                 try:
                     self._send({"ok": False, "code": "INTERNAL",
@@ -8596,6 +8145,11 @@ class Handler(SimpleHTTPRequestHandler):
         # v1.24.1：同 do_GET。这里是重点——参数缺失、路径拼不出来这类 TypeError
         # 原来直接冒到 socketserver，浏览器只收到「连接被断」。
         try:
+            path_only = self.path.split("?")[0]
+            gate = _boot_gate(path_only)
+            if gate is not None:
+                self._send(gate, 503, extra=[("Retry-After", "1"), ("Cache-Control", "no-store")])
+                return
             body = _prepare_post(self)
             if body is None:
                 return
@@ -8605,11 +8159,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.close_connection = True
         except Exception as e:
             import traceback
-            try:
-                sys.stderr.write("[do_POST] %s\n%s\n" % (e, traceback.format_exc()))
-                sys.stderr.flush()
-            except Exception:
-                pass
+            _log_server_error("do_POST", self.path, e, traceback.format_exc())
             if not getattr(self, "_sent", False):
                 try:
                     self._send({"ok": False, "code": "INTERNAL",
@@ -8674,6 +8224,9 @@ def load_mod_root(path):
     if path in ROOTS:
         return False, "这个目录已经加载过了"
     ROOTS.append(path)
+    _LAYERS_CACHE.clear()
+    invalidate_chain_cache()
+    invalidate_object_cache()
     n = load_mod(path)
     _lp("关联国家", "", 96)
     link_countries()
@@ -8685,6 +8238,45 @@ def load_mod_root(path):
     _lp_done()
     return True, "已加载 %s（%d 棵树）" % (os.path.basename(path), n)
 
+def _boot_load(roots):
+    """启动期把 mod 读进内存。跑在后台线程里，端口先起来、页面先出来。
+
+    调用方负责在起线程之前就把 LOAD_PROGRESS["active"] 置 True —— 否则
+    serve_forever 已经开始接请求、而这里还没跑到第一行，会有一个放行的窗口。
+    """
+    try:
+        try:
+            rec = recover_pending_dlc_load()
+            if rec and rec.get("msg"):
+                print(rec["msg"])
+        except Exception:
+            pass
+        load_game_loc()
+        for r in roots:
+            r = os.path.abspath(r)
+            if r not in ROOTS:
+                ROOTS.append(r)
+        refresh_start_date(ROOTS)
+        # reload_data() 内部已经做了 for r in ROOTS: load_mod(r)，并且自己调了
+        # link_countries() 与 _lp_done()。别再在它之前跑一遍 load_mod：成果会被它
+        # 开头的 12 个 clear() 整个丢弃，白读 2.5 秒，pct 还会从 96 掉回 59。
+        total = reload_data()
+        if ROOTS:
+            build_icons(ROOTS, GAME)
+        else:
+            print("未指定 mod：启动后请在网页里选择 mod 文件夹")
+        print("已加载 mod:", len(ROOTS), " 树:", total)
+        print("开局日期:", START_DATE_TEXT, "| STATES:", len(STATES))
+        LOAD_PROGRESS["ready"] = True
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        _lp_fail(e)
+    finally:
+        LOAD_PROGRESS["active"] = False
+        LOAD_PROGRESS["t"] = time.time()
+
+
 def main():
     global GAME
     _load_options()
@@ -8695,26 +8287,15 @@ def main():
     args = ap.parse_args()
     GAME = args.game
     roots = args.mod or playset_load_saved()   # 没传 --mod 时用上次保存的播放集
-    load_game_loc()
-    total = 0
-    for r in roots:
-        r = os.path.abspath(r)
-        if r not in ROOTS:
-            ROOTS.append(r)
-            total += load_mod(r)
-    refresh_start_date(ROOTS)
-    reload_data()
-    link_countries()
-    _lp_done()
-    print("开局日期:", START_DATE_TEXT, "| STATES:", len(STATES))
-    if ROOTS:
-        build_icons(ROOTS, GAME)
-    else:
-        print("未指定 mod：启动后请在网页里选择 mod 文件夹")
-    print("已加载 mod:", len(ROOTS), " 树:", total)
+    # 端口先起：页面 0.2 秒就出来，数据在后台线程里读，前端轮询 /api/boot_status
+    # 显示进度。加载期间数据类请求由 _boot_gate 拦成 503 —— reload_data 会原地
+    # 清空 12 个容器，半清空状态下读它们会 KeyError（全仓没有锁，也不为这个加锁）。
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     url = "http://127.0.0.1:%d/" % args.port
     print("打开:", url)
+    _lp_begin("boot")
+    LOAD_PROGRESS["active"] = True
+    threading.Thread(target=_boot_load, args=(roots,), name="boot", daemon=True).start()
     threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     server.serve_forever()
 
@@ -8729,11 +8310,11 @@ _m_tech.bind(reload_data)
 from xuerong.model import event as _m_event
 _m_event.bind(reload_data)
 from xuerong.model import replace as _m_replace
-_m_replace.bind(adopt_dir, snapshot, reload_data)
-_m_map.bind(_qa_dir=_qa_dir, _dir_mtime=_dir_mtime, _first=_first,
-            load_units=load_units, _state_locate=_m_state._state_locate,
+_m_replace.bind(adopt_dir, snapshot, reload_data, ensure_file_writable)
+_m_map.bind(load_units=load_units, _state_locate=_m_state._state_locate,
             _parse_state_provinces=_parse_state_provinces,
             _set_state_provinces=_set_state_provinces)
+_m_map.set_progress_hook(_lp, begin=_lp_begin, done=_lp_done, fail=_lp_fail)
 _m_state.bind(_all_prov_neighbors=_all_prov_neighbors,
               _hist_depths=_hist_depths, _hist_find_top=_hist_find_top,
               _refine_grow_units=_refine_grow_units,
@@ -8744,12 +8325,13 @@ _m_state.bind(_all_prov_neighbors=_all_prov_neighbors,
               refresh_start_date=refresh_start_date,
               reload_data=reload_data)
 from xuerong.model import world as _m_world
-_m_world.bind(reload_data=reload_data, load_mod=load_mod, _qa_dir=_qa_dir, _lp_done=_lp_done)
+_m_world.bind(reload_data=reload_data, load_mod=load_mod, _lp_done=_lp_done)
 from xuerong.model import focus as _m_focus
 _m_focus.bind(reload_data=reload_data, lp=_lp)
 from xuerong.model import character as _m_character
 _m_character.bind(ensure_file_writable=ensure_file_writable)
 _m_replace.set_ref_scanner(_diag_replace_refs)
+_m_replace.set_progress_hook(_lp, begin=_lp_begin, done=_lp_done, fail=_lp_fail)
 
 
 # ---- 路由表装配自检（必须在所有顶层名字定义完之后）----
@@ -8762,9 +8344,6 @@ _ROUTE_STATS = _router.stats()
 assert _ROUTE_STATS["post"] and _ROUTE_STATS["get"] and _ROUTE_STATS["prefix"], (
     "路由表装配不完整：%r。检查 xuerong/api/handlers/__init__.py 的 import 名单"
     % (_ROUTE_STATS,))
-
-if __name__ == "__main__":
-    main()
 
 
 # 17 个地图容器现在归 xuerong.state 所有；门面保留同名引用，
@@ -8819,4 +8398,13 @@ _coastal_provinces = _m_state._coastal_provinces
 _free_state_id = _m_state._free_state_id
 _insert_pos = _m_state._insert_pos
 _set_resource = _m_state._set_resource
+
+
+# 启动入口必须放在文件最末：上面两个兼容别名区（17 个地图容器 + 27 个 state 函数）
+# 是门面同名的落脚点，`python focus_editor.py` 直接运行时靠的就是它们。原先这行
+# 写在别名区之前，`main()` 里 `serve_forever()` 一阻塞，别名区永远执行不到——
+# refine_apply 第 2672 行读 `_REFINE_IDS_CACHE` 会直接 NameError，而 `import
+# focus_editor`（测试与外部脚本的方式）因为整个模块执行完，看不出问题。
+if __name__ == "__main__":
+    main()
 

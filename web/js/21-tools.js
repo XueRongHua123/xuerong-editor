@@ -497,7 +497,7 @@ function initNarrowMore(){
   if(!btn || !menu) return;
   const move = [
     ['💾 保存', 'btnSaveAll'],
-    ['📤 导出覆盖包', 'btnExport'],
+    ['📦 打包发布', 'btnExport'],
     ['🩺 体检', 'btnLint'],
     ['🕘 备份', 'btnBackup'],
     ['📖 内容库', 'btnLibrary'],
@@ -521,7 +521,7 @@ function initNarrowMore(){
     item.onclick = ()=>{
       menu.classList.remove('show');
       const map = {
-        '💾 保存': 'saveAll', '📤 导出覆盖包': 'exportBtn', '🩺 体检': 'lintEntry',
+        '💾 保存': 'saveAll', '📦 打包发布': 'exportBtn', '🩺 体检': 'lintEntry',
         '🕘 备份': 'backupBtn', '📖 内容库': 'contentBtn', '❓ 教程': 'helpBtn'
       };
       const id = map[item.dataset.label];
@@ -553,8 +553,10 @@ function initNarrowMore(){
       const tag = x.blocked
         ? '<span style="color:#e8a33d">独占</span>'
         : '<span style="color:#7bc47f">可写</span>';
+      const modName = String(x.mod || '父层').replace(/"/g, '&quot;');
+      const fcount = Number(x.file_count || 0);
       const btn = x.blocked
-        ? '<button class="btn wt-adopt" data-sub="' + x.sub + '" style="height:20px;font-size:10px;padding:0 6px">接管</button>'
+        ? '<button class="btn wt-adopt" data-sub="' + x.sub + '" data-mod="' + modName + '" data-count="' + fcount + '" style="height:20px;font-size:10px;padding:0 6px">接管</button>'
         : '';
       return '<div style="display:flex;align-items:center;gap:6px;padding:2px 4px;'
         + 'font-size:11px;font-family:Consolas,monospace;border-bottom:1px solid var(--line)">'
@@ -567,7 +569,9 @@ function initNarrowMore(){
     box.querySelectorAll('.wt-adopt').forEach(function(b){
       b.onclick = async function(){
         const sub = b.dataset.sub;
-        if(!confirm('把 ' + sub + ' 从父 mod 全量拷贝到自己的 mod 并接管？\n\n拷贝后这个目录只读你自己的副本。')) return;
+        const mod = b.dataset.mod || '父层';
+        const count = Number(b.dataset.count || 0);
+        if(!confirm('接管会复制 ' + mod + ' 的全部 ' + sub + '（共 ' + count + ' 个文件）到当前 mod 并写入 replace_path，之后只读自己的副本，确认吗？')) return;
         msg('接管 ' + sub + ' 中…');
         let r2 = await (await fetch('/api/adopt_dir', {method:'POST',
           headers:{'Content-Type':'application/json'},

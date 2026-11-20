@@ -23,7 +23,8 @@ import os
 import re
 
 from xuerong import state
-from xuerong.core.paths import _layer_files, is_under_game, mod_layers, write_base
+from xuerong.core.paths import (_layer_files, _replace_owner, is_under_game,
+                                mod_layers, unique_editor_filename, write_base)
 from xuerong.core.text import (_atomic_write, _bom_for, _first, _strip_keep_len, brace_match,
                                find_blocks)
 from xuerong.model.history import snapshot
@@ -42,6 +43,15 @@ def ensure_file_writable(*a, **k):
     return _INJ["ensure_file_writable"](*a, **k)
 
 
+def _pick_root(root=None):
+    if root:
+        return root
+    rs = state.roots()
+    if rs:
+        return rs[-1]
+    return state.game()
+
+
 def portrait_import(root, src_path, tag, cid=None, overwrite=False, small=False):
     """把一张图导入成人物头像。
 
@@ -50,7 +60,7 @@ def portrait_import(root, src_path, tag, cid=None, overwrite=False, small=False)
 
     返回 {"ok", "sprite", "file", "msg"}。
     """
-    root = _map_pick(root)
+    root = _pick_root(root)
     tag = (tag or "").strip().upper()
     if not tag:
         return {"ok": False, "msg": "没给国家 tag"}
@@ -156,7 +166,7 @@ def load_characters(root=None):
             }
         }
     """
-    root = _map_pick(root)
+    root = _pick_root(root)
     files, _rep = _layer_files("common/characters", mod_layers(root))
     items, seen = [], set()
     for p in (files or []):
@@ -234,16 +244,20 @@ def _char_write_base(root):
         cand = lay[-1] if lay else r
         if cand and not is_under_game(cand):
             top = cand
+    if not top and root and not is_under_game(root):
+        top = root
     if not top:
         return None, "找不到可写的 mod 目录"
-    tgt, why = write_base(root, "common/characters")
-    if not tgt:
-        return None, "找不到可写目录"
-    if os.path.abspath(tgt) != os.path.abspath(top):
-        nm = os.path.basename(tgt.rstrip("\\/")) or tgt
-        return None, ("common/characters 被 %s 的 replace_path 独占，"
-                      "请先在「诊断 → 目录写入目标」里接管该目录" % nm)
-    return tgt, ""
+    owner = _replace_owner(root or top, "common/characters")
+    if owner and os.path.abspath(owner) != os.path.abspath(top):
+        chain = [os.path.abspath(x) for x in (mod_layers(root or top) or []) if x]
+        ab_top = os.path.abspath(top)
+        ab_own = os.path.abspath(owner)
+        if ab_own in chain and ab_top in chain and chain.index(ab_own) > chain.index(ab_top):
+            nm = os.path.basename(owner.rstrip("\\/")) or owner
+            return None, ("common/characters 被 %s 的 replace_path 独占，"
+                          "请先在「诊断 → 目录写入目标」里接管该目录" % nm)
+    return top, ""
 
 
 
@@ -255,9 +269,10 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
 
     写进 common/characters/zz_editor_characters.txt（不覆盖别人已有的文件）。
     """
-    root = _map_pick(root)
+    root = _pick_root(root)
     cid = (cid or "").strip()
     name = (name or "").strip()
+    ctype = (ctype or "corps_commander").strip()
     if not cid:
         return {"ok": False, "msg": "id 不能为空"}
     if not re.match(r'^[A-Za-z][A-Za-z0-9_\-\.]*$', cid):
@@ -317,7 +332,8 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
                 except Exception:
                     pass
     else:
-        p = os.path.join(d, "zz_editor_characters.txt")
+        fn_char = unique_editor_filename(tgt, "common/characters", "zz_editor_characters.txt")
+        p = os.path.join(d, fn_char)
 
     # 给了图片就先导入成头像，自动拿到 sprite 名
     portrait_note = ""
@@ -424,7 +440,7 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
 
 def character_set(root, cid, fields):
     """改人物：名字 / 技能 / 特质。"""
-    root = _map_pick(root)
+    root = _pick_root(root)
     cid = (cid or "").strip()
     if not cid:
         return {"ok": False, "msg": "id 不能为空"}
@@ -524,7 +540,7 @@ def character_set(root, cid, fields):
 
 def character_delete(root, cid):
     """删掉一个人物（整块）。"""
-    root = _map_pick(root)
+    root = _pick_root(root)
     cid = (cid or "").strip()
     if not cid:
         return {"ok": False, "msg": "id 不能为空"}

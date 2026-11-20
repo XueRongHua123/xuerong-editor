@@ -6,8 +6,10 @@ async function addTech(){
   if(!tid) return;
   const folder = prompt('所属科技组 folder：', ttFolder || 'custom_folder');
   if(!folder) return;
+  const root = _writableRoot();
+  if(!root){ status('先加载或新建一个可写的模组', true); return; }
   const r = await fetch('/api/tech_add', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root: (DATA.roots[0]||{}).path, id: tid, folder})});
+    body: JSON.stringify({root, id: tid, folder})});
   const j = await r.json();
   status(j.msg || '', !j.ok);
   if(j.ok){ await loadData(); renderTechList(''); }
@@ -543,15 +545,34 @@ function fitTT(){
     if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
   }
 
+  function chainSig(){
+    const d = (typeof DATA !== 'undefined' && DATA) ? DATA : {};
+    const arr = (d.layers && d.layers.length) ? d.layers : (d.roots || []);
+    return arr.map(function(x){ return x.path || x.name || ''; }).join('|');
+  }
+
   async function loadFolders(){
     const sel = document.getElementById('ttFolder');
     if(!sel) return;
+    // 启动期接口回 503，拿到的是 {"ok":false,"code":"LOADING"}，会被下面当成错误弹出来。
+    // 排队到 boot 就绪后再取。
+    if(window.XRBOOT && !window.XRBOOT.ready){
+      window.XRBOOT.after(loadFolders);
+      return;
+    }
+    const sig = chainSig();
+    if(sel.dataset.sig === sig && sel.options.length > 1) return;
+    const prev = sel.value;
     const r = await (await fetch('/api/tech_graph', {method:'POST',
       headers:{'Content-Type':'application/json'}, body: JSON.stringify({folder:''})})).json();
     if(!r.ok){ msg(r.msg || '失败', true); return; }
     sel.innerHTML = '<option value="">（选目录）</option>' + (r.folders || []).map(function(f){
       return '<option value="' + f.folder + '">' + f.folder + '（' + f.count + '）</option>';
     }).join('');
+    if(prev && Array.from(sel.options).some(function(o){ return o.value === prev; })){
+      sel.value = prev;
+    }
+    sel.dataset.sig = sig;
     msg(r.msg || '');
   }
 
@@ -687,9 +708,14 @@ function fitTT(){
     const b = document.getElementById('ttDraw');
     if(b && !b.dataset.bound){ b.dataset.bound = '1'; b.onclick = draw; }
     const s2 = document.getElementById('ttFolder');
-    if(s2 && !s2.dataset.bound){ s2.dataset.bound = '1'; s2.onchange = draw; }
-    if(s2 && !s2.dataset.filled){ s2.dataset.filled = '1'; loadFolders(); }
+    if(s2 && !s2.dataset.bound){
+      s2.dataset.bound = '1';
+      s2.onchange = draw;
+      s2.onfocus = function(){ loadFolders(); };
+    }
+    if(s2) loadFolders();
   }
+  window.techRefreshFolders = function(){ return loadFolders(); };
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);
 })();

@@ -85,7 +85,7 @@ async function mapRunCheck(){
 
 // v0.94 涂色交互（前端逻辑）
 (function(){
-  let pending = 0, painting = false, lastDab = 0;
+  let pending = 0, painting = false, begun = false, downActive = false, lastDab = 0;
 
   async function paintCall(body){
     try{
@@ -108,9 +108,10 @@ async function mapRunCheck(){
   async function paintBegin(){
     const r = await paintCall({act:'begin', root: MAP.root || ''});
     if(!r.ok){ status(r.msg || '无法开始涂色', true); return false; }
+    begun = true;
     pending = 0;
     paintStat('待涂 0 像素');
-    status('涂色就绪：可在地图上拖动');
+    status('涂色就绪：可在地图上点击或拖动');
     return true;
   }
 
@@ -121,7 +122,7 @@ async function mapRunCheck(){
     const r = await paintCall({act:'dab', x: Math.round(imgX), y: Math.round(imgY), r: radius, pid: pid});
     if(r.ok){
       pending += r.pixels || 0;
-      paintStat('待涂 ' + pending + ' 像素');
+      paintStat('待涂 ' + pending + ' 像素（点「应用」写盘）');
       const tp = document.getElementById('paintPid');
       if(tp) tp.textContent = String(pid);
     }
@@ -132,6 +133,7 @@ async function mapRunCheck(){
     const r = await paintCall({act:'commit'});
     if(!r.ok){ status(r.msg || '写入失败', true); return; }
     pending = 0;
+    begun = false;
     paintStat('已写盘（撤销栈 ' + (r.undo_depth || 0) + '）');
     status('已写入 ' + (r.pixels || 0) + ' 像素，正在重建图层…');
     // 地图变了，缓存键虽未变但像素变了 → 强制重建
@@ -140,12 +142,14 @@ async function mapRunCheck(){
 
   async function paintUndo(){
     const r = await paintCall({act:'undo'});
+    paintStat(r.ok ? ('已撤销（撤销栈 ' + (r.undo_depth || 0) + '）') : (r.msg || '没有可撤销'));
     status(r.ok ? ('已撤销（剩 ' + (r.undo_depth || 0) + ' 步）') : (r.msg || '没有可撤销'), !r.ok);
     if(r.ok){ try{ await mapBuild(true); }catch(e){} }
   }
 
   async function paintRedo(){
     const r = await paintCall({act:'redo'});
+    paintStat(r.ok ? ('已重做（撤销栈 ' + (r.undo_depth || 0) + '）') : (r.msg || '没有可重做'));
     status(r.ok ? '已重做' : (r.msg || '没有可重做'), !r.ok);
     if(r.ok){ try{ await mapBuild(true); }catch(e){} }
   }
@@ -165,32 +169,45 @@ async function mapRunCheck(){
       if(MAP.mode !== 'paint') return;
       if(e.button !== 0) return;
       if(mapEventOverUI(e)) return;
-      const ok = await paintBegin();
-      if(!ok) return;
-      painting = true;
-      wrap.classList.add('dragging');
+      e.stopPropagation();
+      e.preventDefault();
+      downActive = true;
       const p = mapScreenToImage(e.clientX, e.clientY);
+      if(!begun){
+        const ok = await paintBegin();
+        if(!ok){ downActive = false; return; }
+      }
+      if(downActive){
+        painting = true;
+        wrap.classList.add('dragging');
+      }
       lastDab = Date.now();
-      paintDab(p.x, p.y);
+      await paintDab(p.x, p.y);
     }, true);
     wrap.addEventListener('pointermove', e=>{
       if(!painting || MAP.mode !== 'paint') return;
+      e.stopPropagation();
       const now = Date.now();
       if(now - lastDab < 40) return;   // 节流
       lastDab = now;
       const p = mapScreenToImage(e.clientX, e.clientY);
       paintDab(p.x, p.y);
     }, true);
-    window.addEventListener('pointerup', ()=>{
+    const endPaint = e=>{
+      downActive = false;
       if(painting){
         painting = false;
         wrap.classList.remove('dragging');
+        if(e && e.stopPropagation) e.stopPropagation();
         paintStat('待涂 ' + pending + ' 像素（点「应用」写盘）');
       }
-    }, true);
+    };
+    wrap.addEventListener('pointerup', endPaint, true);
+    window.addEventListener('pointerup', endPaint, true);
   }
 
   window.mapBindPaint = bindPaint;
+  window.mapPaintReset = function(){ begun = false; pending = 0; painting = false; downActive = false; };
 })();
 
 
@@ -2132,21 +2149,45 @@ function makePannable(svg, body){
 
 // v1.12.0 地形编辑
 (function(){
-  let TYPES = null, curPid = 0;
+  let TYPES = null, TYPES_SIG = null, curPid = 0;
+
+  function terrainSig(){
+    const mr = (typeof MAP !== 'undefined' && MAP && MAP.root) ? MAP.root : '';
+    const d = (typeof DATA !== 'undefined' && DATA) ? DATA : {};
+    const arr = (d.layers && d.layers.length) ? d.layers : (d.roots || []);
+    return mr + '|' + arr.map(function(x){ return x.path || x.name || ''; }).join('|');
+  }
 
   async function loadTypes(){
-    if(TYPES) return TYPES;
+    const sig = terrainSig();
+    if(TYPES && TYPES_SIG === sig) return TYPES;
+    // 启动期后端还在读 mod，数据类接口会回 503。这时去拿会把空结果缓存死，
+    // 之后地形下拉框永远是空的——所以排队到 boot 就绪之后再取。
+    if(window.XRBOOT && !window.XRBOOT.ready){
+      window.XRBOOT.after(loadTypes);
+      return null;
+    }
+    let items = null;
     try{
       const r = await (await fetch('/api/terrain_types')).json();
-      TYPES = (r.items || []).filter(function(x){ return x.writable; });
-    }catch(e){ TYPES = []; }
+      if(r && r.items) items = r.items.filter(function(x){ return x.writable; });
+    }catch(e){ return null; }   // 失败绝不缓存，下次还会重试
+    if(items === null) return null;
+    TYPES = items;
+    TYPES_SIG = sig;
     const sel = document.getElementById('msTerrainSel');
     if(sel){
+      const prev = sel.value;
       sel.innerHTML = TYPES.map(function(x){
         return '<option value="' + x.type + '">' + x.type +
                (x.count ? ' (' + x.count + ')' : '') + '</option>';
       }).join('');
+      sel.dataset.sig = sig;
+      if(prev && Array.from(sel.options).some(function(o){ return o.value === prev; })){
+        sel.value = prev;
+      }
     }
+    if(typeof window._mapFillTwoSel === 'function') window._mapFillTwoSel(0, true);
     return TYPES;
   }
 
@@ -2209,6 +2250,11 @@ function makePannable(svg, body){
     loadTypes();
   }
   window.mapBindTerrain = bind;
+  window.mapRefreshTerrainTypes = function(){
+    return loadTypes().then(function(){
+      if(typeof window._mapFillTwoSel === 'function') return window._mapFillTwoSel(0, true);
+    });
+  };
   if(document.readyState !== 'loading') bind();
   else document.addEventListener('DOMContentLoaded', bind);
 })();
@@ -2218,27 +2264,42 @@ function makePannable(svg, body){
 (function(){
   let BRUSH_ON = false, BRUSH_PTS = [], BRUSH_DOWN = false;
 
+  function terrainSig(){
+    const mr = (typeof MAP !== 'undefined' && MAP && MAP.root) ? MAP.root : '';
+    const d = (typeof DATA !== 'undefined' && DATA) ? DATA : {};
+    const arr = (d.layers && d.layers.length) ? d.layers : (d.roots || []);
+    return mr + '|' + arr.map(function(x){ return x.path || x.name || ''; }).join('|');
+  }
+
   function bmsg(t, bad){
     const el = document.getElementById('msBatchMsg');
     if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
   }
 
-  async function fillTwoSel(retry){
+  async function fillTwoSel(retry, force){
     const sel = document.getElementById('msTerrainSel');
     if(!sel) return;
     // 地形类型是异步拉的，可能比这里晚；没填满就再等一轮
     if(sel.options.length === 0 && (retry || 0) < 20){
-      setTimeout(function(){ fillTwoSel((retry || 0) + 1); }, 300);
+      setTimeout(function(){ fillTwoSel((retry || 0) + 1, force); }, 300);
       return;
     }
+    const sig = terrainSig();
     ['msFromType','msToType'].forEach(function(id){
       const el = document.getElementById(id);
-      if(!el || el.options.length) return;
+      if(!el) return;
+      if(!force && el.dataset.sig === sig && el.options.length) return;
+      const prev = el.value;
       el.innerHTML = Array.from(sel.options).map(function(o){
         return '<option value="' + o.value + '">' + o.textContent + '</option>';
       }).join('');
+      el.dataset.sig = sig;
+      if(prev && Array.from(el.options).some(function(o){ return o.value === prev; })){
+        el.value = prev;
+      }
     });
   }
+  window._mapFillTwoSel = fillTwoSel;
 
   function selectedPids(){
     const sel = Array.isArray(MAP.sel) ? MAP.sel : (MAP.sel ? [MAP.sel] : []);
@@ -3344,7 +3405,7 @@ function makePannable(svg, body){
 
 // v1.23.9 高程笔刷
 (function(){
-  let ON = false;
+  let ON = false, drawing = false, pts = [], lastPt = 0;
 
   function msg(t, bad){
     const el = document.getElementById('hpMsg');
@@ -3361,9 +3422,6 @@ function makePannable(svg, body){
         body: JSON.stringify({points: points, height: hv, brush: br, feather: fe})})).json();
       if(r.ok){
         msg(r.msg);
-        // 刷完清缓存重载高度图
-        const clr = document.getElementById('mapClear');
-        if(clr) clr.click();
       } else msg(r.msg || '失败', true);
     }catch(e){ msg('请求失败：' + e, true); }
   }
@@ -3376,38 +3434,48 @@ function makePannable(svg, body){
       ON = !ON;
       btn.textContent = ON ? '停止刷' : '开始刷';
       btn.style.background = ON ? 'var(--accent)' : '';
-      msg(ON ? '左键拖拽刷高度（像素坐标）' : '已停止');
+      msg(ON ? '左键点击或拖拽刷高度（抬手写盘）' : '已停止');
       window.__heightBrush = ON;
     };
   }
 
-  // 在地图画布上接管拖拽
+  // 在地图舞台捕获指针事件（#mapSelCanvas 为 pointer-events:none，不能直接接鼠标事件）
   function attach(){
-    const cv = document.getElementById('mapSelCanvas') || document.querySelector('#mapStageWrap canvas');
-    if(!cv || cv.dataset.hpBound) return;
-    cv.dataset.hpBound = '1';
-    let drawing = false;
+    const wrap = document.getElementById('mapStageWrap');
+    if(!wrap || wrap.dataset.hpBound) return;
+    wrap.dataset.hpBound = '1';
     const toMap = function(ev){
-      const r = cv.getBoundingClientRect();
-      const x = (ev.clientX - r.left - (typeof MAP !== 'undefined' ? MAP.x : 0)) / (typeof MAP !== 'undefined' ? MAP.k : 1);
-      const y = (ev.clientY - r.top - (typeof MAP !== 'undefined' ? MAP.y : 0)) / (typeof MAP !== 'undefined' ? MAP.k : 1);
-      return [Math.round(x), Math.round(y)];
+      const p = mapScreenToImage(ev.clientX, ev.clientY);
+      return [Math.round(p.x), Math.round(p.y)];
     };
-    cv.addEventListener('mousedown', function(ev){
+    wrap.addEventListener('pointerdown', function(ev){
       if(!window.__heightBrush || ev.button !== 0) return;
+      if(typeof mapEventOverUI === 'function' && mapEventOverUI(ev)) return;
       ev.stopPropagation(); ev.preventDefault();
       drawing = true;
-      paint([toMap(ev)]);
+      pts = [toMap(ev)];
+      lastPt = Date.now();
+      wrap.classList.add('dragging');
     }, true);
-    cv.addEventListener('mousemove', function(ev){
+    wrap.addEventListener('pointermove', function(ev){
       if(!drawing) return;
-      ev.stopPropagation(); ev.preventDefault();
-      paint([toMap(ev)]);
+      ev.stopPropagation();
+      const now = Date.now();
+      if(now - lastPt < 35) return;
+      lastPt = now;
+      pts.push(toMap(ev));
     }, true);
-    cv.addEventListener('mouseup', function(ev){
-      if(drawing){ drawing = false; ev.stopPropagation(); }
-    }, true);
-    cv.addEventListener('mouseleave', function(){ drawing = false; });
+    const up = function(ev){
+      if(!drawing) return;
+      drawing = false;
+      wrap.classList.remove('dragging');
+      if(ev && ev.stopPropagation) ev.stopPropagation();
+      const send = pts.slice();
+      pts = [];
+      if(send.length) paint(send);
+    };
+    wrap.addEventListener('pointerup', up, true);
+    window.addEventListener('pointerup', up, true);
   }
 
   if(document.readyState !== 'loading'){
@@ -3628,6 +3696,7 @@ function mapSetMode(mode){
     document.querySelectorAll('#mapRail .map-tool').forEach(b=>{
       b.classList.toggle('on', b.dataset.mode === 'paint');
     });
+    if(window.mapSideTab) window.mapSideTab('edit');
     const el = document.getElementById('msMode');
     if(el) el.textContent = '涂色';
     const hint = document.getElementById('msHint');
@@ -3738,7 +3807,8 @@ function mapBindV081(){
 
 function mapAssetUrl(name){
   return '/api/map_asset?name=' + encodeURIComponent(name) +
-    (MAP.root ? '&root=' + encodeURIComponent(MAP.root) : '');
+    (MAP.root ? '&root=' + encodeURIComponent(MAP.root) : '') +
+    (MAP.ver ? '&v=' + MAP.ver : '');
 }
 
 
@@ -3757,6 +3827,7 @@ function mapSwitchSource(path){
   MAP.idx = null;
   MAP.centers = null;
   MAP.regions = null;
+  if(window.mapPaintReset) window.mapPaintReset();
   mapHideOps();
   document.getElementById('mapMeta').textContent = '切换来源…';
   mapLoadMeta(path);
@@ -3787,7 +3858,7 @@ async function mapLoadMeta(root){
         metaEl.textContent = '图层缓存已过期（' + (d.prev_built || '上次构建') + ' 的数据或版本有变），点「构建图层」重建';
         metaEl.style.color = 'var(--accent)';
       } else {
-        metaEl.textContent = '图层未构建（首次约 20 秒）';
+        metaEl.textContent = '图层未构建（首次约 40–60 秒）';
       }
       return;
     }
@@ -3824,7 +3895,7 @@ async function mapLoadMeta(root){
 
 // 图层文件重建后强制重载（src 相同浏览器会用缓存，必须先清空）
 window.mapReloadLayers = function(){
-  ['mapBase','mapPolit','mapRegion','mapTerrain','mapContinent','mapProv','mapUnits'].forEach(function(id){
+  ['mapBase','mapPolit','mapRegion','mapTerrain','mapContinent','mapProv','mapUnits','mapState','mapEdges'].forEach(function(id){
     const el = document.getElementById(id);
     if(el) el.setAttribute('src', '');
   });
@@ -3997,12 +4068,10 @@ function mapProvAt(imgX, imgY){
 
 
 function mapBuildIdCanvas(){
-  if(MAP.idCanvas || !MAP.ready) return;
+  if(MAP.idCanvas || !MAP.ready || !MAP.w || !MAP.h) return;
   const c = document.createElement('canvas');
   c.width = MAP.w; c.height = MAP.h;
   const ctx = c.getContext('2d');
-  const img = document.getElementById('mapProv');
-  if(!img || !img.naturalWidth) return;
   const idImg = new Image();
   idImg.onload = ()=>{ ctx.drawImage(idImg, 0, 0); MAP.idCanvas = c; };
   idImg.src = mapAssetUrl('prov_id.png');
@@ -4231,7 +4300,7 @@ function mapBindEvents(){
 
 
 async function mapClearCache(){
-  if(!confirm('清理已生成的地图图层缓存？源文件不会动，下次打开需要重新构建约 13 秒。')) return;
+  if(!confirm('清理已生成的地图图层缓存？源文件不会动，下次打开需要重新构建约 40–60 秒。')) return;
   try{
     const r = await (await fetch('/api/map_cache_clear', {method:'POST',
       headers:{'Content-Type':'application/json'}, body:'{}'})).json();
@@ -4245,9 +4314,9 @@ async function mapClearCache(){
 }
 
 
-async function mapBuild(){
+async function mapBuild(force){
   const metaEl = document.getElementById('mapMeta');
-  metaEl.textContent = '构建中…（约 15 秒）';
+  metaEl.textContent = '构建中…（约 40–60 秒）';
   startLoading('正在构建地图图层…');
   try{
     const r = await (await fetch('/api/map_build', {method:'POST', headers:{'Content-Type':'application/json'},
@@ -4255,6 +4324,7 @@ async function mapBuild(){
     stopLoading(r.ok ? '地图图层构建完成' : (r.msg || '构建失败'), !r.ok);
     if(r.ok){
       MAP.ready = false; MAP.idCanvas = null;
+      MAP.ver = (MAP.ver || 0) + 1;
       await mapLoadMeta();
     } else {
       metaEl.textContent = r.msg || '构建失败';

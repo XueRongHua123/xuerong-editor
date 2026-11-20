@@ -55,6 +55,11 @@ window.onerror = function(m, s, l, c){
       <div id="srcState" class="src-state">还没有加载 mod</div>
       <div id="srcChain" class="src-chain"></div>
       <div id="srcCover" class="src-cover"></div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn" id="layerViewBtn" style="flex:1">📚 叠加链与文件</button>
+        <button class="btn" id="objDiffBtn" style="flex:1">🔍 对象覆盖对比</button>
+      </div>
+      <button class="btn" id="publishBtn" style="width:100%;margin-top:6px">📦 打包发布 mod（工坊就绪）</button>
       <div class="src-opts">
         <label class="src-opt"><input type="checkbox" id="optDep" checked>带上依赖的 mod
           <small>descriptor.mod 里的 dependencies，默认开</small></label>
@@ -84,6 +89,7 @@ window.onerror = function(m, s, l, c){
       <div id="countryEntry" class="tabbtn">🌍 国家中心</div>
       <div id="diagEntry" class="tabbtn">🩺 诊断</div>
       <div id="lintEntry" class="tabbtn">🩺 项目体检</div>
+      <div id="gameVerifyEntry" class="tabbtn">🎮 进游戏检查</div>
       <div id="scriptEntry" class="tabbtn">🔍 脚本检查</div>
       <div id="mapEntry" class="tabbtn">🗺 地图</div>
       <div id="navEditEntry" class="tabbtn" style="padding-left:22px">✎ 开局数据与编辑</div>
@@ -135,7 +141,7 @@ window.onerror = function(m, s, l, c){
       <span class="tb-sep"></span>
       <button class="btn" id="saveAll" title="保存所有未写盘的改动（Ctrl+S）">💾 保存</button>
       <button class="btn" id="verBadge" title="检查更新" style="font-size:11px;opacity:.75">v—</button>
-      <button class="btn" id="exportBtn">📦 导出覆盖包</button>
+      <button class="btn" id="exportBtn" title="打包发布工坊就绪目录或导出本次改动覆盖包">📦 打包发布</button>
       <button class="btn" id="undoBtn" title="撤销 (Ctrl+Z)">↶ 撤销</button>
       <button class="btn" id="redoBtn" title="重做 (Ctrl+Y)">↷ 重做</button>
       <span class="tb-sep"></span>
@@ -145,6 +151,7 @@ window.onerror = function(m, s, l, c){
       <button class="btn" id="locCheckBtn">🔎 本地化</button>
       <button class="btn" id="logBtn">🧾 报错</button>
       <button class="btn" id="reportBtn">🩺 体检</button>
+      <button class="btn" id="gameVerifyBtn">🎮 进游戏检查</button>
       <button class="btn" id="backupBtn">🕘 备份</button>
       <button class="btn" id="contentBtn">📚 内容库</button>
       <button class="btn" id="helpBtn">❓ 教程</button>
@@ -268,10 +275,14 @@ window.onerror = function(m, s, l, c){
       </div>
     </div>
     <div id="diagPanel" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(980px,92vw);max-height:82vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;z-index:60;padding:14px;box-shadow:0 12px 40px rgba(0,0,0,.5)">
-  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
     <b style="font-size:13px">诊断</b>
     <span id="diagCount" style="font-size:11px;color:var(--muted)"></span>
     <span style="flex:1"></span>
+    <label style="font-size:11px;color:var(--muted);display:inline-flex;align-items:center;gap:4px;cursor:pointer" title="默认仅检查当前 mod 自身的改动与 replace_path；勾选后连同父层和完整地图一并扫描">
+      <input type="checkbox" id="diagFullScope">含父层与完整地图
+    </label>
+    <button class="btn" id="diagIgnoredBtn">已忽略（0）</button>
     <button class="btn" id="diagRun">重新扫描</button>
     <button class="btn" id="diagClose">关闭</button>
   </div>
@@ -279,6 +290,7 @@ window.onerror = function(m, s, l, c){
     检查的是「游戏读不到但也不会报错」这类问题：OOB 没被点名、sprite 名拼错、
     招募写在文件末尾、决议类别没注册。全在本地算，不启动游戏。
   </div>
+  <div id="diagIgnoredBox" style="display:none;margin-bottom:8px;padding:8px;background:var(--panel2);border:1px solid var(--line);border-radius:6px"></div>
   <div id="diagFixBar" style="display:none;margin-bottom:8px"></div>
   <div id="diagList"></div>
 </div>
@@ -312,6 +324,167 @@ window.onerror = function(m, s, l, c){
         </div>
         <div id="lintStats"></div>
         <div id="lintList"></div>
+      </div>
+    </div>
+    <div id="layerModal">
+      <div class="cm-card" style="width:min(1080px,calc(100% - 48px));height:min(820px,calc(100% - 48px))">
+        <div class="cm-head">
+          <b>叠加链可视化</b>
+          <span id="lcSummary" style="font-size:11px;color:var(--muted)"></span>
+          <button class="btn" id="lcRefresh" style="margin-left:auto">重新扫描</button>
+          <button class="btn" id="layerClose">关闭</button>
+        </div>
+        <div class="lc-wrap">
+          <div class="lc-sec-title">
+            <span>① 加载顺序与层级关系（从左到右后加载优先；点击层卡可筛选下方文件）</span>
+            <span id="lcFilterChip"></span>
+          </div>
+          <div id="lcChainStrip" class="lc-strip"></div>
+          <div class="lc-tabs">
+            <button class="btn primary" id="lcTabFiles">② 文件生效与覆盖追踪</button>
+            <button class="btn" id="lcTabReplace">③ replace_path 屏蔽下层清单</button>
+            <button class="btn" id="lcTabObjects">④ 对象级覆盖（国策 / 事件 / 精神）</button>
+          </div>
+          <div id="lcFilesPane" class="lc-pane">
+            <div class="lc-toolbar">
+              <input id="lcQuery" placeholder="搜索文件名或路径（如 zz_、1-France.txt、common/national_focus）…">
+              <select id="lcKind" class="btn">
+                <option value="interacted">发生覆盖或屏蔽的文件</option>
+                <option value="all">全部文件（含单层未覆盖文件）</option>
+                <option value="overridden">仅同名文件覆盖</option>
+                <option value="blocked">仅被 replace_path 屏蔽</option>
+                <option value="non_vanilla">仅非原版层最终生效</option>
+              </select>
+              <select id="lcDir" class="btn">
+                <option value="">全部目录</option>
+              </select>
+            </div>
+            <div id="lcFileStat" class="lc-stat"></div>
+            <div id="lcFileList" class="lc-list"></div>
+          </div>
+          <div id="lcReplacePane" class="lc-pane" style="display:none">
+            <div id="lcReplaceList" class="lc-list"></div>
+          </div>
+          <div id="lcObjectsPane" class="lc-pane" style="display:none">
+            <div class="lc-toolbar">
+              <input id="odQuery" placeholder="搜索国策 / 事件 / 国家精神 ID 或文件路径（如 GER_rhineland、p73_）…">
+              <select id="odCat" class="btn">
+                <option value="all">全部三类（国策/事件/精神）</option>
+                <option value="focus">国策（focus / tree / shared）</option>
+                <option value="event">事件（events）</option>
+                <option value="idea">国家精神（ideas）</option>
+              </select>
+              <select id="odStatus" class="btn">
+                <option value="interacted">仅多处定义 / 覆写 / 冲突</option>
+                <option value="all">全部对象（含单层独有）</option>
+                <option value="duplicate_error">⚠ 不同文件重复冲突（HOI4 报错）</option>
+                <option value="file_override">同名文件整文件覆写生效</option>
+                <option value="id_override">国策后加载覆盖 / 跨树同名</option>
+                <option value="blocked">被 replace_path 屏蔽或覆写移除</option>
+                <option value="non_vanilla">仅非原版层最终生效</option>
+              </select>
+            </div>
+            <div id="odStat" class="lc-stat"></div>
+            <div id="odList" class="lc-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="gameVerifyModal">
+      <div class="cm-card" style="width:min(960px,calc(100% - 48px));height:min(760px,calc(100% - 48px))">
+        <div class="cm-head">
+          <b>进游戏检查（HOI4 主菜单 L3 error.log 差分）</b>
+          <span id="gvEnvBadge" class="lc-badge">检测中…</span>
+          <button class="btn" id="gvClose" style="margin-left:auto">关闭</button>
+        </div>
+        <div class="lc-wrap">
+          <div id="gvRecoverBanner" class="gv-banner warn" style="display:none"></div>
+          <div id="gvEnvBox" class="lc-row">
+            <div class="lc-row-top">
+              <span style="font-size:12px;color:var(--muted)" id="gvEnvPath">游戏目录：探测中…</span>
+            </div>
+            <div class="lc-toolbar" style="margin-top:4px">
+              <select id="gvBaseMode" class="btn">
+                <option value="parents">基线：前置父层链（只看当前顶层 submod 新增）</option>
+                <option value="vanilla">基线：纯原版（包含前置层与本 mod 全部新增）</option>
+              </select>
+              <label class="btn" style="cursor:pointer;display:inline-flex;align-items:center;gap:5px">
+                <input type="checkbox" id="gvReuseBase" checked> 复用同基线缓存日志（省一次启动）
+              </label>
+              <button class="btn primary" id="gvRunBtn" style="margin-left:auto">▶ 开始进游戏检查</button>
+              <button class="btn" id="gvCancelBtn" style="display:none">停止并还原</button>
+            </div>
+          </div>
+          <div id="gvConfirmBox" class="gv-banner warn" style="display:none">
+            <div style="font-weight:600;margin-bottom:4px">首次使用说明：将临时修改 Paradox 的 dlc_load.json</div>
+            <div style="font-size:11.5px;line-height:1.55;margin-bottom:8px">
+              检查期间编辑器会备份当前 <code>dlc_load.json</code>，临时切换到待测叠加链并启动 <code>hoi4.exe</code> 至主菜单采集 <code>error.log</code>；结束或异常退出后下次启动均会自动还原原配置与清理临时文件。
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn primary" id="gvConfirmYes">我已知晓，同意并开始检查</button>
+              <button class="btn" id="gvConfirmNo">取消</button>
+            </div>
+          </div>
+          <div id="gvProgressBox" style="display:none" class="lc-row">
+            <div id="gvProgMsg" style="font-size:12px">准备中…</div>
+            <div class="gv-prog-track"><div id="gvProgBar" class="gv-prog-fill" style="width:0%"></div></div>
+          </div>
+          <div id="gvResultSummary" class="lc-stat"></div>
+          <div id="gvErrList" class="lc-list"></div>
+        </div>
+      </div>
+    </div>
+    <div id="publishModal">
+      <div class="cm-card" style="width:min(960px,calc(100% - 48px));height:min(790px,calc(100% - 48px))">
+        <div class="cm-head">
+          <b>打包发布（工坊就绪目录 &amp; 官方启动器识别）</b>
+          <span id="pubBadge" class="lc-badge">准备中…</span>
+          <button class="btn" id="pubClose" style="margin-left:auto">关闭</button>
+        </div>
+        <div class="lc-wrap">
+          <div class="lc-row">
+            <div class="lc-toolbar">
+              <span style="font-size:12px;color:var(--muted)">发布目标：</span>
+              <select id="pubModSel" class="btn" style="flex:1;min-width:220px"></select>
+              <button class="btn" id="pubRefreshBtn">刷新预检</button>
+            </div>
+            <div class="pub-grid">
+              <label>模组显示名<input type="text" id="pubName" placeholder="My Submod"></label>
+              <label>模组版本<input type="text" id="pubVer" placeholder="0.1.0"></label>
+              <label>支持游戏版本<input type="text" id="pubGameVer" placeholder="1.19.*"></label>
+              <label>标签（逗号分隔）<input type="text" id="pubTags" placeholder="Alternative History"></label>
+            </div>
+            <div class="pub-grid">
+              <label>依赖本体（descriptor dependencies，逗号分隔）<input type="text" id="pubDeps" placeholder="留空表示无依赖"></label>
+              <label>导出文件夹名（建议字母/数字/下划线）<input type="text" id="pubFolderId" placeholder="my_submod"></label>
+            </div>
+            <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+              <label style="flex:1;min-width:260px;display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--muted)">
+                导出父目录
+                <input type="text" id="pubOutDir" style="background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:5px 9px;font-size:12px">
+              </label>
+              <button class="btn" id="pubUseModHomeBtn">填入官方启动器 mod 目录</button>
+            </div>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--text);margin-top:2px">
+              <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer">
+                <input type="checkbox" id="pubRegLauncher" checked> 在 Paradox 启动器目录生成 <code>.mod</code> 描述文件（使官方启动器可识别）
+              </label>
+              <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer">
+                <input type="checkbox" id="pubOverwriteMod"> 若启动器已有同名 <code>.mod</code> 则更新指向导出目录
+              </label>
+              <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer">
+                <input type="checkbox" id="pubAlsoZip" checked> 同时生成 <code>.zip</code> 压缩包
+              </label>
+            </div>
+          </div>
+          <div id="pubStat" class="lc-stat"></div>
+          <div id="pubChecklist" class="lc-list"></div>
+          <div id="pubResultBox" class="gv-banner" style="display:none"></div>
+          <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding-top:4px;border-top:1px solid var(--line)">
+            <button class="btn" id="pubPatchZipBtn" title="仅将本次编辑器会话改动过的文件打包为补丁 zip">📦 仅导出本次改动覆盖包 (.zip)</button>
+            <button class="btn primary" id="pubRunBtn">🚀 导出工坊就绪目录</button>
+          </div>
+        </div>
       </div>
     </div>
     <div id="psModal">
@@ -451,7 +624,7 @@ window.onerror = function(m, s, l, c){
     <div id="mapModal">
       <div id="mapCard">
         <div id="mapHead">
-          <b>地图</b>
+          <b>地图</b><i class="exp-tag" title="涂色与地形/高程写盘已验，尚未通过 HOI4 对局实测；自制独立地图崩溃 +11816992 未解">实验性</i>
           <span class="k" id="mapMeta">未构建</span>
           <span class="map-grow"></span>
           <select id="mapSource" class="btn" style="padding:3px 6px;max-width:190px" title="地图来源"></select>
@@ -468,7 +641,7 @@ window.onerror = function(m, s, l, c){
         <div id="mapRail">
           <button class="map-tool on" data-mode="view" title="浏览（V）">🖐</button>
           <button class="map-tool" data-mode="state" title="改州归属（S）">🏷</button>
-          <button class="map-tool" data-mode="paint" title="涂色改省界（P）— 开发中" disabled>🖌</button>
+          <button class="map-tool" data-mode="paint" title="涂色改省界（P）">🖌</button>
           <button class="map-tool" data-mode="pick" title="吸管（I）— 开发中" disabled>💧</button>
           <button class="map-tool" id="mapCheckBtn" title="地图检查（连通性/州/铁路/十字）">🔍</button>
         </div>
@@ -860,8 +1033,8 @@ window.onerror = function(m, s, l, c){
             <div class="mp-sep"></div>
           </div>
           <div id="mgPanel">
-            <h4>生成地图</h4>
-            <div class="mp-k" style="line-height:1.5;color:var(--t3)">从零生成一张完整的地图目录</div>
+            <h4>生成地图<i class="exp-tag">实验性</i></h4>
+            <div class="mp-k" style="line-height:1.5;color:var(--t3)">从零生成一张完整的地图目录 · 静态格式已过 16 项校验，但目前自制独立地图进游戏必崩（+11816992）</div>
             <div class="mp-acts" style="margin-top:4px">
               <select id="mgSource" style="height:24px;flex:1;min-width:0;font-size:11px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px">
                 <option value="procedural">程序化（分形大陆）</option>
@@ -1503,9 +1676,34 @@ window.onerror = function(m, s, l, c){
   </div>
 </div>
 <div id="locModal">
-  <div class="diff-card">
-    <div class="diff-head"><b>缺失本地化</b><button class="btn" id="locClose">关闭</button></div>
-    <div id="locList" class="diff-body" style="max-height:520px"></div>
+  <div class="diff-card" style="width:min(820px,92vw)">
+    <div class="diff-head" style="gap:8px">
+      <b>本地化</b>
+      <button class="btn primary" id="locTabBrowse" style="font-size:11px;padding:3px 9px">浏览与编辑</button>
+      <button class="btn" id="locTabMissing" style="font-size:11px;padding:3px 9px">缺失本地化</button>
+      <span style="flex:1"></span>
+      <button class="btn" id="locClose">关闭</button>
+    </div>
+    <div id="locBrowsePane" class="diff-body" style="max-height:560px">
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+        <input id="locSearch" placeholder="搜索键名或文本…" style="flex:1;min-width:180px;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:4px;padding:4px 8px;font-size:12px">
+        <select id="locScope" class="btn" style="font-size:11px;padding:3px 6px">
+          <option value="all">全部已加载</option>
+          <option value="mod">仅当前 mod</option>
+        </select>
+        <select id="locLang" class="btn" style="font-size:11px;padding:3px 6px">
+          <option value="simp_chinese">简体中文</option>
+          <option value="english">English</option>
+          <option value="japanese">日本語</option>
+        </select>
+        <button class="btn" id="locBrowseBtn" style="font-size:11px;padding:3px 9px">查询</button>
+      </div>
+      <div id="locBrowseStat" style="font-size:11px;color:var(--muted);margin-bottom:6px"></div>
+      <div id="locBrowseList" style="max-height:460px;overflow:auto"></div>
+    </div>
+    <div id="locMissingPane" class="diff-body" style="max-height:560px;display:none">
+      <div id="locList" style="max-height:500px;overflow:auto"></div>
+    </div>
   </div>
 </div>
 <div id="logModal">
@@ -1553,16 +1751,19 @@ window.onerror = function(m, s, l, c){
       <label>显示名称<input type="text" id="nmName" placeholder="我的模组"></label>
       <div class="nm-row">
         <label>版本<input type="text" id="nmVer" value="0.1.0"></label>
-        <label>游戏版本<input type="text" id="nmGame" value="1.19.*"></label>
+        <label>游戏版本<input type="text" id="nmGame" placeholder="1.19.*"></label>
       </div>
-      <label class="nm-check"><input type="checkbox" id="nmTree" checked> 创建示例国策树（直接基于原版做 mod）</label>
+      <label class="nm-check"><input type="checkbox" id="nmTree" checked> 创建示例国策树（新 mod 骨架自带一棵可编辑的示例树）</label>
       <div class="nm-row">
         <label>国策树 ID<input type="text" id="nmTreeId" placeholder="my_tree"></label>
         <label>国家 TAG<input type="text" id="nmTag" placeholder="GER"></label>
       </div>
-      <label>依赖本体（做 submod 时填本体的 mod 名或目录；留空就是从原版开始）<input type="text" id="nmDep" placeholder="留空 = 从原版开始"></label>
+      <label>依赖本体（从已识别模组中选择，支持多级 submod；留空 = 从原版开始）
+        <select id="nmDepSel"></select>
+        <input type="text" id="nmDep" placeholder="留空 = 从原版开始（也可手填 mod 名或目录）">
+      </label>
       <p class="welcome-tip" id="nmDepHint" style="display:none"></p>
-      <p class="welcome-tip">不会替换原版文件，只在 common/national_focus 里新增一棵树；创建后自动加载。</p>
+      <p class="welcome-tip">会自动生成 thumbnail.png 占位图；不会替换原版文件，创建后自动加载。</p>
     </div>
     <div class="nm-foot">
       <button class="btn" id="nmCancel" onclick="document.getElementById('newMod').classList.remove('show')">取消</button>
@@ -1572,7 +1773,7 @@ window.onerror = function(m, s, l, c){
 </div>
 <div id="worldGen">
   <div class="nm-card" style="width:min(620px,calc(100% - 80px))">
-    <div class="nm-head"><b>造一个新世界</b><button class="btn" id="wgClose" onclick="document.getElementById('worldGen').classList.remove('show')">关闭</button></div>
+    <div class="nm-head"><b>造一个新世界<i class="exp-tag">实验性</i></b><button class="btn" id="wgClose" onclick="document.getElementById('worldGen').classList.remove('show')">关闭</button></div>
     <div class="nm-body">
       <label>输出目录<input type="text" id="wgOut" placeholder="D:\mods\我的新世界"></label>
       <div class="nm-row">
@@ -1590,7 +1791,7 @@ window.onerror = function(m, s, l, c){
       <label class="nm-check"><input type="checkbox" id="wgArmy" checked> 生成开局部队</label>
       <label class="nm-check"><input type="checkbox" id="wgFocusOn" checked> 生成国策树</label>
       <label class="nm-check"><input type="checkbox" id="wgEvent" checked> 生成开局事件</label>
-      <p class="welcome-tip">会写一整套 mod：地图、州、国家、部队、国策、本地化。生成完自动加载。</p>
+      <p class="welcome-tip">会写一整套 mod：地图、州、国家、部队、国策、本地化。生成完自动加载；目前产物进游戏会在 +11816992 崩溃（仅可用于格式与生成器预览）。</p>
       <p class="welcome-tip" id="wgWarn">这一步耗时较长（几十秒到几分钟），期间界面会显示进度。</p>
     </div>
     <div class="nm-foot">

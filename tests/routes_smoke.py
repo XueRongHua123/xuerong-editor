@@ -65,8 +65,9 @@ SLOW_TIMEOUT = 240.0
 # 默认跳过，--slow 才跑。pick_mod 会阻塞在 Windows 文件选择框上，永不返回。
 SLOW_PATHS = (
     "/api/map_generate", "/api/world_create", "/api/ai_test", "/api/ai_stream",
-    "/api/ai_chat", "/api/export", "/api/build_icons", "/api/map_build",
+    "/api/ai_chat", "/api/export", "/api/publish/export", "/api/map_build",
     "/api/transcribe", "/api/pick_mod", "/api/playset_pick",
+    "/api/game_verify/start",
 )
 
 # 这些路由要真连外网（GitHub Release API + 下载 22 MB 附件），耗时取决于网速，

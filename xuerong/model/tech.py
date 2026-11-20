@@ -16,7 +16,9 @@ import re
 
 from xuerong import state
 from xuerong.core import paths
-from xuerong.core.paths import (_layer_dirs, _read_bom_text, _write_bom_text, is_under_game)
+from xuerong.core.paths import (_layer_dirs, _read_bom_text, _write_bom_text,
+                                effective_layer_files, is_under_game,
+                                mod_layers, unique_editor_filename)
 from xuerong.core.text import (_atomic_write, _bom_for, _strip_keep_len, brace_match,
                                braces_balanced, find_blocks, set_raw_block, set_scalar,
                                strip_comments, top_items)
@@ -47,19 +49,13 @@ def _looks_tech(body):
 def load_techs(root):
     name = os.path.basename(root.rstrip("\\/")) or root
     n = 0
-    _tech_files = []
-    for _b, _d in _layer_dirs("common/technologies", root):
-        if not os.path.isdir(_d):
-            continue
-        # v1.24.1：source 必须记「这个文件在哪一层」，不是「当前加载的 mod 叫什么」。
-        # 原来整个 state.techs() 都标成 root 的名字，770 个科技全说自己是 XRT1，
-        # 哪怕数据一个字都没改过——列表标来源就会标出一片假的。
-        _src = os.path.basename((_b or "").rstrip("\\/")) or (_b or name)
-        for _f in sorted(f for f in os.listdir(_d) if f.endswith(".txt")):
-            _tech_files.append((_src, _d, _f))
+    _tech_files = [
+        (os.path.basename((_b or "").rstrip("\\/")) or (_b or name), _d, _f)
+        for _b, _d, _f in effective_layer_files("common/technologies", root)
+    ]
     for src, d, fn in _tech_files:
         rel = os.path.join("common", "technologies", fn)
-        text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
+        text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace").read())
         macros = {}
         for mm in re.finditer(r'(?m)^\s*@([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', text):
             macros[mm.group(1)] = mm.group(2)
@@ -472,7 +468,7 @@ def save_tech(root, rel, tid, raw, name="", desc="", name_ja="", desc_ja="", pro
     if not okv:
         return False, msgv + "，未保存"
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(text[:m.start()] + raw.strip() + "\n" + text[e:])
+    _atomic_write(path, _bom_for(path) + (text[:m.start()] + raw.strip() + "\n" + text[e:]).encode("utf-8"))
     state.changed()[path] = rel
     ents = {}
     if name: ents.setdefault("simp_chinese", {})[tid] = name
@@ -494,25 +490,22 @@ def add_tech(root, tid, folder, year="1936"):
     folder = folder or "custom_folder"
     d = os.path.join(root, "common", "technologies")
     os.makedirs(d, exist_ok=True)
-    path = os.path.join(d, "zz_focus_editor_technologies.txt")
+    fn = unique_editor_filename(root, "common/technologies", "zz_focus_editor_technologies.txt")
+    path = os.path.join(d, fn)
     text = io.open(path, encoding="utf-8", errors="replace", newline="").read() if os.path.exists(path) else "technologies = {\n}\n"
     if re.search(r'(?m)^\s*%s\s*=\s*\{' % re.escape(tid), text):
         return False, "科技已存在"
-    block = ("\t\t%s = {\n\t\t\tresearch_cost = 1\n\t\t\tstart_year = %s\n"
-             "\t\t\tfolder = {\n\t\t\t\tname = %s\n\t\t\t}\n\t\t}\n" % (tid, year, folder))
-    fm = re.search(r'(?m)^[ \t]*%s\s*=\s*\{' % re.escape(folder), text)
-    if fm:
-        fb = text.find('{', fm.start())
-        fe = brace_match(text, fb)
-        text = text[:fe - 1] + block + text[fe - 1:]
-    else:
-        tm = re.search(r'(?m)^\s*technologies\s*=\s*\{', text)
-        tb = text.find('{', tm.start())
-        te = brace_match(text, tb)
-        text = text[:te - 1] + ("\t%s = {\n%s\t}\n" % (folder, block)) + text[te - 1:]
+    block = ("\t%s = {\n\t\tresearch_cost = 1\n\t\tstart_year = %s\n"
+             "\t\tfolder = {\n\t\t\tname = %s\n\t\t\tposition = { x = 0 y = 0 }\n\t\t}\n\t}\n" % (tid, year, folder))
+    tm = re.search(r'(?m)^\s*technologies\s*=\s*\{', text)
+    if not tm:
+        return False, "缺少 technologies = { ... } 根块"
+    tb = text.find('{', tm.start())
+    te = brace_match(text, tb)
+    text = text[:te - 1] + block + text[te - 1:]
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(text)
-    state.changed()[path] = os.path.join("common", "technologies", "zz_focus_editor_technologies.txt")
+    _atomic_write(path, _bom_for(path) + text.encode("utf-8"))
+    state.changed()[path] = os.path.join("common", "technologies", fn)
     _reload()
     return True, "已新建科技 " + tid
 
@@ -527,7 +520,7 @@ def delete_tech(root, rel, tid):
     b = text.find('{', m.start())
     e = brace_match(text, b)
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(text[:m.start()] + text[e:])
+    _atomic_write(path, _bom_for(path) + (text[:m.start()] + text[e:]).encode("utf-8"))
     state.changed()[path] = rel
     _reload()
     return True, "已删除科技 " + tid

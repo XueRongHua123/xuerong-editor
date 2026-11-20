@@ -16,13 +16,14 @@ import editor_i18n as i18n
 
 from xuerong.api.router import get, prefix
 from xuerong.core import facade_bridge as LG
+from xuerong import state
 from xuerong.model.map import _map_pick
 
 
 @get("/")
 def r_index(h, path_only):
     lang = LG._lang(h.path)
-    html = io.open(LG.INDEX, encoding="utf-8", errors="replace").read()
+    html = io.open(state.path_var("INDEX"), encoding="utf-8", errors="replace").read()
     html = i18n.inject(html, lang)
     h._send(html.encode("utf-8"), ctype="text/html; charset=utf-8")
 
@@ -118,7 +119,7 @@ def r_api_icon(h, path_only):
 @get("/mascot_face.png")
 def r_mascot_files(h, path_only):
     fn = os.path.basename(path_only)
-    p = os.path.join(LG.RES_DIR, fn)
+    p = os.path.join(state.path_var("RES_DIR"), fn)
     if os.path.exists(p):
         ctype = "image/x-icon" if fn.endswith(".ico") else "image/png"
         h._send(io.open(p, "rb").read(), ctype=ctype)
@@ -129,7 +130,7 @@ def r_mascot_files(h, path_only):
 @get("/mascot_card.png")
 def r_mascot_files(h, path_only):
     fn = os.path.basename(path_only)
-    p = os.path.join(LG.RES_DIR, fn)
+    p = os.path.join(state.path_var("RES_DIR"), fn)
     if os.path.exists(p):
         ctype = "image/x-icon" if fn.endswith(".ico") else "image/png"
         h._send(io.open(p, "rb").read(), ctype=ctype)
@@ -140,7 +141,7 @@ def r_mascot_files(h, path_only):
 @get("/mascot.ico")
 def r_mascot_files(h, path_only):
     fn = os.path.basename(path_only)
-    p = os.path.join(LG.RES_DIR, fn)
+    p = os.path.join(state.path_var("RES_DIR"), fn)
     if os.path.exists(p):
         ctype = "image/x-icon" if fn.endswith(".ico") else "image/png"
         h._send(io.open(p, "rb").read(), ctype=ctype)
@@ -151,7 +152,7 @@ def r_mascot_files(h, path_only):
 @prefix("/index")
 def rp_index(h, path_only):
     lang = LG._lang(h.path)
-    html = io.open(LG.INDEX, encoding="utf-8", errors="replace").read()
+    html = io.open(state.path_var("INDEX"), encoding="utf-8", errors="replace").read()
     html = i18n.inject(html, lang)
     h._send(html.encode("utf-8"), ctype="text/html; charset=utf-8")
 
@@ -169,7 +170,7 @@ def rp_web(h, path_only):
     # 拆分后必须有个出口，否则 /web/css/*.css 全是 404、页面直接裸奔。
     # 只放行 web/ 下的 .css / .js，且 realpath 必须落在 web/ 里（防 ../ 穿越）。
     _rel = path_only[len("/web/"):].replace("\\", "/")
-    _base = os.path.realpath(os.path.join(LG.RES_DIR, "web"))
+    _base = os.path.realpath(os.path.join(state.path_var("RES_DIR"), "web"))
     _p = os.path.realpath(os.path.join(_base, _rel))
     if (_p.startswith(_base + os.sep) and os.path.isfile(_p)
             and _p.lower().endswith((".css", ".js"))):
@@ -183,7 +184,7 @@ def rp_web(h, path_only):
 @prefix("/mascot/")
 def rp_mascot(h, path_only):
     fn = os.path.basename(path_only)
-    p = os.path.join(LG.RES_DIR, "mascot", fn)
+    p = os.path.join(state.path_var("RES_DIR"), "mascot", fn)
     if fn and os.path.isfile(p):
         h._send(io.open(p, "rb").read(), ctype="image/png")
     else:

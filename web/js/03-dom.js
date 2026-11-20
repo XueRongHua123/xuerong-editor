@@ -45,6 +45,15 @@ function _lastRoot(){
   return rs.length ? rs[rs.length - 1].path : '';
 }
 
+function _writableRoot(){
+  // 新建树/事件/科技/装备/精神优先写入最顶层非只读 mod（多级加载时防止写穿底层本体）
+  const rs = (DATA && DATA.roots) || [];
+  for(let i = rs.length - 1; i >= 0; i--){
+    if(rs[i] && !rs[i].readonly && rs[i].path) return rs[i].path;
+  }
+  return _lastRoot();
+}
+
 
 function listRow(id, name, source, title){
   const d = document.createElement('div');

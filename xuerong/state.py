@@ -189,6 +189,23 @@ def prov_rgb():
     return _prefer("PROV_RGB", PROV_RGB, dict)
 
 
+# ---- 2C：图标索引三张表与精灵映射（原来只在门面里，handlers 只能经门面读）----
+def icons():
+    return _prefer("ICONS", ICONS, dict)
+
+
+def equip_icons():
+    return _prefer("EQUIP_ICONS", EQUIP_ICONS, dict)
+
+
+def tech_icons():
+    return _prefer("TECH_ICONS", TECH_ICONS, dict)
+
+
+def sprite_map():
+    return _prefer("SPRITE_MAP", SPRITE_MAP, dict)
+
+
 OUTPUT_MODE = False
 OUTPUT_ROOT = ""
 
@@ -314,6 +331,28 @@ def set_map_var(name, val):
     _MAP_VARS[name] = val
 
 
+# ---------------------------------------------------------------- 启动期路径槽位（2C）
+# RES_DIR / ICON_DIR / INDEX 都是启动时算一次的路径：RES_DIR 看 sys._MEIPASS（打包后是解压
+# 目录），ICON_DIR 跟着 WORK，INDEX 跟着 RES_DIR。它们只在门面里算得出（依赖 FROZEN / APP_DIR
+# 那一串），但 handlers 要读（静态资源目录、首页模板路径），所以放槽位里由门面写一次。
+#
+# 和 _MAP_VARS 的区别：这些**只在启动时写一次**，运行期不变，所以不给 setter 之外的入口，
+# 也不参与缓存失效判断。
+_PATHS = {
+    "RES_DIR": "",
+    "ICON_DIR": "",
+    "INDEX": "",
+}
+
+
+def path_var(name):
+    return _PATHS[name]
+
+
+def set_path_var(name, val):
+    _PATHS[name] = val or ""
+
+
 # ---------------------------------------------------------------- 州/省份常量（P2-state）
 # 原来定义在 focus_editor.py，model/state.py 也要用；挪到这里一处定义，
 # 门面顶部 from xuerong.state import ... 引回去。
@@ -327,14 +366,14 @@ STATE_BUILDINGS = ("infrastructure", "arms_factory", "industrial_complex", "dock
                    "naval_supply_hub")
 
 STATE_BUILDING_META = (
-    ("infrastructure",     "基础设施",     100, False),
+    ("infrastructure",     "基础设施",      5, False),
     ("industrial_complex", "民用工厂",      20, False),
     ("arms_factory",       "军工厂",        20, False),
-    ("dockyard",           "船坞",          10, True),
+    ("dockyard",           "船坞",          20, True),
     ("naval_base",         "海军基地",      10, True),
     ("air_base",           "空军基地",      10, False),
     ("anti_air_building",  "防空炮",         5, False),
-    ("radar_station",      "雷达站",         5, False),
+    ("radar_station",      "雷达站",         6, False),
     ("naval_supply_hub",   "海军补给中心",    3, True),
     ("fuel_silo",          "燃料仓",         3, False),
     ("synthetic_refinery", "合成炼油厂",      3, False),

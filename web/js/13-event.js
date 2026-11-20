@@ -113,8 +113,10 @@ async function saveEvent(){
 async function addEvent(){
   const id = prompt('新事件 ID（namespace.member，例如 my_ns.1）：');
   if(!id) return;
+  const root = _writableRoot();
+  if(!root){ status('先加载或新建一个可写的模组', true); return; }
   const r = await fetch('/api/event_add', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root: (DATA.roots[0]||{}).path, id})});
+    body: JSON.stringify({root, id})});
   const j = await r.json();
   status(j.msg || '', !j.ok);
   if(j.ok){ await loadData(); renderEventList(''); }
@@ -133,8 +135,10 @@ async function deleteEventSel(){
 async function addShared(){
   const id = prompt('新共享焦点 ID（字母数字下划线）：');
   if(!id) return;
+  const root = _writableRoot();
+  if(!root){ status('先加载或新建一个可写的模组', true); return; }
   const r = await fetch('/api/shared_add', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root: (DATA.roots[0]||{}).path, id})});
+    body: JSON.stringify({root, id})});
   const j = await r.json();
   status(j.msg || '', !j.ok);
   if(j.ok) await loadData();

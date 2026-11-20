@@ -1,12 +1,12 @@
 {
  "schema": 2,
- "recorded_at": "2026-11-17 11:21:26",
+ "recorded_at": "2026-11-20 15:07:08",
  "counts": {
-  "OK": 205,
+  "OK": 212,
   "INTERNAL": 0,
   "HTTP500": 0,
   "DEAD": 0,
-  "SKIP": 8
+  "SKIP": 10
  },
  "routes": {
   "POST /api/add_focus": {
@@ -399,6 +399,18 @@
    "status": 200,
    "msg": ""
   },
+  "POST /api/game_verify/cancel": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/game_verify/start": {
+   "method": "POST",
+   "state": "SKIP",
+   "status": 0,
+   "msg": ""
+  },
   "POST /api/gfx_import": {
    "method": "POST",
    "state": "OK",
@@ -592,6 +604,18 @@
    "msg": ""
   },
   "POST /api/portrait_import": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/publish/export": {
+   "method": "POST",
+   "state": "SKIP",
+   "status": 0,
+   "msg": ""
+  },
+  "POST /api/publish/preview": {
    "method": "POST",
    "state": "OK",
    "status": 200,
@@ -945,6 +969,12 @@
    "status": 200,
    "msg": ""
   },
+  "GET /api/boot_status": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
   "GET /api/countries": {
    "method": "GET",
    "state": "OK",
@@ -1047,6 +1077,12 @@
    "status": 200,
    "msg": ""
   },
+  "GET /api/game_verify/status": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
   "GET /api/gfx_missing": {
    "method": "GET",
    "state": "OK",
@@ -1065,7 +1101,19 @@
    "status": 200,
    "msg": ""
   },
+  "GET /api/layer_chain": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
   "GET /api/lint": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/loc_list": {
    "method": "GET",
    "state": "OK",
    "status": 200,
@@ -1114,6 +1162,12 @@
    "msg": ""
   },
   "GET /api/missing_loc": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/object_diff": {
    "method": "GET",
    "state": "OK",
    "status": 200,

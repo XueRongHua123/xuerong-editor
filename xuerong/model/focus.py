@@ -18,7 +18,7 @@ import os
 import re
 
 from xuerong import state
-from xuerong.core.paths import _layer_dirs
+from xuerong.core.paths import _layer_dirs, effective_layer_files
 from xuerong.core.text import (_atomic_write, _bom_for, _first, _strip_keep_len, brace_match,
                                braces_balanced, find_blocks, remove_block, set_raw_block,
                                set_scalar, strip_comments, top_items)
@@ -145,14 +145,11 @@ def load_focus(root):
     count = 0
     _nf_pairs = []
     _lp("扫描文件", os.path.basename(root), 2)
-    for _b, _d in _layer_dirs("common/national_focus", root):
-        _src = os.path.basename(_b.rstrip("\\/")) or _b
-        for _f in (sorted(f for f in os.listdir(_d) if f.endswith(".txt")) if os.path.isdir(_d) else []):
-            _nf_pairs.append((_src, _d, _f))
+    _nf_pairs = [
+        (os.path.basename(_b.rstrip("\\/")) or _b, _d, _f)
+        for _b, _d, _f in effective_layer_files("common/national_focus", root)
+    ]
     _n_all = max(1, len(_nf_pairs))
-    # _layer_dirs 是按「越靠前越优先」排的（顶层在前）；但同名树是后赋值覆盖先赋值，
-    # 所以要反过来读：底层先读、顶层后读，顶层才能真正盖住底下那一份。
-    _nf_pairs.reverse()
     for _i, (name, nf, fn) in enumerate(_nf_pairs):
         if _i % 4 == 0:
             _lp("解析国策树", "%d / %d 个文件" % (_i + 1, _n_all), 4 + int(_i * 54.0 / _n_all))
@@ -170,7 +167,12 @@ def load_focus(root):
             if node:
                 node["shared"] = True
                 node["root"] = _lay
-                state.shared_focuses().append(node)
+                _sfs = state.shared_focuses()
+                _sf_idx = next((idx for idx, x in enumerate(_sfs) if x.get("id") == node.get("id")), -1)
+                if _sf_idx >= 0:
+                    _sfs[_sf_idx] = node
+                else:
+                    _sfs.append(node)
         for start, end, body in find_blocks(text, "focus_tree"):
             items = top_items(body)
             tid, shared_refs, focuses = "", [], []
@@ -208,13 +210,15 @@ def resolve_positions(tree):
         if fid in memo:
             return memo[fid]
         f = by.get(fid)
-        if not f or f["x"] is None:
+        if not f:
             return (0.0, 0.0)
+        fx = float(f["x"]) if f.get("x") is not None else 0.0
+        fy = float(f["y"]) if f.get("y") is not None else 0.0
         if f.get("rel") and f["rel"] in by and f["rel"] not in seen:
             bx, byy = ap(f["rel"], seen + (fid,))
-            r = (bx + f["x"], byy + f["y"])
+            r = (bx + fx, byy + fy)
         else:
-            r = (f["x"], f["y"])
+            r = (fx, fy)
         memo[fid] = r
         return r
     for f in tree["focuses"]:

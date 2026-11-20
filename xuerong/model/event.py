@@ -17,7 +17,8 @@ import re
 
 from xuerong import state
 from xuerong.core import paths
-from xuerong.core.paths import _chain_layers, is_under_game
+from xuerong.core.paths import (_chain_layers, effective_layer_files, is_readonly_mod,
+                                is_under_game, unique_editor_filename)
 from xuerong.core.text import (_atomic_write, _bom_for, brace_match, braces_balanced,
                                set_raw_block, set_scalar, strip_comments, top_items)
 from xuerong.model.history import snapshot
@@ -467,7 +468,7 @@ def event_edit(eid, title=None, desc=None, options=None, root=None,
                             "msg": "已更新 %s 的文本（写进 %s）" % (eid, _lf)}
                 return {"ok": False, "msg": "没有实际改动（参数为空或未匹配到字段）"}
             snapshot(p)
-            _atomic_write(p, b"\xef\xbb\xbf" + "".join(out).encode("utf-8"))
+            _atomic_write(p, _bom_for(p) + "".join(out).encode("utf-8"))
             # 中文文本写进本地化，不塞回事件文件
             _pairs = {}
             if title_text and title:
@@ -488,51 +489,108 @@ def event_edit(eid, title=None, desc=None, options=None, root=None,
 
 
 def load_events(root):
-    # 整条链都读（父 → 子），同名事件由子层覆盖。只读 root 会丢掉父 mod 的事件。
+    # 按 HOI4 实机规则读（respect replace_path 与同名文件整文件覆写，底层 → 顶层）。
     n = 0
-    for ab in _chain_layers(root):
-        d = os.path.join(ab, "events")
-        if not os.path.isdir(d):
-            continue
+    for ab, d, fn in effective_layer_files("events", root):
         name = os.path.basename(ab.rstrip("\\/")) or ab
-        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
-            rel = os.path.join("events", fn)
-            text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
-            nsm = re.search(r'add_namespace\s*=\s*(\w+)', text)
-            ns = nsm.group(1) if nsm else ""
-            for k, v, b in top_items(text):
-                if not b or not k.endswith("_event"):
-                    continue
-                m = re.search(r'(?m)^\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', v)
-                if not m:
-                    continue
-                eid = m.group(1)
-                state.events()[eid] = {"id": eid, "file": rel, "source": name, "type": k, "ns": ns,
-                               "title": state.loc().get(eid + ".t", ""),
-                               "raw": "%s = {\n%s\n}" % (k, v.strip())}
-                n += 1
+        rel = os.path.join("events", fn)
+        text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace").read())
+        nsm = re.search(r'add_namespace\s*=\s*(\w+)', text)
+        ns = nsm.group(1) if nsm else ""
+        for k, v, b in top_items(text):
+            if not b or not k.endswith("_event"):
+                continue
+            m = re.search(r'(?m)^\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', v)
+            if not m:
+                continue
+            eid = m.group(1)
+            state.events()[eid] = {"id": eid, "file": rel, "source": name, "type": k, "ns": ns,
+                           "title": state.loc().get(eid + ".t", ""),
+                           "raw": "%s = {\n%s\n}" % (k, v.strip())}
+            n += 1
     return n
 
+
+
+def _writable_mod_top(root=None):
+    top = None
+    for r in (state.roots() or []):
+        lay = paths.mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_under_game(cand):
+            top = cand
+    if not top and root and not is_under_game(root):
+        top = root
+    return top
+
+
+def _adopt_rel_to_top(root, rel):
+    """当目标文件不在当前可写顶层或传入了只读层时，从生效链拷贝到顶层可写 mod。"""
+    top = _writable_mod_top(root)
+    if not top:
+        return None, "找不到可写的 mod 目录"
+    dst = os.path.join(top, rel)
+    if os.path.isfile(dst):
+        return dst, ""
+    norm_rel = rel.replace("\\", "/")
+    cands = []
+    if root:
+        cands.append(os.path.join(root, rel))
+    for b in reversed(paths.mod_layers(top) or []):
+        if b:
+            cands.append(os.path.join(b, norm_rel.replace("/", os.sep)))
+    src = next((c for c in cands if os.path.isfile(c)), None)
+    if not src:
+        return None, "找不到文件：" + rel
+    os.makedirs(os.path.dirname(dst) or top, exist_ok=True)
+    import shutil as _sh
+    _sh.copyfile(src, dst)
+    return dst, ""
 
 
 # ---------------- 事件 ----------------
 def save_event(root, rel, eid, raw, title="", desc="", title_ja="", desc_ja="",
                title_en="", desc_en="", options=None, trigger_raw="", immediate_raw="", picture=""):
-    path = os.path.join(root, rel)
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read()
-    m = re.search(r'(?m)^[ \t]*id\s*=\s*"?%s"?' % re.escape(eid), text)
-    if not m:
-        return False, "未找到事件 " + eid
+    if not rel or not eid:
+        return False, "参数不完整：缺少文件或事件 id"
+    explicit = {os.path.abspath(r) for r in (state.roots() or []) if r}
+    need_adopt = (
+        not root
+        or is_under_game(root)
+        or is_readonly_mod(root)
+        or (bool(explicit) and os.path.abspath(root) not in explicit)
+    )
+    path = os.path.join(root, rel) if root else ""
+    if need_adopt or not path or not os.path.isfile(path):
+        path, err = _adopt_rel_to_top(root, rel)
+        if not path:
+            return False, err
+        root = _writable_mod_top(root) or root
+    with io.open(path, "rb") as f:
+        raw_bytes = f.read()
+    text = raw_bytes.decode("utf-8-sig" if raw_bytes.startswith(b"\xef\xbb\xbf") else "utf-8", errors="replace")
+
     if trigger_raw:
         raw = set_raw_block(raw, "trigger", trigger_raw)
     if immediate_raw:
         raw = set_raw_block(raw, "immediate", immediate_raw)
     if picture:
         raw = set_scalar(raw, "picture", picture)
-    # 定位包含该 id 的事件块：向前找最近的 *_event = {
-    start = text.rfind("_event", 0, m.start())
-    brace = text.find('{', start)
-    e = brace_match(text, brace)
+
+    # 精确匹配包含该 id 的完整 *_event = { ... } 块，避免残余前缀（原 text[:brace-1] 会残留 country_event =）
+    ev_span = None
+    for em in re.finditer(r'(?m)^[ \t]*[A-Za-z_]*_event[ \t]*=\s*\{', text):
+        eb = text.find("{", em.end() - 1)
+        ee = brace_match(text, eb)
+        if ee <= eb:
+            continue
+        ebody = text[eb + 1:ee - 1]
+        if re.search(r'(?m)^[ \t]*id\s*=\s*"?%s"?' % re.escape(eid), ebody):
+            ev_span = (em.start(), ee)
+            break
+    if not ev_span:
+        return False, "未找到事件 " + eid
+    ev_start, e = ev_span
     if not braces_balanced(raw):
         return False, "花括号不匹配，未保存"
     nsm = re.search(r'add_namespace\s*=\s*(\w+)', text)
@@ -541,7 +599,8 @@ def save_event(root, rel, eid, raw, title="", desc="", title_ja="", desc_ja="",
     if "option" not in raw:
         return False, "事件至少需要一个 option"
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(text[:brace - 1] + raw.strip() + "\n" + text[e:])
+    new_text = text[:ev_start] + raw.strip() + "\n" + text[e:]
+    _atomic_write(path, _bom_for(path) + new_text.encode("utf-8"))
     state.changed()[path] = rel
     ents = {}
     if title: ents.setdefault("simp_chinese", {})[eid + ".t"] = title
@@ -568,8 +627,9 @@ def add_event(root, eid):
     ns = eid.split(".")[0]
     d = os.path.join(root, "events")
     os.makedirs(d, exist_ok=True)
-    path = os.path.join(d, "zz_focus_editor_events.txt")
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read() if os.path.exists(path) else ""
+    fn = unique_editor_filename(root, "events", "zz_focus_editor_events.txt")
+    path = os.path.join(d, fn)
+    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read() if os.path.exists(path) else ""
     if re.search(r'(?m)^\s*id\s*=\s*"?%s"?' % re.escape(eid), text):
         return False, "事件已存在"
     if ("add_namespace = " + ns) not in text:
@@ -577,8 +637,8 @@ def add_event(root, eid):
     text += ("\ncountry_event = {\n\tid = %s\n\ttitle = %s.t\n\tdesc = %s.d\n"
              "\tis_triggered_only = yes\n\toption = {\n\t\tname = %s.a\n\t}\n}\n" % (eid, eid, eid, eid))
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(text)
-    state.changed()[path] = os.path.join("events", "zz_focus_editor_events.txt")
+    _atomic_write(path, _bom_for(path) + text.encode("utf-8"))
+    state.changed()[path] = os.path.join("events", fn)
     _reload()
     return True, "已新建事件 " + eid
 

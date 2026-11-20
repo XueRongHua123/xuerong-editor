@@ -180,7 +180,7 @@ def r_api_new_mod(h, body):
     base = body.get("base") or mod_home()
     ok, msg = create_mod(base, body.get("id"), body.get("name"),
                          body.get("version", "0.1.0"),
-                         body.get("game_version", "1.19.*"),
+                         body.get("game_version") or "",
                          body.get("tree_id", ""), body.get("tag", ""),
                          bool(body.get("create_tree", True)),
                          body.get("dep", ""))

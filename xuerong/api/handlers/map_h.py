@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 from xuerong.api.router import get, post, prefix
 from xuerong.core import facade_bridge as LG
+from xuerong import state
 from xuerong.core.paths import is_under_game, mod_layers
 from xuerong.model.map import (
     _ensure_prov_rgb, _map_pick, height_paint, height_sample, map_analysis,
@@ -28,7 +29,7 @@ from xuerong.model.map import (
 def r_api_map_paint(h, body):
     act = body.get("act") or ""
     if act == "begin":
-        _bp = body.get("bmp") or LG.MAP_EDIT.get("file") or ""
+        _bp = body.get("bmp") or state.map_var("MAP_EDIT").get("file") or ""
         if not _bp:
             _root = _map_pick(body.get("root") or None)
             _layers = mod_layers(_root)
@@ -48,11 +49,11 @@ def r_api_map_paint(h, body):
         _rgb = body.get("rgb")
         if not _rgb and body.get("pid") is not None:
             _ensure_prov_rgb(body.get("root") or None)
-            _rgb = LG.PROV_RGB.get(int(body.get("pid")))
+            _rgb = state.map_var("PROV_RGB").get(int(body.get("pid")))
             if not _rgb:
                 h._send({"ok": False, "msg": "省 %s 没有颜色定义" % body.get("pid")})
                 return
-        nx = map_edit_dab(LG.MAP_EDIT.get("file") or body.get("bmp"), int(body.get("x", 0)),
+        nx = map_edit_dab(state.map_var("MAP_EDIT").get("file") or body.get("bmp"), int(body.get("x", 0)),
                           int(body.get("y", 0)), int(body.get("r", 2)),
                           tuple(_rgb or (255, 0, 255)))
         r = {"ok": True, "pixels": nx}
@@ -322,12 +323,12 @@ def r_api_icons(h, path_only):
     qs = parse_qs(urlparse(h.path).query)
     kind = qs.get("kind", ["focus"])[0]
     if kind == "tech":
-        h._send({"list": sorted(LG.TECH_ICONS.keys()), "map": LG.TECH_ICONS})
+        h._send({"list": sorted(state.tech_icons().keys()), "map": state.tech_icons()})
     elif kind == "equip":
-        h._send({"list": sorted(LG.EQUIP_ICONS.keys()), "map": LG.EQUIP_ICONS})
+        h._send({"list": sorted(state.equip_icons().keys()), "map": state.equip_icons()})
     else:
-        h._send({"list": LG.all_goal_icons() or sorted(LG.ICONS.keys()),
-                    "map": {g: "/api/icon?gfx=" + g for g in (LG.all_goal_icons() or sorted(LG.ICONS.keys()))}})
+        h._send({"list": LG.all_goal_icons() or sorted(state.icons().keys()),
+                    "map": {g: "/api/icon?gfx=" + g for g in (LG.all_goal_icons() or sorted(state.icons().keys()))}})
 
 
 @prefix("/icons/")
@@ -335,7 +336,7 @@ def rp_icons(h, path_only):
     # 用 isfile 而不是 exists：请求 /icons/ 本身时 basename 是空串，join 出来是目录，
     # exists 会为真然后拿目录去 open，抛 IsADirectoryError 变成 500 + 泄露绝对路径。
     fn = os.path.basename(path_only)
-    p = os.path.join(LG.ICON_DIR, fn)
+    p = os.path.join(state.path_var("ICON_DIR"), fn)
     if fn and os.path.isfile(p):
         h._send(io.open(p, "rb").read(), ctype="image/png")
     else:
