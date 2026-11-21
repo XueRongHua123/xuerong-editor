@@ -91,6 +91,7 @@ function renderEquipList(q){
 }
 
 async function selectEquip(e){
+  if(!e) return;
   equipSel = e;
   document.getElementById('equipTitle').textContent = e.id + '   (' + e.file + ')';
   fillSrcHint('equipSrc', (typeof rootByName === 'function' ? rootByName(e.source) : '') || _lastRoot(), e.file, e.source);
@@ -100,15 +101,11 @@ async function selectEquip(e){
   document.getElementById('equipArch').value = ep.archetype || '';
   document.getElementById('equipIsArch').value = ep.is_archetype || '';
   document.getElementById('equipProduced').value = ep.can_be_produced || '';
-  document.getElementById('equipDescZ').value = '';
+  document.getElementById('equipDescZ').value = e.desc || '';
   document.getElementById('equipNameJa').value = '';
   document.getElementById('equipDescJa').value = '';
   document.getElementById('equipNameEn').value = '';
   document.getElementById('equipDescEn').value = '';
-  const eqRaw = await fetchRaw('equip', e.id);
-  document.getElementById('equipRaw').value = eqRaw;
-  document.getElementById('equipUpgrades').value = extractBlock(eqRaw, 'upgrades');
-  document.getElementById('equipSlots').value = extractBlock(eqRaw, 'module_slots');
   const pg = document.getElementById('equipProps'); pg.innerHTML = '';
   const props = e.props || {};
   const keys = Object.keys(props);
@@ -120,12 +117,28 @@ async function selectEquip(e){
     inp.type = 'text'; inp.value = props[k]; inp.dataset.prop = k;
     lab.appendChild(inp); pg.appendChild(lab);
   });
+  const detail = await fetchRawDetail('equip', e.id);
+  if(equipSel !== e) return;
+  const eqRaw = detail.raw || '';
+  const loc = detail.loc || {};
+  document.getElementById('equipNameZ').value = (loc && loc.name) || e.name || '';
+  document.getElementById('equipDescZ').value = (loc && loc.desc) || e.desc || '';
+  document.getElementById('equipNameJa').value = (loc && loc.name_ja) || '';
+  document.getElementById('equipDescJa').value = (loc && loc.desc_ja) || '';
+  document.getElementById('equipNameEn').value = (loc && loc.name_en) || '';
+  document.getElementById('equipDescEn').value = (loc && loc.desc_en) || '';
+  document.getElementById('equipRaw').value = eqRaw;
+  document.getElementById('equipUpgrades').value = extractBlock(eqRaw, 'upgrades');
+  document.getElementById('equipSlots').value = extractBlock(eqRaw, 'module_slots');
 }
 
 async function saveEquip(){
   if(!equipSel){ status('先选择一件装备'); return; }
   const curId = equipSel.id;
-  await withBusy('正在保存装备并刷新…', async ()=>{
+  const btns = ['equipSave', 'equipSaveTop'].map(id=>document.getElementById(id)).filter(Boolean);
+  btns.forEach(b=>{ b.disabled = true; });
+  status('正在保存装备…');
+  try{
     const props = {};
     document.querySelectorAll('#equipProps input[data-prop]').forEach(i=>{
       const v = (i.value || '').trim();
@@ -153,12 +166,21 @@ async function saveEquip(){
     const j = await r.json();
     status(j.msg || '', !j.ok);
     if(j.ok){
-      await loadData();
-      renderEquipList(document.getElementById('equipSearch').value);
-      const hit = (DATA.equipment||[]).find(x=>x.id===curId);
-      if(hit) await selectEquip(hit);
+      const q = document.getElementById('equipSearch')?.value || '';
+      if(j.item){
+        _upsertDataItem('equipment', j.item);
+        renderEquipList(q);
+        await selectEquip(j.item);
+      } else {
+        await loadData();
+        renderEquipList(q);
+        const hit = (DATA.equipment||[]).find(x=>x.id===curId);
+        if(hit) await selectEquip(hit);
+      }
     }
-  });
+  } finally {
+    btns.forEach(b=>{ b.disabled = false; });
+  }
 }
 
 const themeSel = document.getElementById('themeSel');
@@ -168,3 +190,26 @@ const fsSel = document.getElementById('fsSel');
 const search = document.getElementById('search');
 
 const mapOpEl = document.getElementById('mapOpacity');
+
+function _upsertDataItem(listKey, item){
+  if(!DATA || !item || !item.id) return null;
+  if(!Array.isArray(DATA[listKey])) DATA[listKey] = [];
+  const arr = DATA[listKey];
+  const idx = arr.findIndex(x=>x && x.id === item.id);
+  if(idx >= 0) arr[idx] = item;
+  else arr.unshift(item);
+  return item;
+}
+
+async function fetchRawDetail(kind, id){
+  try {
+    const r = await fetch('/api/raw?kind=' + encodeURIComponent(kind || '') + '&id=' + encodeURIComponent(id || ''));
+    const j = await r.json();
+    return {
+      raw: (j && typeof j.raw === 'string') ? j.raw : '',
+      loc: (j && j.loc && typeof j.loc === 'object') ? j.loc : {}
+    };
+  } catch(e){
+    return {raw: '', loc: {}};
+  }
+}

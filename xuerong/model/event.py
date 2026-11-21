@@ -488,6 +488,33 @@ def event_edit(eid, title=None, desc=None, options=None, root=None,
 
 
 
+def _build_event_entry(eid, ev_type, ns, inner_body, rel, src, raw_full=None):
+    raw_str = raw_full.strip() if raw_full is not None else ("%s = {\n%s\n}" % (ev_type, (inner_body or "").strip()))
+    loc_map = state.loc()
+    title = loc_map.get(eid + ".t", "")
+    if not title:
+        clean = strip_comments(inner_body or raw_str)
+        tm = re.search(r'(?m)^\s*title\s*=\s*"?([A-Za-z0-9_.\-]+)"?', clean)
+        if tm:
+            title = loc_map.get(tm.group(1), "")
+    return {
+        "id": eid,
+        "file": rel,
+        "source": src,
+        "type": ev_type,
+        "ns": ns,
+        "title": title,
+        "raw": raw_str,
+    }
+
+
+def event_view(eid):
+    item = state.events().get(eid)
+    if not item:
+        return None
+    return {k: v for k, v in item.items() if k != "raw"}
+
+
 def load_events(root):
     # 按 HOI4 实机规则读（respect replace_path 与同名文件整文件覆写，底层 → 顶层）。
     n = 0
@@ -504,9 +531,7 @@ def load_events(root):
             if not m:
                 continue
             eid = m.group(1)
-            state.events()[eid] = {"id": eid, "file": rel, "source": name, "type": k, "ns": ns,
-                           "title": state.loc().get(eid + ".t", ""),
-                           "raw": "%s = {\n%s\n}" % (k, v.strip())}
+            state.events()[eid] = _build_event_entry(eid, k, ns, v, rel, name)
             n += 1
     return n
 
@@ -616,7 +641,16 @@ def save_event(root, rel, eid, raw, title="", desc="", title_ja="", desc_ja="",
             ents.setdefault("simp_chinese", {})[k] = t
     if ents:
         save_loc(root, ents)
-    _reload()
+    _EVENT_GRAPH_CACHE.clear()
+    raw_clean = raw.strip()
+    tm = re.match(r'\s*([A-Za-z_]*_event)\s*=\s*\{', raw_clean)
+    ev_type = tm.group(1) if tm else (state.events().get(eid, {}).get("type") or "country_event")
+    rb = raw_clean.find("{")
+    re_idx = raw_clean.rfind("}")
+    inner_body = raw_clean[rb + 1:re_idx] if (rb >= 0 and re_idx > rb) else raw_clean
+    ns = nsm.group(1) if nsm else ""
+    src = os.path.basename((root or "").rstrip("\\/")) or root
+    state.events()[eid] = _build_event_entry(eid, ev_type, ns, inner_body, rel, src, raw_full=raw_clean)
     return True, "事件已保存"
 
 
@@ -634,12 +668,19 @@ def add_event(root, eid):
         return False, "事件已存在"
     if ("add_namespace = " + ns) not in text:
         text += "\nadd_namespace = %s\n" % ns
-    text += ("\ncountry_event = {\n\tid = %s\n\ttitle = %s.t\n\tdesc = %s.d\n"
-             "\tis_triggered_only = yes\n\toption = {\n\t\tname = %s.a\n\t}\n}\n" % (eid, eid, eid, eid))
+    block = ("country_event = {\n\tid = %s\n\ttitle = %s.t\n\tdesc = %s.d\n"
+             "\tis_triggered_only = yes\n\toption = {\n\t\tname = %s.a\n\t}\n}" % (eid, eid, eid, eid))
+    text += "\n" + block + "\n"
     snapshot(path)
     _atomic_write(path, _bom_for(path) + text.encode("utf-8"))
-    state.changed()[path] = os.path.join("events", fn)
-    _reload()
+    rel = os.path.join("events", fn)
+    state.changed()[path] = rel
+    _EVENT_GRAPH_CACHE.clear()
+    ib = block.find("{")
+    ie = block.rfind("}")
+    inner_body = block[ib + 1:ie]
+    src = os.path.basename((root or "").rstrip("\\/")) or root
+    state.events()[eid] = _build_event_entry(eid, "country_event", ns, inner_body, rel, src, raw_full=block)
     return True, "已新建事件 " + eid
 
 

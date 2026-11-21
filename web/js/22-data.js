@@ -309,11 +309,30 @@ async function addEquip(){
   if(!id) return;
   const root = _writableRoot();
   if(!root){ status('先加载或新建一个可写的模组', true); return; }
-  const r = await fetch('/api/equip_add', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root, id})});
-  const j = await r.json();
-  status(j.msg || '', !j.ok);
-  if(j.ok){ await loadData(); renderEquipList(''); selectEquip((DATA.equipment||[]).find(x=>x.id===id)); }
+  const btn = document.getElementById('equipAdd');
+  if(btn) btn.disabled = true;
+  status('正在新建装备…');
+  try{
+    const r = await fetch('/api/equip_add', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root, id})});
+    const j = await r.json();
+    status(j.msg || '', !j.ok);
+    if(j.ok){
+      const sInp = document.getElementById('equipSearch');
+      if(sInp) sInp.value = '';
+      let hit = null;
+      if(j.item){
+        hit = _upsertDataItem('equipment', j.item);
+      } else {
+        await loadData();
+        hit = (DATA.equipment||[]).find(x=>x.id===id);
+      }
+      renderEquipList('');
+      if(hit) await selectEquip(hit);
+    }
+  } finally {
+    if(btn) btn.disabled = false;
+  }
 }
 
 async function deleteEquip(){

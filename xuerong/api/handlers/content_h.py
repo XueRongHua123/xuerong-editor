@@ -9,6 +9,7 @@ P6（2B）：门面依赖全部显式（`_router.install()` 已删除）。门�
 """
 from urllib.parse import parse_qs, urlparse
 
+from xuerong import state
 from xuerong.api.router import get, post
 from xuerong.core import facade_bridge as LG
 from xuerong.model.character import (
@@ -17,16 +18,17 @@ from xuerong.model.character import (
 from xuerong.model.decision import (
     decision_add, decision_delete, decision_set, decisions_payload)
 from xuerong.model.equipment import (
-    add_equipment, delete_equipment, equipment_delete, equipment_detail,
-    equipment_edit, equipment_list, save_equipment)
+    add_equipment, delete_equipment, equip_view, equipment_delete,
+    equipment_detail, equipment_edit, equipment_list, save_equipment)
 from xuerong.model.event import (
     add_event, delete_event, event_detail, event_edit, event_graph,
-    event_space_create, event_space_delete, save_event)
-from xuerong.model.idea import add_idea, delete_idea, save_idea
+    event_space_create, event_space_delete, event_view, save_event)
+from xuerong.model.idea import add_idea, delete_idea, idea_view, save_idea
 from xuerong.model.loc import loc_browse, save_loc
 from xuerong.model.map import _map_pick
 from xuerong.model.tech import (
-    add_tech, delete_tech, save_tech, tech_link, tech_move, tech_tree_graph)
+    add_tech, delete_tech, save_tech, tech_link, tech_move, tech_tree_graph,
+    tech_view)
 from xuerong.model.world import loc_generate, loc_missing
 
 
@@ -45,32 +47,42 @@ def r_api_tech_move(h, body):
 @post("/api/idea_save")
 def r_api_idea_save(h, body):
     root = body.get("root")
-    ok, msg = save_idea(root, body.get("file"), body.get("id"),
+    oid = body.get("id")
+    ok, msg = save_idea(root, body.get("file"), oid,
                         body.get("raw") or "", body.get("props") or {},
                         body.get("picture") or "")
     if ok:
         ents = {}
         if body.get("name"):
-            ents.setdefault("simp_chinese", {})[body.get("id")] = body.get("name")
+            ents.setdefault("simp_chinese", {})[oid] = body.get("name")
         if body.get("desc"):
-            ents.setdefault("simp_chinese", {})[body.get("id") + "_desc"] = body.get("desc")
+            ents.setdefault("simp_chinese", {})[oid + "_desc"] = body.get("desc")
         if body.get("name_ja"):
-            ents.setdefault("japanese", {})[body.get("id")] = body.get("name_ja")
+            ents.setdefault("japanese", {})[oid] = body.get("name_ja")
         if body.get("desc_ja"):
-            ents.setdefault("japanese", {})[body.get("id") + "_desc"] = body.get("desc_ja")
+            ents.setdefault("japanese", {})[oid + "_desc"] = body.get("desc_ja")
         if body.get("name_en"):
-            ents.setdefault("english", {})[body.get("id")] = body.get("name_en")
+            ents.setdefault("english", {})[oid] = body.get("name_en")
         if body.get("desc_en"):
-            ents.setdefault("english", {})[body.get("id") + "_desc"] = body.get("desc_en")
+            ents.setdefault("english", {})[oid + "_desc"] = body.get("desc_en")
         if ents:
             save_loc(root, ents)
+        if oid in state.ideas():
+            state.ideas()[oid]["name"] = state.loc().get(oid, oid)
+            state.ideas()[oid]["desc"] = state.loc().get(oid + "_desc", "")
+        h._send({"ok": ok, "msg": msg, "item": idea_view(oid)})
+        return
     h._send({"ok": ok, "msg": msg})
 
 
 @post("/api/add_idea")
 def r_api_add_idea(h, body):
-    ok, msg = add_idea(body.get("root"), body.get("id"))
-    h._send({"ok": ok, "msg": msg})
+    oid = body.get("id")
+    ok, msg = add_idea(body.get("root"), oid)
+    res = {"ok": ok, "msg": msg}
+    if ok:
+        res["item"] = idea_view(oid)
+    h._send(res)
 
 
 @post("/api/delete_idea")
@@ -191,23 +203,31 @@ def r_api_variant_save(h, body):
 
 @post("/api/equip_save")
 def r_api_equip_save(h, body):
-    ok, msg = save_equipment(body.get("root"), body.get("file"), body.get("id"),
+    eid = body.get("id")
+    ok, msg = save_equipment(body.get("root"), body.get("file"), eid,
                              body.get("raw") or "", body.get("name") or "",
                              body.get("desc") or "", body.get("name_ja") or "",
                              body.get("desc_ja") or "", body.get("props") or {},
                              body.get("name_en") or "", body.get("desc_en") or "",
                              body.get("picture") or "")
-    h._send({"ok": ok, "msg": msg})
+    res = {"ok": ok, "msg": msg}
+    if ok:
+        res["item"] = equip_view(eid)
+    h._send(res)
 
 
 @post("/api/tech_save")
 def r_api_tech_save(h, body):
-    ok, msg = save_tech(body.get("root"), body.get("file"), body.get("id"),
+    tid = body.get("id")
+    ok, msg = save_tech(body.get("root"), body.get("file"), tid,
                         body.get("raw") or "", body.get("name") or "",
                         body.get("desc") or "", body.get("name_ja") or "",
                         body.get("desc_ja") or "", body.get("props") or {},
                         body.get("name_en") or "", body.get("desc_en") or "")
-    h._send({"ok": ok, "msg": msg})
+    res = {"ok": ok, "msg": msg}
+    if ok:
+        res["item"] = tech_view(tid)
+    h._send(res)
 
 
 @post("/api/tech_link")
@@ -219,9 +239,13 @@ def r_api_tech_link(h, body):
 
 @post("/api/tech_add")
 def r_api_tech_add(h, body):
-    ok, msg = add_tech(body.get("root"), body.get("id"),
+    tid = body.get("id")
+    ok, msg = add_tech(body.get("root"), tid,
                        body.get("folder") or "", body.get("year") or "1936")
-    h._send({"ok": ok, "msg": msg})
+    res = {"ok": ok, "msg": msg}
+    if ok:
+        res["item"] = tech_view(tid)
+    h._send(res)
 
 
 @post("/api/tech_delete")
@@ -232,20 +256,28 @@ def r_api_tech_delete(h, body):
 
 @post("/api/event_save")
 def r_api_event_save(h, body):
-    ok, msg = save_event(body.get("root"), body.get("file"), body.get("id"),
+    eid = body.get("id")
+    ok, msg = save_event(body.get("root"), body.get("file"), eid,
                          body.get("raw") or "", body.get("title") or "",
                          body.get("desc") or "", body.get("title_ja") or "",
                          body.get("desc_ja") or "", body.get("title_en") or "",
                          body.get("desc_en") or "", body.get("options") or [],
                          body.get("trigger_raw") or "", body.get("immediate_raw") or "",
                          body.get("picture") or "")
-    h._send({"ok": ok, "msg": msg})
+    res = {"ok": ok, "msg": msg}
+    if ok:
+        res["item"] = event_view(eid)
+    h._send(res)
 
 
 @post("/api/equip_add")
 def r_api_equip_add(h, body):
-    ok, msg = add_equipment(body.get("root"), body.get("id"))
-    h._send({"ok": ok, "msg": msg})
+    eid = body.get("id")
+    ok, msg = add_equipment(body.get("root"), eid)
+    res = {"ok": ok, "msg": msg}
+    if ok:
+        res["item"] = equip_view(eid)
+    h._send(res)
 
 
 @post("/api/equip_delete")
@@ -256,8 +288,12 @@ def r_api_equip_delete(h, body):
 
 @post("/api/event_add")
 def r_api_event_add(h, body):
-    ok, msg = add_event(body.get("root"), body.get("id"))
-    h._send({"ok": ok, "msg": msg})
+    eid = body.get("id")
+    ok, msg = add_event(body.get("root"), eid)
+    res = {"ok": ok, "msg": msg}
+    if ok:
+        res["item"] = event_view(eid)
+    h._send(res)
 
 
 @post("/api/event_delete")

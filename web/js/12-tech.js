@@ -8,20 +8,30 @@ async function addTech(){
   if(!folder) return;
   const root = _writableRoot();
   if(!root){ status('先加载或新建一个可写的模组', true); return; }
-  await withBusy('正在新建科技并刷新…', async ()=>{
+  const btn = document.getElementById('techAdd');
+  if(btn) btn.disabled = true;
+  status('正在新建科技…');
+  try{
     const r = await fetch('/api/tech_add', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({root, id: tid, folder})});
     const j = await r.json();
     status(j.msg || '', !j.ok);
     if(j.ok){
-      await loadData();
       const sInp = document.getElementById('techSearch');
       if(sInp) sInp.value = '';
+      let hit = null;
+      if(j.item){
+        hit = _upsertDataItem('techs', j.item);
+      } else {
+        await loadData();
+        hit = (DATA.techs||[]).find(x=>x.id===tid);
+      }
       renderTechList('');
-      const hit = (DATA.techs||[]).find(x=>x.id===tid);
       if(hit) await selectTech(hit);
     }
-  });
+  } finally {
+    if(btn) btn.disabled = false;
+  }
 }
 
 async function deleteTechSel(){
@@ -151,11 +161,12 @@ function extractBlock(text, key){
 }
 
 async function selectTech(t){
+  if(!t) return;
   techSel = t;
   document.getElementById('techTitle').textContent = t.id + '   (' + t.file + ')';
   fillSrcHint('techSrc', (typeof rootByName === 'function' ? rootByName(t.source) : '') || _lastRoot(), t.file, t.source);
   document.getElementById('techNameZ').value = t.name || '';
-  document.getElementById('techDescZ').value = '';
+  document.getElementById('techDescZ').value = t.desc || '';
   document.getElementById('techNameJa').value = '';
   document.getElementById('techDescJa').value = '';
   document.getElementById('techNameEn').value = '';
@@ -163,7 +174,16 @@ async function selectTech(t){
   document.getElementById('techYear').value = t.year || '';
   document.getElementById('techCost').value = t.cost || '';
   document.getElementById('techPath').value = t.path || '';
-  const raw = await fetchRaw('tech', t.id);
+  const detail = await fetchRawDetail('tech', t.id);
+  if(techSel !== t) return;
+  const raw = detail.raw || '';
+  const loc = detail.loc || {};
+  document.getElementById('techNameZ').value = (loc && loc.name) || t.name || '';
+  document.getElementById('techDescZ').value = (loc && loc.desc) || t.desc || '';
+  document.getElementById('techNameJa').value = (loc && loc.name_ja) || '';
+  document.getElementById('techDescJa').value = (loc && loc.desc_ja) || '';
+  document.getElementById('techNameEn').value = (loc && loc.name_en) || '';
+  document.getElementById('techDescEn').value = (loc && loc.desc_en) || '';
   document.getElementById('techPrereq').value = extractBlock(raw, 'prerequisite');
   document.getElementById('techEnable').value = extractBlock(raw, 'enable_equipments');
   document.getElementById('techSub').value = extractBlock(raw, 'sub_technologies');
@@ -173,7 +193,10 @@ async function selectTech(t){
 async function saveTech(){
   if(!techSel){ status('先选择一项科技'); return; }
   const curId = techSel.id;
-  await withBusy('正在保存科技并刷新…', async ()=>{
+  const btns = ['techSave', 'techSaveTop'].map(id=>document.getElementById(id)).filter(Boolean);
+  btns.forEach(b=>{ b.disabled = true; });
+  status('正在保存科技…');
+  try{
     const props = {
       year: document.getElementById('techYear').value.trim(),
       research_cost: document.getElementById('techCost').value.trim(),
@@ -194,12 +217,21 @@ async function saveTech(){
     const j = await r.json();
     status(j.msg || '', !j.ok);
     if(j.ok){
-      await loadData();
-      renderTechList(document.getElementById('techSearch').value);
-      const hit = (DATA.techs||[]).find(x=>x.id===curId);
-      if(hit) await selectTech(hit);
+      const q = document.getElementById('techSearch')?.value || '';
+      if(j.item){
+        _upsertDataItem('techs', j.item);
+        renderTechList(q);
+        await selectTech(j.item);
+      } else {
+        await loadData();
+        renderTechList(q);
+        const hit = (DATA.techs||[]).find(x=>x.id===curId);
+        if(hit) await selectTech(hit);
+      }
     }
-  });
+  } finally {
+    btns.forEach(b=>{ b.disabled = false; });
+  }
 }
 
 

@@ -48,20 +48,36 @@ def _looks_like_idea(body):
 
 
 
+def _build_idea_entry(key, body, rel, src):
+    clean = strip_comments(body or "")
+    props = {}
+    for s, e, inner in find_blocks(clean, "modifier"):
+        for pm in re.finditer(r'(?m)^\s*([A-Za-z0-9_]+)\s*=\s*([^\s#]+)\s*$', inner):
+            props[pm.group(1)] = pm.group(2)
+    pic = re.search(r'(?m)^\s*picture\s*=\s*"?([A-Za-z0-9_]+)"?', clean)
+    return {
+        "id": key,
+        "file": rel,
+        "source": src,
+        "name": state.loc().get(key, key),
+        "desc": state.loc().get(key + "_desc", ""),
+        "picture": pic.group(1) if pic else "",
+        "props": props,
+        "raw": "%s = {\n%s\n}" % (key, (body or "").strip()),
+    }
+
+
+def idea_view(oid):
+    item = state.ideas().get(oid)
+    if not item:
+        return None
+    return {k: v for k, v in item.items() if k != "raw"}
+
+
 def _add_idea(key, body, file, source):
     if not re.match(r'^[A-Za-z0-9_]+$', key or ""):
         return
-    props = {}
-    for s, e, inner in find_blocks(body or "", "modifier"):
-        for pm in re.finditer(r'(?m)^\s*([A-Za-z0-9_]+)\s*=\s*([^\s#]+)\s*$', inner):
-            props[pm.group(1)] = pm.group(2)
-    pic = re.search(r'(?m)^\s*picture\s*=\s*"?([A-Za-z0-9_]+)"?', body or "")
-    state.ideas()[key] = {"id": key, "file": file, "source": source,
-                  "name": state.loc().get(key, key),
-                  "desc": state.loc().get(key + "_desc", ""),
-                  "picture": pic.group(1) if pic else "",
-                  "props": props,
-                  "raw": "%s = {\n%s\n}" % (key, (body or "").strip())}
+    state.ideas()[key] = _build_idea_entry(key, body, file, source)
 
 
 
@@ -289,7 +305,11 @@ def save_idea(root, rel, oid, rawtext, props=None, picture=""):
     snapshot(path)
     _atomic_write(path, _bom_for(path) + newtext.encode("utf-8"))
     state.changed()[path] = rel
-    _reload()
+    rb = rawtext.find("{")
+    re_idx = rawtext.rfind("}")
+    inner_body = rawtext[rb + 1:re_idx] if (rb >= 0 and re_idx > rb) else rawtext
+    src = os.path.basename((root or "").rstrip("\\/")) or root
+    state.ideas()[oid] = _build_idea_entry(oid, inner_body, rel, src)
     return True, "国家精神已保存"
 
 
@@ -319,8 +339,13 @@ def add_idea(root, oid):
     backup(path)
     snapshot(path)
     _atomic_write(path, _bom_for(path) + newtext.encode("utf-8"))
-    state.changed()[path] = os.path.join("common", "ideas", fn)
-    _reload()
+    rel = os.path.join("common", "ideas", fn)
+    state.changed()[path] = rel
+    ib = block.find("{")
+    ie = block.rfind("}")
+    inner_body = block[ib + 1:ie] if (ib >= 0 and ie > ib) else ""
+    src = os.path.basename((root or "").rstrip("\\/")) or root
+    state.ideas()[oid] = _build_idea_entry(oid, inner_body, rel, src)
     return True, "已新建国家精神 " + oid
 
 

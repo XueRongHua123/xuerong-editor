@@ -35,6 +35,62 @@ def _reload():
         _RELOAD()
 
 
+def _build_equip_entry(eid, inner_body, rel, src):
+    clean = strip_comments(inner_body or "")
+    yr = re.search(r'(?m)^\s*year\s*=\s*(\d+)', clean)
+    bd = re.search(r'(?m)^\s*is_buildable\s*=\s*(\w+)', clean)
+    props = {}
+    for pk in ("year", "is_buildable", "type", "reliability", "maximum_speed",
+               "defense", "breakthrough", "hardness", "soft_attack", "hard_attack",
+               "air_attack", "armor", "piercing", "build_cost_ic",
+               "is_archetype", "archetype", "can_be_produced", "group_by",
+               "interface_category"):
+        m2 = re.search(r'(?m)^\s*%s\s*=\s*([^\s#]+)' % pk, clean)
+        if m2 and not m2.group(1).startswith("{"):
+            props[pk] = m2.group(1)
+    slots = []
+    for sm in re.finditer(r'module_slots\s*=\s*\{', clean):
+        sb = clean.find('{', sm.start())
+        se = brace_match(clean, sb)
+        sbody = clean[sb + 1:se - 1]
+        for sk, sv, sbb in top_items(sbody):
+            if not sbb:
+                continue
+            req = re.search(r'(?m)^\s*required\s*=\s*(\w+)', sv)
+            cats = []
+            cmm = re.search(r'allowed_module_categories\s*=\s*\{', sv)
+            if cmm:
+                cb = sv.find('{', cmm.start())
+                ce = brace_match(sv, cb)
+                cats = re.findall(r'[A-Za-z0-9_]+', sv[cb + 1:ce - 1])
+            slots.append({"slot": sk,
+                          "required": (req.group(1).lower() == "yes") if req else False,
+                          "categories": cats})
+    return {
+        "id": eid,
+        "file": rel,
+        "source": src,
+        "name": state.loc().get(eid, eid),
+        "year": yr.group(1) if yr else "",
+        "buildable": bd.group(1) if bd else "",
+        "slots": slots,
+        "picture": (re.search(r'(?m)^\s*picture\s*=\s*"?([A-Za-z0-9_]+)"?', clean) or [None, ""])[1],
+        "props": props,
+        "raw": "%s = {\n%s\n}" % (eid, (inner_body or "").strip()),
+    }
+
+
+def equip_view(eid):
+    e = state.equipments().get(eid)
+    if not e:
+        return None
+    loc = state.loc()
+    d = {k: v for k, v in e.items() if k != "raw"}
+    d["slots"] = [dict(s, name=(loc.get("EQ_MOD_SLOT_" + s["slot"] + "_TITLE")
+                                 or loc.get(s["slot"], s["slot"]))) for s in e.get("slots", [])]
+    return d
+
+
 def load_equipment(root):
     name = os.path.basename(root.rstrip("\\/")) or root
     n = 0
@@ -47,43 +103,7 @@ def load_equipment(root):
               for k, v, b in top_items(body):
                   if not b:
                       continue
-                  yr = re.search(r'(?m)^\s*year\s*=\s*(\d+)', v)
-                  bd = re.search(r'(?m)^\s*is_buildable\s*=\s*(\w+)', v)
-                  props = {}
-                  for pk in ("year", "is_buildable", "type", "reliability", "maximum_speed",
-                             "defense", "breakthrough", "hardness", "soft_attack", "hard_attack",
-                             "air_attack", "armor", "piercing", "build_cost_ic",
-                             "is_archetype", "archetype", "can_be_produced", "group_by",
-                             "interface_category"):
-                      m2 = re.search(r'(?m)^\s*%s\s*=\s*([^\s#]+)' % pk, v)
-                      if m2 and not m2.group(1).startswith("{"):
-                          props[pk] = m2.group(1)
-                  slots = []
-                  for sm in re.finditer(r'module_slots\s*=\s*\{', v):
-                      sb = v.find('{', sm.start())
-                      se = brace_match(v, sb)
-                      sbody = v[sb + 1:se - 1]
-                      for sk, sv, sbb in top_items(sbody):
-                          if not sbb:
-                              continue
-                          req = re.search(r'(?m)^\s*required\s*=\s*(\w+)', sv)
-                          cats = []
-                          cmm = re.search(r'allowed_module_categories\s*=\s*\{', sv)
-                          if cmm:
-                              cb = sv.find('{', cmm.start())
-                              ce = brace_match(sv, cb)
-                              cats = re.findall(r'[A-Za-z0-9_]+', sv[cb + 1:ce - 1])
-                          slots.append({"slot": sk,
-                                        "required": (req.group(1).lower() == "yes") if req else False,
-                                        "categories": cats})
-                  state.equipments()[k] = {"id": k, "file": rel, "source": name,
-                                   "name": state.loc().get(k, k),
-                                   "year": yr.group(1) if yr else "",
-                                   "buildable": bd.group(1) if bd else "",
-                                   "slots": slots,
-                                   "picture": (re.search(r'(?m)^\s*picture\s*=\s*"?([A-Za-z0-9_]+)"?', v) or [None, ""])[1],
-                                   "props": props,
-                                   "raw": "%s = {\n%s\n}" % (k, v.strip())}
+                  state.equipments()[k] = _build_equip_entry(k, v, rel, name)
                   n += 1
     return n
 
@@ -325,7 +345,11 @@ def save_equipment(root, rel, eid, raw, name="", desc="", name_ja="", desc_ja=""
     if desc_en: ents.setdefault("english", {})[eid + "_desc"] = desc_en
     if ents:
         save_loc(root, ents)
-    _reload()
+    rb = raw.find("{")
+    re_idx = raw.rfind("}")
+    inner_body = raw[rb + 1:re_idx] if (rb >= 0 and re_idx > rb) else raw
+    src = os.path.basename((root or "").rstrip("\\/")) or root
+    state.equipments()[eid] = _build_equip_entry(eid, inner_body, rel, src)
     return True, "装备已保存"
 
 
@@ -372,9 +396,14 @@ def add_equipment(root, eid):
              "\t\tbuild_cost_ic = 1.0\n\t}\n" % eid)
     snapshot(path)
     io.open(path, "w", encoding="utf-8", newline="").write(text[:end - 1] + block + text[end - 1:])
-    state.changed()[path] = os.path.join("common", "units", "equipment", fn)
+    rel = os.path.join("common", "units", "equipment", fn)
+    state.changed()[path] = rel
     _ensure_script_enum_equipment(root, eid)
-    _reload()
+    ib = block.find("{")
+    ie = block.rfind("}")
+    inner_body = block[ib + 1:ie]
+    src = os.path.basename((root or "").rstrip("\\/")) or root
+    state.equipments()[eid] = _build_equip_entry(eid, inner_body, rel, src)
     return True, "已新建装备 " + eid
 
 

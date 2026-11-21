@@ -6718,7 +6718,53 @@ def lint_project(limit=1500):
 
 def item_raw(kind, iid):
     m = {"idea": IDEAS, "equip": EQUIPMENTS, "tech": TECHS, "event": EVENTS}.get(kind) or {}
-    return {"raw": m.get(iid, {}).get("raw", "")}
+    raw = m.get(iid, {}).get("raw", "")
+    edits = _state.loc_edits() or {}
+    simp_edits = edits.get("simp_chinese") or {}
+    ja_edits = edits.get("japanese") or {}
+    en_edits = edits.get("english") or {}
+    if kind == "event":
+        clean = strip_comments(raw) if raw else ""
+        tm = re.search(r'(?m)^\s*title\s*=\s*"?([A-Za-z0-9_.\-]+)"?', clean)
+        tkey = tm.group(1) if tm else ""
+        dm = re.search(r'(?m)^\s*desc\s*=\s*"?([A-Za-z0-9_.\-]+)"?', clean)
+        dkey = dm.group(1) if dm else ""
+        opts = {}
+        for om in re.finditer(r'(?m)^\s*option\s*=\s*\{', clean):
+            ob = clean.find("{", om.end() - 1)
+            oe = brace_match(clean, ob)
+            if oe <= ob:
+                continue
+            sub = clean[ob + 1:oe - 1]
+            nm = re.search(r'(?:^|\s)name\s*=\s*"?([A-Za-z0-9_.\-]+)"?', sub)
+            if nm:
+                ok = nm.group(1)
+                opts[ok] = simp_edits.get(ok) or LOC.get(ok) or ""
+        loc = {
+            "title": simp_edits.get(iid + ".t") or LOC.get(iid + ".t") or (
+                (simp_edits.get(tkey) or LOC.get(tkey, "")) if tkey else ""
+            ),
+            "desc": simp_edits.get(iid + ".d") or LOC.get(iid + ".d") or (
+                (simp_edits.get(dkey) or LOC.get(dkey, "")) if dkey else ""
+            ),
+            "options": opts,
+            "title_ja": ja_edits.get(iid + ".t") or (ja_edits.get(tkey, "") if tkey else ""),
+            "desc_ja": ja_edits.get(iid + ".d") or (ja_edits.get(dkey, "") if dkey else ""),
+            "title_en": en_edits.get(iid + ".t") or (en_edits.get(tkey, "") if tkey else ""),
+            "desc_en": en_edits.get(iid + ".d") or (en_edits.get(dkey, "") if dkey else ""),
+        }
+    elif kind in ("idea", "tech", "equip"):
+        loc = {
+            "name": simp_edits.get(iid) or LOC.get(iid, ""),
+            "desc": simp_edits.get(iid + "_desc") or LOC.get(iid + "_desc", ""),
+            "name_ja": ja_edits.get(iid, ""),
+            "desc_ja": ja_edits.get(iid + "_desc", ""),
+            "name_en": en_edits.get(iid, ""),
+            "desc_en": en_edits.get(iid + "_desc", ""),
+        }
+    else:
+        loc = {}
+    return {"raw": raw, "loc": loc}
 
 
 def expand_shared_trees():

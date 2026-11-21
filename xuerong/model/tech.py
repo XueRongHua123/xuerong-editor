@@ -46,6 +46,65 @@ def _looks_tech(body):
 
 
 
+def _build_tech_entry(tid, tv, rel, src, macros=None):
+    macros = macros or {}
+
+    def _num(tok):
+        tok = (tok or "").strip()
+        if tok.startswith("@"):
+            tok = macros.get(tok[1:], "")
+        try:
+            return float(tok)
+        except Exception:
+            return None
+
+    clean = strip_comments(tv or "")
+    yr = re.search(r'(?m)^\s*(?:start_year|year)\s*=\s*(\d+)', clean)
+    fname = "其他"
+    fpx = fpy = None
+    fb = re.search(r'folder\s*=\s*\{', clean)
+    if fb:
+        fstart = clean.find('{', fb.start())
+        fend = brace_match(clean, fstart)
+        finner = clean[fstart + 1:fend - 1]
+        nm = re.search(r'name\s*=\s*"?([A-Za-z0-9_]+)"?', finner)
+        if nm:
+            fname = nm.group(1)
+        pos = re.search(r'position\s*=\s*\{([^}]*)\}', finner)
+        if pos:
+            px = re.search(r'x\s*=\s*([^\s]+)', pos.group(1))
+            py = re.search(r'y\s*=\s*([^\s]+)', pos.group(1))
+            if px:
+                fpx = _num(px.group(1))
+            if py:
+                fpy = _num(py.group(1))
+    cost = re.search(r'(?m)^\s*research_cost\s*=\s*([0-9.]+)', clean)
+    leads = re.findall(r'leads_to_tech\s*=\s*"?([A-Za-z0-9_]+)"?', clean)
+    pre = []
+    for pm in re.finditer(r'prerequisite\s*=\s*\{', clean):
+        pb = clean.find('{', pm.start())
+        pe = brace_match(clean, pb)
+        pre += re.findall(r'[A-Za-z][A-Za-z0-9_]*', clean[pb + 1:pe - 1])
+    return {
+        "id": tid, "file": rel, "source": src,
+        "name": state.loc().get(tid, tid),
+        "year": yr.group(1) if yr else "",
+        "path": fname,
+        "fx": fpx,
+        "fy": fpy,
+        "cost": cost.group(1) if cost else "",
+        "prereq": pre, "leads": leads,
+        "raw": "%s = {\n%s\n}" % (tid, (tv or "").strip()),
+    }
+
+
+def tech_view(tid):
+    item = state.techs().get(tid)
+    if not item:
+        return None
+    return {k: v for k, v in item.items() if k != "raw"}
+
+
 def load_techs(root):
     name = os.path.basename(root.rstrip("\\/")) or root
     n = 0
@@ -59,14 +118,6 @@ def load_techs(root):
         macros = {}
         for mm in re.finditer(r'(?m)^\s*@([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', text):
             macros[mm.group(1)] = mm.group(2)
-        def _num(tok, _m=macros):
-            tok = (tok or "").strip()
-            if tok.startswith("@"):
-                tok = _m.get(tok[1:], "")
-            try:
-                return float(tok)
-            except Exception:
-                return None
         for s, e, body in find_blocks(text, "technologies"):
             for k, v, b in top_items(body):
                 if not b:
@@ -76,42 +127,7 @@ def load_techs(root):
                 else:
                     cand = [(k2, v2) for k2, v2, b2 in top_items(v) if b2 and _looks_tech(v2)]
                 for tid, tv in cand:
-                    yr = re.search(r'(?m)^\s*(?:start_year|year)\s*=\s*(\d+)', tv)
-                    fname = "其他"
-                    fpx = fpy = None
-                    fb = re.search(r'folder\s*=\s*\{', tv)
-                    if fb:
-                        fstart = tv.find('{', fb.start())
-                        fend = brace_match(tv, fstart)
-                        finner = tv[fstart + 1:fend - 1]
-                        nm = re.search(r'name\s*=\s*"?([A-Za-z0-9_]+)"?', finner)
-                        if nm:
-                            fname = nm.group(1)
-                        pos = re.search(r'position\s*=\s*\{([^}]*)\}', finner)
-                        if pos:
-                            px = re.search(r'x\s*=\s*([^\s]+)', pos.group(1))
-                            py = re.search(r'y\s*=\s*([^\s]+)', pos.group(1))
-                            if px:
-                                fpx = _num(px.group(1))
-                            if py:
-                                fpy = _num(py.group(1))
-                    fold = re.search(r'name\s*=\s*"?%s"?' % re.escape(fname), tv) if fname != "其他" else None
-                    cost = re.search(r'(?m)^\s*research_cost\s*=\s*([0-9.]+)', tv)
-                    leads = re.findall(r'leads_to_tech\s*=\s*"?([A-Za-z0-9_]+)"?', tv)
-                    pre = []
-                    for pm in re.finditer(r'prerequisite\s*=\s*\{', tv):
-                        pb = tv.find('{', pm.start())
-                        pe = brace_match(tv, pb)
-                        pre += re.findall(r'[A-Za-z][A-Za-z0-9_]*', tv[pb + 1:pe - 1])
-                    state.techs()[tid] = {"id": tid, "file": rel, "source": src,
-                                  "name": state.loc().get(tid, tid),
-                                  "year": yr.group(1) if yr else "",
-                                  "path": fname,
-                                  "fx": fpx,
-                                  "fy": fpy,
-                                  "cost": cost.group(1) if cost else "",
-                                  "prereq": pre, "leads": leads,
-                                  "raw": "%s = {\n%s\n}" % (tid, tv.strip())}
+                    state.techs()[tid] = _build_tech_entry(tid, tv, rel, src, macros=macros)
                     n += 1
     for t in state.techs().values():
         t["leads"] = [x for x in t.get("leads", []) if x in state.techs() and x != t["id"]]
@@ -479,7 +495,22 @@ def save_tech(root, rel, tid, raw, name="", desc="", name_ja="", desc_ja="", pro
     if desc_en: ents.setdefault("english", {})[tid + "_desc"] = desc_en
     if ents:
         save_loc(root, ents)
-    _reload()
+    macros = {}
+    for mm in re.finditer(r'(?m)^\s*@([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', strip_comments(text)):
+        macros[mm.group(1)] = mm.group(2)
+    rb = raw.find("{")
+    re_idx = raw.rfind("}")
+    tv = raw[rb + 1:re_idx] if (rb >= 0 and re_idx > rb) else raw
+    src = os.path.basename((root or "").rstrip("\\/")) or root
+    entry = _build_tech_entry(tid, tv, rel, src, macros=macros)
+    techs = state.techs()
+    entry["leads"] = [x for x in entry.get("leads", []) if x in techs and x != tid]
+    pre = {p for p in entry.get("prereq", []) if p in techs and p != tid}
+    for other_id, other in techs.items():
+        if other_id != tid and tid in (other.get("leads") or []):
+            pre.add(other_id)
+    entry["prereq"] = sorted(pre)
+    techs[tid] = entry
     return True, "科技已保存"
 
 
@@ -505,8 +536,21 @@ def add_tech(root, tid, folder, year="1936"):
     text = text[:te - 1] + block + text[te - 1:]
     snapshot(path)
     _atomic_write(path, _bom_for(path) + text.encode("utf-8"))
-    state.changed()[path] = os.path.join("common", "technologies", fn)
-    _reload()
+    rel = os.path.join("common", "technologies", fn)
+    state.changed()[path] = rel
+    ib = block.find("{")
+    ie = block.rfind("}")
+    tv = block[ib + 1:ie]
+    src = os.path.basename((root or "").rstrip("\\/")) or root
+    entry = _build_tech_entry(tid, tv, rel, src)
+    techs = state.techs()
+    entry["leads"] = [x for x in entry.get("leads", []) if x in techs and x != tid]
+    pre = {p for p in entry.get("prereq", []) if p in techs and p != tid}
+    for other_id, other in techs.items():
+        if other_id != tid and tid in (other.get("leads") or []):
+            pre.add(other_id)
+    entry["prereq"] = sorted(pre)
+    techs[tid] = entry
     return True, "已新建科技 " + tid
 
 

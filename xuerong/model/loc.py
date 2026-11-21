@@ -80,12 +80,21 @@ def save_loc(root, entries):
     tgt = _writable_loc_root(root)
     if not tgt:
         return False, "没有可写的模组目录"
-    for lang, kv in (entries or {}).items():
-        if not isinstance(kv, dict) or not kv:
-            continue
+    items = [(lang, kv) for lang, kv in (entries or {}).items()
+             if isinstance(kv, dict) and kv]
+    items.sort(key=lambda pair: 1 if pair[0] == "simp_chinese" else 0)
+    simp_in = entries.get("simp_chinese") if isinstance(entries, dict) and isinstance(entries.get("simp_chinese"), dict) else {}
+    simp_edits = state.loc_edits().get("simp_chinese") or {}
+    loc_map = state.loc()
+    for lang, kv in items:
         state.loc_edits().setdefault(lang, {}).update(kv)
         _write_loc(tgt, lang)
-        state.loc().update(kv)
+        if lang == "simp_chinese":
+            loc_map.update(kv)
+        else:
+            for k, v in kv.items():
+                if k not in simp_edits and k not in simp_in:
+                    loc_map[k] = v
     return True, "本地化已保存"
 
 

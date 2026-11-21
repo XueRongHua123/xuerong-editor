@@ -15,6 +15,8 @@ function renderEventList(q){
   box.innerHTML = '';
   items.slice(0, 800).forEach(e=>{
     const d = listRow(e.id, e.title, e.source, e.file);
+    d.dataset.eventId = e.id;
+    if(eventSel && eventSel.id === e.id) d.classList.add('on');
     d.onclick = ()=>selectEvent(e);
     box.appendChild(d);
   });
@@ -39,9 +41,16 @@ function parseEventOptions(raw){
   return out;
 }
 
-function renderEventOptions(raw){
+function renderEventOptions(raw, optLoc){
   const box = document.getElementById('eventOptions');
   if(!box) return;
+  let locMap = optLoc;
+  if(locMap === undefined){
+    locMap = {};
+    box.querySelectorAll('input[data-key]').forEach(inp=>{
+      if(inp.dataset.key) locMap[inp.dataset.key] = inp.value || '';
+    });
+  }
   box.innerHTML = '';
   eventOptionBlocks = parseEventOptions(raw);
   if(!eventOptionBlocks.length){ box.textContent = '（这个事件还没有 option，建议至少加一个）'; return; }
@@ -54,14 +63,19 @@ function renderEventOptions(raw){
     const txt = document.createElement('input');
     txt.type = 'text'; txt.placeholder = '选项文本（中文）';
     txt.dataset.key = o.key;
-    txt.style.cssText = 'flex:1;background:#141719;border:1px solid #3a4346;color:#d9d3c7;border-radius:5px;padding:4px 6px';
+    txt.style.cssText = 'flex:1;min-width:0;margin:0';
+    txt.value = (locMap && o.key && locMap[o.key]) || '';
     const del = document.createElement('button');
     del.className = 'btn'; del.textContent = '删除';
     del.onclick = ()=>{
+      const kept = {};
+      box.querySelectorAll('input[data-key]').forEach((inp, i2)=>{
+        if(i2 !== idx && inp.dataset.key) kept[inp.dataset.key] = inp.value || '';
+      });
       const el = document.getElementById('eventRaw');
       const b = eventOptionBlocks[idx];
       el.value = el.value.slice(0, b.start) + el.value.slice(b.end);
-      renderEventOptions(el.value);
+      renderEventOptions(el.value, kept);
     };
     row.appendChild(key); row.appendChild(txt); row.appendChild(del);
     box.appendChild(row);
@@ -69,28 +83,44 @@ function renderEventOptions(raw){
 }
 
 async function selectEvent(e){
+  if(!e) return;
   eventSel = e;
+  document.querySelectorAll('#eventList .lr').forEach(el=>{
+    el.classList.toggle('on', el.dataset.eventId === e.id);
+  });
   document.getElementById('eventTitle').textContent = e.id + '   (' + e.file + ')';
   fillSrcHint('eventSrc', (typeof rootByName === 'function' ? rootByName(e.source) : '') || _lastRoot(), e.file, e.source);
-  document.getElementById('eventNameZ').value = '';
-  document.getElementById('eventDescZ').value = '';
+  document.getElementById('eventNameZ').value = e.title || '';
+  document.getElementById('eventDescZ').value = e.desc || '';
   document.getElementById('eventNameJa').value = '';
   document.getElementById('eventDescJa').value = '';
   document.getElementById('eventNameEn').value = '';
   document.getElementById('eventDescEn').value = '';
-  const raw = await fetchRaw('event', e.id);
+  const detail = await fetchRawDetail('event', e.id);
+  if(eventSel !== e) return;
+  const raw = detail.raw || '';
+  const loc = detail.loc || {};
+  document.getElementById('eventNameZ').value = (loc && (loc.title || loc.name)) || e.title || '';
+  document.getElementById('eventDescZ').value = (loc && loc.desc) || e.desc || '';
+  document.getElementById('eventNameJa').value = (loc && (loc.title_ja || loc.name_ja)) || '';
+  document.getElementById('eventDescJa').value = (loc && loc.desc_ja) || '';
+  document.getElementById('eventNameEn').value = (loc && (loc.title_en || loc.name_en)) || '';
+  document.getElementById('eventDescEn').value = (loc && loc.desc_en) || '';
   document.getElementById('eventRaw').value = raw;
   document.getElementById('eventTrigger').value = extractBlock(raw, 'trigger');
   document.getElementById('eventImmediate').value = extractBlock(raw, 'immediate');
   const pm = /^\s*picture\s*=\s*"?([^\s#"]+)/m.exec(raw);
   document.getElementById('eventPic').value = pm ? pm[1] : '';
-  renderEventOptions(raw);
+  renderEventOptions(raw, (loc && loc.options) || {});
 }
 
 async function saveEvent(){
   if(!eventSel){ status('先选择一个事件'); return; }
   const curId = eventSel.id;
-  await withBusy('正在保存事件并刷新…', async ()=>{
+  const btns = ['eventSave', 'eventSaveTop'].map(id=>document.getElementById(id)).filter(Boolean);
+  btns.forEach(b=>{ b.disabled = true; });
+  status('正在保存事件…');
+  try{
     const options = [...document.querySelectorAll('#eventOptions input[data-key]')]
       .map(i=>({key: i.dataset.key, text: (i.value || '').trim()}))
       .filter(o=>o.key && o.text);
@@ -109,12 +139,21 @@ async function saveEvent(){
     const j = await r.json();
     status(j.msg || '', !j.ok);
     if(j.ok){
-      await loadData();
-      renderEventList(document.getElementById('eventSearch').value);
-      const hit = (DATA.events||[]).find(x=>x.id===curId);
-      if(hit) await selectEvent(hit);
+      const q = document.getElementById('eventSearch')?.value || '';
+      if(j.item){
+        _upsertDataItem('events', j.item);
+        renderEventList(q);
+        await selectEvent(j.item);
+      } else {
+        await loadData();
+        renderEventList(q);
+        const hit = (DATA.events||[]).find(x=>x.id===curId);
+        if(hit) await selectEvent(hit);
+      }
     }
-  });
+  } finally {
+    btns.forEach(b=>{ b.disabled = false; });
+  }
 }
 
 
@@ -123,20 +162,34 @@ async function addEvent(){
   if(!id) return;
   const root = _writableRoot();
   if(!root){ status('先加载或新建一个可写的模组', true); return; }
-  await withBusy('正在新建事件并刷新…', async ()=>{
+  const btn = document.getElementById('eventAdd');
+  if(btn) btn.disabled = true;
+  status('正在新建事件…');
+  try{
     const r = await fetch('/api/event_add', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({root, id})});
     const j = await r.json();
     status(j.msg || '', !j.ok);
     if(j.ok){
-      await loadData();
       const sInp = document.getElementById('eventSearch');
       if(sInp) sInp.value = '';
+      let hit = null;
+      if(j.item){
+        hit = _upsertDataItem('events', j.item);
+      } else {
+        await loadData();
+        hit = (DATA.events||[]).find(x=>x.id===id);
+      }
       renderEventList('');
-      const hit = (DATA.events||[]).find(x=>x.id===id);
-      if(hit) await selectEvent(hit);
+      if(hit){
+        await selectEvent(hit);
+        const nmEl = document.getElementById('eventNameZ');
+        if(nmEl) nmEl.focus();
+      }
     }
-  });
+  } finally {
+    if(btn) btn.disabled = false;
+  }
 }
 
 async function deleteEventSel(){

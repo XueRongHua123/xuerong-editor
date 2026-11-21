@@ -873,6 +873,7 @@ async function fetchRaw(kind, id){
 }
 
 async function selectIdea(i){
+  if(!i) return;
   ideaSel = i;
   _ideaRawDirty = false;
   document.querySelectorAll('#ideaList .lr').forEach(el=>{
@@ -887,10 +888,6 @@ async function selectIdea(i){
   document.getElementById('ideaDescJa').value = '';
   document.getElementById('ideaNameEn').value = '';
   document.getElementById('ideaDescEn').value = '';
-  const raw = await fetchRaw('idea', i.id);
-  document.getElementById('ideaRaw').value = raw;
-  document.getElementById('ideaAllowed').value = extractBlock(raw, 'allowed');
-  document.getElementById('ideaTrigger').value = extractBlock(raw, 'trigger');
   const pg = document.getElementById('ideaProps');
   pg.innerHTML = '';
   const props = i.props || {};
@@ -900,6 +897,19 @@ async function selectIdea(i){
   } else {
     keys.forEach(k=>_appendIdeaProp(pg, k, props[k]));
   }
+  const detail = await fetchRawDetail('idea', i.id);
+  if(ideaSel !== i) return;
+  const raw = detail.raw || '';
+  const loc = detail.loc || {};
+  document.getElementById('ideaNameZ').value = (loc && loc.name) || i.name || '';
+  document.getElementById('ideaDescZ').value = (loc && loc.desc) || i.desc || '';
+  if(loc && loc.name_ja) document.getElementById('ideaNameJa').value = loc.name_ja;
+  if(loc && loc.desc_ja) document.getElementById('ideaDescJa').value = loc.desc_ja;
+  if(loc && loc.name_en) document.getElementById('ideaNameEn').value = loc.name_en;
+  if(loc && loc.desc_en) document.getElementById('ideaDescEn').value = loc.desc_en;
+  document.getElementById('ideaRaw').value = raw;
+  document.getElementById('ideaAllowed').value = extractBlock(raw, 'allowed');
+  document.getElementById('ideaTrigger').value = extractBlock(raw, 'trigger');
 }
 
 function addIdeaMod(presetKey, presetVal){
@@ -932,7 +942,10 @@ function addIdeaMod(presetKey, presetVal){
 async function saveIdea(){
   if(!ideaSel){ status('先选择一个国家精神'); return; }
   const curId = ideaSel.id;
-  await withBusy('正在保存国家精神并刷新…', async ()=>{
+  const btns = ['ideaSave', 'ideaSaveTop'].map(id=>document.getElementById(id)).filter(Boolean);
+  btns.forEach(b=>{ b.disabled = true; });
+  status('正在保存国家精神…');
+  try{
     let payload;
     if(_ideaTab === 'raw' && _ideaRawDirty){
       payload = {
@@ -982,12 +995,21 @@ async function saveIdea(){
     status(j.ok ? '国家精神已保存' : ('保存失败：' + j.msg), !j.ok);
     if(j.ok){
       _ideaRawDirty = false;
-      await loadData();
-      renderIdeaList(document.getElementById('ideaSearch').value);
-      const hit = (DATA.ideas||[]).find(i=>i.id===curId);
-      if(hit) await selectIdea(hit);
+      const q = document.getElementById('ideaSearch')?.value || '';
+      if(j.item){
+        _upsertDataItem('ideas', j.item);
+        renderIdeaList(q);
+        await selectIdea(j.item);
+      } else {
+        await loadData();
+        renderIdeaList(q);
+        const hit = (DATA.ideas||[]).find(i=>i.id===curId);
+        if(hit) await selectIdea(hit);
+      }
     }
-  });
+  } finally {
+    btns.forEach(b=>{ b.disabled = false; });
+  }
 }
 
 async function addIdea(){
@@ -995,16 +1017,24 @@ async function addIdea(){
   if(!id) return;
   const root = _writableRoot();
   if(!root){ status('先加载或新建一个可写的模组', true); return; }
-  await withBusy('正在新建国家精神并刷新…', async ()=>{
+  const btn = document.getElementById('ideaAdd');
+  if(btn) btn.disabled = true;
+  status('正在新建国家精神…');
+  try{
     const r = await fetch('/api/add_idea', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({root, id})});
     const j = await r.json();
     status(j.msg || '', !j.ok);
     if(j.ok){
-      await loadData();
       const sInp = document.getElementById('ideaSearch');
       if(sInp) sInp.value = '';
-      const hit = (DATA.ideas||[]).find(i=>i.id===id);
+      let hit = null;
+      if(j.item){
+        hit = _upsertDataItem('ideas', j.item);
+      } else {
+        await loadData();
+        hit = (DATA.ideas||[]).find(i=>i.id===id);
+      }
       if(hit){
         const modNames = new Set((DATA.roots || []).filter(rt=>rt && !rt.readonly && rt.name).map(rt=>rt.name));
         if(_ideaScope === 'mod' && !modNames.has(hit.source)){
@@ -1023,7 +1053,9 @@ async function addIdea(){
         renderIdeaList('');
       }
     }
-  });
+  } finally {
+    if(btn) btn.disabled = false;
+  }
 }
 
 async function deleteIdeaSel(){
