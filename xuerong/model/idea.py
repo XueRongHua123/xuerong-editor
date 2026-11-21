@@ -106,8 +106,70 @@ def load_ideas(root):
 
 
 
+def _brace_depth_at(text, pos):
+    """计算无注释文本在 pos 处的花括号嵌套深度（忽略引号内字符）。"""
+    d = 0
+    instr = False
+    for ch in text[:pos]:
+        if ch == '"':
+            instr = not instr
+        elif not instr:
+            if ch == '{':
+                d += 1
+            elif ch == '}':
+                d -= 1
+    return d
+
+
+def _date_block_spans(text):
+    """返回顶层日期块 YYYY.MM.DD = { ... } 的起止区间列表。"""
+    spans = []
+    for m in re.finditer(r'(?m)^[ \t]*\d{3,4}\.\d+\.\d+[ \t]*=\s*\{', text):
+        if _brace_depth_at(text, m.start()) != 0:
+            continue
+        ob = text.find('{', m.end() - 1)
+        if ob < 0:
+            continue
+        ce = brace_match(text, ob)
+        if ce > ob:
+            spans.append((m.start(), ce))
+    return spans
+
+
+def _collect_add_ideas_blocks(text, include_date=False):
+    """收集 add_ideas = { ... } 块，按 (depth == 0, 位置) 排序，可过滤日期块内部。"""
+    dspans = _date_block_spans(text)
+    out = []
+    for a, b, body in find_blocks(text, "add_ideas"):
+        if not include_date and any(ds < a < de for ds, de in dspans):
+            continue
+        hdr = text.rfind("add_ideas", 0, a)
+        depth = _brace_depth_at(text, hdr if hdr >= 0 else a)
+        out.append((depth, a, b, body))
+    out.sort(key=lambda x: (0 if x[0] == 0 else 1, x[1]))
+    return out, dspans
+
+
+def _extract_ideas_from_blocks(blocks):
+    out = []
+    for _depth, _a, _b, body in blocks:
+        for ln in body.splitlines():
+            ln = ln.strip()
+            if not ln or ln.startswith("#"):
+                continue
+            m = re.match(r'([A-Za-z][A-Za-z0-9_\-]*)\s*$', ln)
+            if m:
+                out.append(m.group(1))
+    seen, uniq = set(), []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq
+
+
 def load_country_ideas(root=None, tag=""):
-    """解析某国 history 里的 add_ideas（国家精神）。
+    """解析某国开局有效的 add_ideas（跳过 1939.1.1 等后续日期块）。
 
     格式和 set_technology 不同：
         add_ideas = {
@@ -127,29 +189,16 @@ def load_country_ideas(root=None, tag=""):
     except Exception as e:
         return {"ok": False, "msg": "读取失败：%s" % e, "ideas": []}
     text = _strip_keep_len(raw)
-    out, blocks = [], 0
-    for a, b, body in find_blocks(text, "add_ideas"):
-        blocks += 1
-        for ln in body.splitlines():
-            ln = ln.strip()
-            if not ln or ln.startswith("#"):
-                continue
-            m = re.match(r'([A-Za-z][A-Za-z0-9_\-]*)\s*$', ln)
-            if m:
-                out.append(m.group(1))
-    seen, uniq = set(), []
-    for x in out:
-        if x not in seen:
-            seen.add(x)
-            uniq.append(x)
+    blocks, _dspans = _collect_add_ideas_blocks(text, include_date=False)
+    uniq = _extract_ideas_from_blocks(blocks)
     return {"ok": True, "tag": tag, "file": os.path.basename(p),
-            "blocks": blocks, "ideas": uniq, "count": len(uniq),
-            "msg": "%s：%d 项国家精神（%d 个 add_ideas 块）" % (tag, len(uniq), blocks)}
+            "blocks": len(blocks), "ideas": uniq, "count": len(uniq),
+            "msg": "%s：%d 项国家精神（%d 个 add_ideas 块）" % (tag, len(uniq), len(blocks))}
 
 
 
 def country_idea_toggle(root, tag, idea, on=True):
-    """给某国加上或去掉一项国家精神。"""
+    """给某国开局加上或去掉一项国家精神（写顶层块，绕开日期块与条件块）。"""
     root = paths._pick(root)
     tag = (tag or "").upper()
     idea = (idea or "").strip()
@@ -172,44 +221,44 @@ def country_idea_toggle(root, tag, idea, on=True):
 
     raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
     text = _strip_keep_len(raw)
-    cur = load_country_ideas(root, tag)["ideas"]
-    has = idea in cur
-    if on and has:
-        return {"ok": True, "msg": "已经有 %s 了" % idea}
-    if (not on) and (not has):
-        return {"ok": True, "msg": "本来就没有 %s" % idea}
+    non_date_blocks, dspans = _collect_add_ideas_blocks(text, include_date=False)
+    top_blocks = [blk for blk in non_date_blocks if blk[0] == 0]
 
-    blocks = list(find_blocks(text, "add_ideas"))
-    if not blocks:
-        if not on:
-            return {"ok": True, "msg": "本来就没有 %s" % idea}
-        ins = "\n\tadd_ideas = {\n\t\t%s\n\t}\n" % idea
-        hi = text.find("history = {")
-        if hi >= 0:
-            br = text.find("{", hi)
-            pos = br + 1
-            new_text = raw[:pos] + ins + raw[pos:]
+    if on:
+        if idea in _extract_ideas_from_blocks(top_blocks):
+            return {"ok": True, "msg": "已经有 %s 了" % idea}
+        if top_blocks:
+            _depth, _a, b, _body = top_blocks[0]
+            before = raw[:b - 1].rstrip(" \t")
+            nl = "" if (not before or before.endswith(("\n", "\r"))) else "\n"
+            new_text = before + nl + "\t" + idea + "\n" + raw[b - 1:]
         else:
-            new_text = raw.rstrip() + "\nhistory = {" + ins + "}\n"
+            ins = "\nadd_ideas = {\n\t%s\n}\n" % idea
+            if dspans:
+                pos = dspans[0][0]
+                new_text = raw[:pos].rstrip(" \t") + "\n" + ins + "\n" + raw[pos:]
+            else:
+                new_text = raw.rstrip() + "\n" + ins
         snapshot(dst)
         _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
-        return {"ok": True, "msg": "已加 %s（新建 add_ideas 块）" % idea}
+        msg = "已加 %s" % idea if top_blocks else "已加 %s（新建顶层 add_ideas 块）" % idea
+        return {"ok": True, "msg": msg}
 
-    a, b, body = blocks[0]
-    if on:
-        ins = "\n\t\t%s" % idea
-        new_text = raw[:b - 1] + ins + raw[b - 1:]
-    else:
-        pat = re.compile(r'(?m)^[ \t]*' + re.escape(idea) + r'[ \t]*\r?\n?')
-        seg = raw[a:b]
+    all_blocks, _ = _collect_add_ideas_blocks(text, include_date=True)
+    pat = re.compile(r'(?m)^[ \t]*' + re.escape(idea) + r'[ \t]*(?:\r?\n)?')
+    new_text = None
+    for _depth, a, b, _body in all_blocks:
+        seg = raw[a:b - 1]
         seg2 = pat.sub('', seg)
-        if seg2 == seg:
-            return {"ok": False, "msg": "没定位到 %s 那一行" % idea}
-        new_text = raw[:a] + seg2 + raw[b:]
+        if seg2 != seg:
+            new_text = raw[:a] + seg2 + raw[b - 1:]
+            break
+    if new_text is None:
+        return {"ok": True, "msg": "本来就没有 %s" % idea}
 
     snapshot(dst)
     _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
-    return {"ok": True, "msg": "%s %s" % ("已加" if on else "已删", idea)}
+    return {"ok": True, "msg": "已删 %s" % idea}
 
 
 
