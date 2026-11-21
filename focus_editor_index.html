@@ -1367,10 +1367,10 @@ window.onerror = function(m, s, l, c){
         <div class="diff-foot"><button class="btn primary" id="diffOk">确认保存</button></div>
       </div>
     </div>
-    <div id="ideaModal" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1100px,calc(100% - 70px));height:min(760px,calc(100% - 70px));background:#171b1d;border:1px solid #3a4346;border-radius:14px;z-index:60;padding:12px;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.55)">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px">
-        <b style="color:#c2ae82;font-size:14px">国家精神编辑器</b>
-        <div style="display:flex;gap:6px">
+    <div id="ideaModal" class="ed-modal" style="display:none">
+      <div class="ed-modal-head">
+        <b>国家精神编辑器</b>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn" id="ideaRef">🔗 引用</button>
           <button class="btn" id="ideaCopy">📋 复制</button>
           <button class="btn" id="ideaAdd">＋ 新建精神</button>
@@ -1379,51 +1379,94 @@ window.onerror = function(m, s, l, c){
           <button class="btn" id="ideaClose">关闭</button>
         </div>
       </div>
-      <div style="display:flex;gap:10px;flex:1;min-height:0">
-        <div style="width:300px;display:flex;flex-direction:column;min-height:0">
+      <div class="ed-modal-body">
+        <div class="ed-modal-side">
           <input id="ideaSearch" placeholder="搜索国家精神 id / 名称" style="margin:0 0 6px">
+          <div class="ed-scope-bar" id="ideaScopeBar">
+            <button class="btn on" id="ideaScopeAll" type="button">全部</button>
+            <button class="btn" id="ideaScopeMod" type="button">仅当前 mod</button>
+            <span class="ed-scope-stat" id="ideaScopeStat"></span>
+          </div>
           <div id="ideaList" style="overflow:auto;flex:1"></div>
         </div>
-        <div style="flex:1;display:flex;flex-direction:column;min-height:0">
-          <div style="flex:1;min-height:0;overflow-y:auto;padding-right:4px">
-            <div id="ideaTitle" style="color:#ffd479;margin-bottom:4px"></div>
-            <div class="src-hint" id="ideaSrc"></div>
-            <div class="k">中文名称 / 描述</div>
-            <input type="text" id="ideaNameZ" placeholder="中文名称（游戏中显示的精神名称）">
-            <textarea id="ideaDescZ" style="height:50px" placeholder="中文描述（游戏内悬停说明，不要把脚本效果填在这里）"></textarea>
-            <div class="k">日本語 名前 / 説明</div>
-            <input type="text" id="ideaNameJa">
-            <textarea id="ideaDescJa" style="height:40px"></textarea>
-            <div class="k">English name / description</div>
-            <input type="text" id="ideaNameEn">
-            <textarea id="ideaDescEn" style="height:40px"></textarea>
-            <div class="k">图标 picture</div>
-            <div style="display:flex;gap:6px;margin-bottom:6px"><input type="text" id="ideaPic"><button class="btn" id="ideaPicBtn">选择图标</button></div>
-            <div class="k">修正项（modifier，留空不改）</div>
-            <div id="ideaProps" class="fxgrid" style="grid-template-columns:repeat(2,1fr)"></div>
-            <div style="display:flex;gap:6px;align-items:center;margin:6px 0 8px">
-              <input type="text" id="ideaModKey" list="ideaModPresets" placeholder="modifier 键名（如 political_power_gain）" style="flex:2;min-width:0;margin:0">
-              <input type="text" id="ideaModVal" placeholder="数值（如 0.25）" style="flex:1;min-width:0;margin:0">
-              <button class="btn" id="ideaModAdd" type="button" style="flex-shrink:0">＋ 添加修正项</button>
-            </div>
-            <datalist id="ideaModPresets">
-              <option value="political_power_gain"></option>
-              <option value="stability_factor"></option>
-              <option value="war_support_factor"></option>
-              <option value="consumer_goods_factor"></option>
-              <option value="industrial_capacity_factory"></option>
-              <option value="production_speed_buildings_factor"></option>
-              <option value="research_speed_factor"></option>
-              <option value="army_attack_factor"></option>
-            </datalist>
-            <div class="k">allowed（原始块，可留空）</div>
-            <textarea id="ideaAllowed" style="height:50px"></textarea>
-            <div class="k">trigger（原始块，可留空）</div>
-            <textarea id="ideaTrigger" style="height:50px"></textarea>
-            <div class="k">脚本原文（保存会重写该块，注释会丢失）</div>
-            <textarea id="ideaRaw" style="height:140px;min-height:110px;flex-shrink:0;font-family:Consolas,monospace"></textarea>
+        <div class="ed-modal-main">
+          <div id="ideaTitle" style="color:var(--accent);margin-bottom:2px;font-weight:600"></div>
+          <div class="src-hint" id="ideaSrc"></div>
+          <div class="lc-tabs ed-tabs" id="ideaTabs">
+            <button class="btn ed-tab on" id="ideaTabBasic" type="button">属性与修正项</button>
+            <button class="btn ed-tab" id="ideaTabCond" type="button">条件 allowed / trigger</button>
+            <button class="btn ed-tab" id="ideaTabRaw" type="button">脚本原文</button>
           </div>
-          <div style="margin-top:6px;padding-top:6px;border-top:1px solid #2f3a3c;flex-shrink:0"><button class="btn primary" id="ideaSave">保存国家精神</button></div>
+          <div id="ideaPaneBasic" class="ed-pane" style="display:flex">
+            <div class="ed-grid2">
+              <div>
+                <div class="k">中文名称</div>
+                <input type="text" id="ideaNameZ" placeholder="游戏内显示的精神名称（如：工业复兴）">
+              </div>
+              <div>
+                <div class="k">图标 picture</div>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="text" id="ideaPic" style="margin:2px 0 8px">
+                  <button class="btn" id="ideaPicBtn" type="button" style="flex-shrink:0;margin:2px 0 8px">选择图标</button>
+                </div>
+              </div>
+            </div>
+            <div class="k">中文描述</div>
+            <textarea id="ideaDescZ" style="height:48px;min-height:48px;flex-shrink:0" placeholder="游戏内悬停说明，不要把 modifier 脚本写进这里"></textarea>
+            <details class="ed-lang-details" id="ideaLangMore">
+              <summary>🌐 其他语言（日本語 / English，可选）</summary>
+              <div class="ed-lang-body">
+                <div class="k">日本語 名前 / 説明</div>
+                <input type="text" id="ideaNameJa">
+                <textarea id="ideaDescJa" style="height:40px"></textarea>
+                <div class="k">English name / description</div>
+                <input type="text" id="ideaNameEn">
+                <textarea id="ideaDescEn" style="height:40px"></textarea>
+              </div>
+            </details>
+            <div class="ed-mod-card">
+              <div class="ed-mod-head">修正项（modifier，直接填键和数字，不用手写大括号）</div>
+              <div class="idea-mod-chips">
+                <button class="idea-chip" type="button" data-k="political_power_gain" data-v="0.25">+0.25 每日政治点</button>
+                <button class="idea-chip" type="button" data-k="stability_factor" data-v="0.05">+5% 稳定度</button>
+                <button class="idea-chip" type="button" data-k="war_support_factor" data-v="0.05">+5% 战争支持</button>
+                <button class="idea-chip" type="button" data-k="industrial_capacity_factory" data-v="0.10">+10% 工厂产出</button>
+                <button class="idea-chip" type="button" data-k="research_speed_factor" data-v="0.05">+5% 科研速度</button>
+                <button class="idea-chip" type="button" data-k="consumer_goods_factor" data-v="-0.05">-5% 消费品</button>
+              </div>
+              <div style="display:flex;gap:6px;align-items:center;margin:6px 0 8px">
+                <input type="text" id="ideaModKey" list="ideaModPresets" placeholder="modifier 键名（如 political_power_gain）" style="flex:2;min-width:0;margin:0">
+                <input type="text" id="ideaModVal" placeholder="数值（如 0.25）" style="flex:1;min-width:0;margin:0">
+                <button class="btn" id="ideaModAdd" type="button" style="flex-shrink:0">＋ 添加修正项</button>
+              </div>
+              <datalist id="ideaModPresets">
+                <option value="political_power_gain"></option>
+                <option value="stability_factor"></option>
+                <option value="war_support_factor"></option>
+                <option value="consumer_goods_factor"></option>
+                <option value="industrial_capacity_factory"></option>
+                <option value="production_speed_buildings_factor"></option>
+                <option value="research_speed_factor"></option>
+                <option value="army_attack_factor"></option>
+              </datalist>
+              <div id="ideaProps" class="fxgrid" style="grid-template-columns:repeat(2,1fr)"></div>
+            </div>
+          </div>
+          <div id="ideaPaneCond" class="ed-pane" style="display:none">
+            <div class="ed-cond-field">
+              <div class="k">allowed（初始允许条件，如 original_tag = FRA，可留空）</div>
+              <textarea id="ideaAllowed" style="min-height:140px;flex:1"></textarea>
+            </div>
+            <div class="ed-cond-field">
+              <div class="k">trigger（持续生效条件，可留空）</div>
+              <textarea id="ideaTrigger" style="min-height:140px;flex:1"></textarea>
+            </div>
+          </div>
+          <div id="ideaPaneRaw" class="ed-pane" style="display:none">
+            <div class="ed-raw-note">高级模式：仅当你直接修改下面原文并停留在此页签保存时，以原文为准；平时修改名称、图标、修正项与条件请用前两个页签。</div>
+            <textarea id="ideaRaw" style="flex:1;min-height:320px;font-family:Consolas,monospace"></textarea>
+          </div>
+          <div class="ed-modal-foot"><button class="btn primary" id="ideaSave">保存国家精神</button></div>
         </div>
       </div>
     </div>
@@ -1495,12 +1538,17 @@ window.onerror = function(m, s, l, c){
         <div class="k">中文名称 / 描述</div>
         <input type="text" id="equipNameZ" placeholder="中文名称（游戏中显示的装备名称）">
         <textarea id="equipDescZ" style="height:44px" placeholder="中文描述（游戏内悬停说明，不要把脚本属性填在这里）"></textarea>
-        <div class="k">日本語 名前 / 説明</div>
-        <input type="text" id="equipNameJa">
-        <textarea id="equipDescJa" style="height:40px"></textarea>
-        <div class="k">English name / description</div>
-        <input type="text" id="equipNameEn">
-        <textarea id="equipDescEn" style="height:40px"></textarea>
+        <details class="ed-lang-details">
+          <summary>🌐 其他语言（日本語 / English，可选）</summary>
+          <div class="ed-lang-body">
+            <div class="k">日本語 名前 / 説明</div>
+            <input type="text" id="equipNameJa">
+            <textarea id="equipDescJa" style="height:40px"></textarea>
+            <div class="k">English name / description</div>
+            <input type="text" id="equipNameEn">
+            <textarea id="equipDescEn" style="height:40px"></textarea>
+          </div>
+        </details>
         <div class="k">图标 picture</div>
         <div style="display:flex;gap:6px;margin-bottom:6px"><input type="text" id="equipPic"><button class="btn" id="equipPicBtn">选择图标</button></div>
         <div class="k">设计器字段（留空不改）</div>
@@ -1539,10 +1587,15 @@ window.onerror = function(m, s, l, c){
         <div class="src-hint" id="techSrc"></div>
         <div class="k">中文名称 / 描述</div>
         <input type="text" id="techNameZ" placeholder="中文名称（游戏中显示的科技名称）"><textarea id="techDescZ" style="height:44px" placeholder="中文描述（游戏内悬停说明，不要把脚本效果填在这里）"></textarea>
-        <div class="k">日本語 名前 / 説明</div>
-        <input type="text" id="techNameJa"><textarea id="techDescJa" style="height:40px"></textarea>
-        <div class="k">English name / description</div>
-        <input type="text" id="techNameEn"><textarea id="techDescEn" style="height:40px"></textarea>
+        <details class="ed-lang-details">
+          <summary>🌐 其他语言（日本語 / English，可选）</summary>
+          <div class="ed-lang-body">
+            <div class="k">日本語 名前 / 説明</div>
+            <input type="text" id="techNameJa"><textarea id="techDescJa" style="height:40px"></textarea>
+            <div class="k">English name / description</div>
+            <input type="text" id="techNameEn"><textarea id="techDescEn" style="height:40px"></textarea>
+          </div>
+        </details>
         <div class="k">年份 / 科研花费 / 科技树路径</div>
         <div style="display:flex;gap:6px">
           <input type="text" id="techYear" placeholder="year" style="width:90px">
@@ -1587,10 +1640,15 @@ window.onerror = function(m, s, l, c){
         <div class="src-hint" id="eventSrc"></div>
         <div class="k">中文标题 / 描述</div>
         <input type="text" id="eventNameZ" placeholder="中文标题（事件弹窗顶部标题）"><textarea id="eventDescZ" style="height:44px" placeholder="中文描述（事件正文文本，不要把 trigger/immediate 脚本填在这里）"></textarea>
-        <div class="k">日本語 タイトル / 説明</div>
-        <input type="text" id="eventNameJa"><textarea id="eventDescJa" style="height:40px"></textarea>
-        <div class="k">English name / description</div>
-        <input type="text" id="eventNameEn"><textarea id="eventDescEn" style="height:40px"></textarea>
+        <details class="ed-lang-details">
+          <summary>🌐 其他语言（日本語 / English，可选）</summary>
+          <div class="ed-lang-body">
+            <div class="k">日本語 タイトル / 説明</div>
+            <input type="text" id="eventNameJa"><textarea id="eventDescJa" style="height:40px"></textarea>
+            <div class="k">English name / description</div>
+            <input type="text" id="eventNameEn"><textarea id="eventDescEn" style="height:40px"></textarea>
+          </div>
+        </details>
         <div class="k">事件图片 picture</div>
         <input type="text" id="eventPic">
         <div class="k">选项（名称 key / 选项文本）</div>

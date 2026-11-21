@@ -214,8 +214,18 @@ def braces_balanced(text):
 
 
 
+def _is_outer_script_block(block):
+    """判断文本是否为外层命名块（如 idea_id = { ... }），区别于 focus.py 传入的内层体。"""
+    s = (block or "").strip()
+    m = re.match(r'^[A-Za-z0-9_.\-:]+\s*=\s*\{', s)
+    if not m:
+        return False
+    b = s.find('{', m.start())
+    return brace_match(s, b) == len(s)
+
+
 def set_raw_block(block, key, content):
-    """替换/删除 focus 内的原始脚本块（如 completion_reward）"""
+    """替换/删除/插入脚本块（支持外层命名块 idea/equip/tech/event 与 focus 内层体两种输入）。"""
     content = (content or "").strip("\n")
     m = re.search(r'(?m)^[ \t]*%s\s*=\s*\{' % key, block)
     if not content.strip():
@@ -223,18 +233,25 @@ def set_raw_block(block, key, content):
             start = m.start()
             b = block.find('{', m.start())
             e = brace_match(block, b)
-            return block[:start] + block[e + 1:]
+            return block[:start] + block[e:]
         return block
+    is_outer = _is_outer_script_block(block)
+    outer_indent = "\t" if is_outer else "\t\t"
+    inner_indent = outer_indent + "\t"
     lines = []
     for ln in content.splitlines():
-        lines.append("\t\t\t" + ln.rstrip() if ln.strip() else "")
-    newb = "\t\t%s = {\n%s\n\t\t}" % (key, "\n".join(lines))
+        lines.append(inner_indent + ln.rstrip() if ln.strip() else "")
+    newb = "%s%s = {\n%s\n%s}" % (outer_indent, key, "\n".join(lines), outer_indent)
     if m:
         start = m.start()
         b = block.find('{', start)
         e = brace_match(block, b)
-        return block[:start] + newb + block[e + 1:]
-    return block.rstrip() + "\n\t" + newb + "\n"
+        return block[:start] + newb + block[e:]
+    if is_outer:
+        last_rb = block.rfind("}")
+        if last_rb != -1:
+            return block[:last_rb].rstrip() + "\n" + newb + "\n" + block[last_rb:]
+    return block.rstrip() + "\n" + newb + "\n\t"
 
 
 

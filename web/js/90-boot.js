@@ -673,6 +673,28 @@ document.getElementById('ideaAdd').onclick = addIdea;
 
 document.getElementById('ideaDelete').onclick = deleteIdeaSel;
 
+const _ideaScopeAll = document.getElementById('ideaScopeAll');
+if(_ideaScopeAll) _ideaScopeAll.onclick = ()=>setIdeaScope('all');
+
+const _ideaScopeMod = document.getElementById('ideaScopeMod');
+if(_ideaScopeMod) _ideaScopeMod.onclick = ()=>setIdeaScope('mod');
+
+const _ideaTabBasic = document.getElementById('ideaTabBasic');
+if(_ideaTabBasic) _ideaTabBasic.onclick = ()=>switchIdeaTab('basic');
+
+const _ideaTabCond = document.getElementById('ideaTabCond');
+if(_ideaTabCond) _ideaTabCond.onclick = ()=>switchIdeaTab('cond');
+
+const _ideaTabRaw = document.getElementById('ideaTabRaw');
+if(_ideaTabRaw) _ideaTabRaw.onclick = ()=>switchIdeaTab('raw');
+
+const _ideaRawEl = document.getElementById('ideaRaw');
+if(_ideaRawEl) _ideaRawEl.addEventListener('input', ()=>{ _ideaRawDirty = true; });
+
+document.querySelectorAll('#ideaModal .idea-chip').forEach(btn=>{
+  btn.onclick = ()=>addIdeaMod(btn.dataset.k || '', btn.dataset.v ?? '');
+});
+
 document.getElementById('equipEntry').onclick = openEquip;
 
 document.getElementById('equipClose').onclick = ()=>{ document.getElementById('equipModal').style.display = 'none'; };

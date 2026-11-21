@@ -705,17 +705,163 @@ function rootByName(n){
   return _writableRoot();
 }
 
+let _ideaScope = 'all';
+let _ideaTab = 'basic';
+let _ideaRawDirty = false;
+
+const _IDEA_MOD_ZH = {
+  political_power_gain: '每日政治点数',
+  political_power_factor: '政治点数修正',
+  stability_factor: '稳定度',
+  stability_weekly: '每周稳定度',
+  war_support_factor: '战争支持度',
+  war_support_weekly: '每周战争支持度',
+  consumer_goods_factor: '消费品工厂系数',
+  industrial_capacity_factory: '军工产出',
+  industrial_capacity_dockyard: '船坞产出',
+  production_speed_buildings_factor: '建造速度',
+  research_speed_factor: '科研速度',
+  army_attack_factor: '陆军攻击',
+  army_defence_factor: '陆军防御',
+  army_org_factor: '组织度',
+  conscription_factor: '适役人口修正',
+  training_time_factor: '训练时间',
+};
+
+function setIdeaScope(scope){
+  _ideaScope = scope === 'mod' ? 'mod' : 'all';
+  const bAll = document.getElementById('ideaScopeAll');
+  const bMod = document.getElementById('ideaScopeMod');
+  if(bAll) bAll.classList.toggle('on', _ideaScope === 'all');
+  if(bMod) bMod.classList.toggle('on', _ideaScope === 'mod');
+  const q = (document.getElementById('ideaSearch')?.value || '').trim().toLowerCase();
+  renderIdeaList(q);
+}
+
+function switchIdeaTab(tab){
+  _ideaTab = (tab === 'cond' || tab === 'raw') ? tab : 'basic';
+  const tabs = { basic: 'ideaTabBasic', cond: 'ideaTabCond', raw: 'ideaTabRaw' };
+  const panes = { basic: 'ideaPaneBasic', cond: 'ideaPaneCond', raw: 'ideaPaneRaw' };
+  Object.keys(tabs).forEach(k=>{
+    const b = document.getElementById(tabs[k]);
+    if(b) b.classList.toggle('on', k === _ideaTab);
+    const p = document.getElementById(panes[k]);
+    if(p) p.style.display = (k === _ideaTab) ? 'flex' : 'none';
+  });
+}
+
+function _removeIdeaModFromRaw(k){
+  const rawEl = document.getElementById('ideaRaw');
+  if(!rawEl || !k) return;
+  const raw = rawEl.value || '';
+  const m = /(?:^|\n)([ \t]*)modifier\s*=\s*\{/.exec(raw) || /\bmodifier\s*=\s*\{/.exec(raw);
+  if(!m) return;
+  const openIdx = raw.indexOf('{', m.index);
+  if(openIdx < 0) return;
+  let depth = 0, endIdx = -1;
+  for(let i = openIdx; i < raw.length; i++){
+    if(raw[i] === '{') depth++;
+    else if(raw[i] === '}'){
+      depth--;
+      if(depth === 0){ endIdx = i; break; }
+    }
+  }
+  if(endIdx < 0) return;
+  const esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const inner = raw.slice(openIdx + 1, endIdx);
+  const lineRe = new RegExp('^\\s*' + esc + '\\s*=\\s*[^\\s#{}]+(?:\\s*#.*)?$');
+  let nextInner;
+  if(inner.includes('\n')){
+    nextInner = inner.split('\n').filter(ln => !lineRe.test(ln)).join('\n');
+  } else {
+    nextInner = inner.replace(new RegExp('\\b' + esc + '\\s*=\\s*[^\\s#{}]+'), '').replace(/\s{2,}/g, ' ');
+  }
+  if(!nextInner.trim()){
+    const blockStart = m[0].startsWith('\n') ? m.index + 1 : m.index;
+    let after = endIdx + 1;
+    if(raw[after] === '\r') after++;
+    if(raw[after] === '\n') after++;
+    rawEl.value = raw.slice(0, blockStart) + raw.slice(after);
+  } else {
+    rawEl.value = raw.slice(0, openIdx + 1) + nextInner + raw.slice(endIdx);
+  }
+}
+
+function _appendIdeaProp(pg, k, v){
+  if(!pg.querySelector('input[data-prop]')) pg.innerHTML = '';
+  const card = document.createElement('div');
+  card.className = 'idea-prop-card';
+  const head = document.createElement('div');
+  head.className = 'idea-prop-head';
+  const titles = document.createElement('div');
+  titles.className = 'idea-prop-titles';
+  const keyEl = document.createElement('span');
+  keyEl.className = 'idea-prop-key';
+  keyEl.textContent = k;
+  titles.appendChild(keyEl);
+  const zh = _IDEA_MOD_ZH[k];
+  if(zh){
+    const subEl = document.createElement('span');
+    subEl.className = 'idea-prop-zh';
+    subEl.textContent = zh;
+    titles.appendChild(subEl);
+  }
+  const delBtn = document.createElement('button');
+  delBtn.type = 'button';
+  delBtn.className = 'idea-prop-del';
+  delBtn.title = '移除此修正项';
+  delBtn.textContent = '×';
+  delBtn.onclick = ()=>{
+    card.remove();
+    _removeIdeaModFromRaw(k);
+    if(!pg.querySelector('input[data-prop]')){
+      pg.innerHTML = '<div class="idea-empty">暂无修正项，可点上方预设标签或下方添加</div>';
+    }
+  };
+  head.appendChild(titles);
+  head.appendChild(delBtn);
+  const inp = document.createElement('input');
+  inp.type = 'text';
+  inp.value = v;
+  inp.dataset.prop = k;
+  card.appendChild(head);
+  card.appendChild(inp);
+  pg.appendChild(card);
+  return inp;
+}
+
 function renderIdeaList(q){
   const box = document.getElementById('ideaList'); if(!box || !DATA) return;
-  q = (q||'').toLowerCase();
-  const items = (DATA.ideas||[]).filter(i=>!q || i.id.toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q));
+  q = (q||'').trim().toLowerCase();
+  const allIdeas = DATA.ideas || [];
+  const modNames = new Set((DATA.roots || []).filter(r=>r && !r.readonly && r.name).map(r=>r.name));
+  const scoped = _ideaScope === 'mod'
+    ? allIdeas.filter(i=>modNames.has(i.source))
+    : allIdeas;
+  const items = scoped.filter(i=>!q || i.id.toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q));
+  const statEl = document.getElementById('ideaScopeStat');
+  if(statEl){
+    const modCount = allIdeas.filter(i=>modNames.has(i.source)).length;
+    statEl.textContent = _ideaScope === 'mod'
+      ? ('显示 ' + items.length + ' / 当前 mod ' + modCount)
+      : ('显示 ' + items.length + ' / 共 ' + allIdeas.length);
+  }
   box.innerHTML = '';
   items.slice(0,600).forEach(i=>{
     const d = listRow(i.id, i.name, i.source, i.file);
+    d.dataset.ideaId = i.id;
+    if(ideaSel && ideaSel.id === i.id) d.classList.add('on');
     d.onclick = ()=>selectIdea(i);
     box.appendChild(d);
   });
-  if(!items.length) box.textContent = '（没有匹配的国家精神）';
+  if(!items.length){
+    const emp = document.createElement('div');
+    emp.className = 'idea-empty';
+    emp.textContent = _ideaScope === 'mod'
+      ? '当前 mod 下暂无匹配精神，可点「全部」查看原版'
+      : '（没有匹配的国家精神）';
+    box.appendChild(emp);
+  }
 }
 
 async function fetchRaw(kind, id){
@@ -728,6 +874,10 @@ async function fetchRaw(kind, id){
 
 async function selectIdea(i){
   ideaSel = i;
+  _ideaRawDirty = false;
+  document.querySelectorAll('#ideaList .lr').forEach(el=>{
+    el.classList.toggle('on', el.dataset.ideaId === i.id);
+  });
   document.getElementById('ideaTitle').textContent = i.id + '   (' + i.file + ')';
   fillSrcHint('ideaSrc', rootByName(i.source) || _lastRoot(), i.file, i.source);
   document.getElementById('ideaNameZ').value = i.name||'';
@@ -745,76 +895,93 @@ async function selectIdea(i){
   pg.innerHTML = '';
   const props = i.props || {};
   const keys = Object.keys(props);
-  if(!keys.length){ pg.textContent = '（没有可识别的 modifier，请用原文修改）'; }
-  keys.forEach(k=>{
-    const lab = document.createElement('label');
-    lab.textContent = k;
-    const inp = document.createElement('input');
-    inp.type = 'text'; inp.value = props[k]; inp.dataset.prop = k;
-    lab.appendChild(inp); pg.appendChild(lab);
-  });
+  if(!keys.length){
+    pg.innerHTML = '<div class="idea-empty">暂无修正项，可点上方预设标签或下方添加</div>';
+  } else {
+    keys.forEach(k=>_appendIdeaProp(pg, k, props[k]));
+  }
 }
 
-function addIdeaMod(){
+function addIdeaMod(presetKey, presetVal){
   const keyEl = document.getElementById('ideaModKey');
   const valEl = document.getElementById('ideaModVal');
   const pg = document.getElementById('ideaProps');
   if(!keyEl || !valEl || !pg) return;
-  const k = (keyEl.value || '').trim();
-  const v = (valEl.value || '').trim();
+  const isPreset = typeof presetKey === 'string';
+  const k = (isPreset ? presetKey : (keyEl.value || '')).trim();
+  const v = (isPreset && presetVal !== undefined ? String(presetVal) : (valEl.value || '')).trim();
   if(!k){ status('请输入或选择 modifier 键名', true); keyEl.focus(); return; }
   const existing = [...pg.querySelectorAll('input[data-prop]')].find(i=>i.dataset.prop === k);
   if(existing){
     if(v !== '') existing.value = v;
     existing.focus();
-    keyEl.value = '';
-    valEl.value = '';
+    if(!isPreset){ keyEl.value = ''; valEl.value = ''; }
     return;
   }
-  if(!pg.querySelector('input[data-prop]')) pg.innerHTML = '';
-  const lab = document.createElement('label');
-  lab.textContent = k;
-  const inp = document.createElement('input');
-  inp.type = 'text';
-  inp.value = v;
-  inp.dataset.prop = k;
-  lab.appendChild(inp);
-  pg.appendChild(lab);
-  keyEl.value = '';
-  valEl.value = '';
-  if(v === '') inp.focus();
-  else keyEl.focus();
+  const inp = _appendIdeaProp(pg, k, v);
+  if(!isPreset){
+    keyEl.value = '';
+    valEl.value = '';
+    if(v === '') inp.focus();
+    else keyEl.focus();
+  } else {
+    inp.focus();
+  }
 }
 
 async function saveIdea(){
   if(!ideaSel){ status('先选择一个国家精神'); return; }
   const curId = ideaSel.id;
   await withBusy('正在保存国家精神并刷新…', async ()=>{
-    const pendingKey = (document.getElementById('ideaModKey')?.value || '').trim();
-    const pendingVal = (document.getElementById('ideaModVal')?.value || '').trim();
-    if(pendingKey && pendingVal) addIdeaMod();
-    const props = {};
-    document.querySelectorAll('#ideaProps input[data-prop]').forEach(i=>{
-      const v = (i.value || '').trim();
-      if(v !== '') props[i.dataset.prop] = v;
-    });
-    const alw = (document.getElementById('ideaAllowed').value || '').trim();
-    const trg = (document.getElementById('ideaTrigger').value || '').trim();
-    if(alw) props.allowed_raw = alw;
-    if(trg) props.trigger_raw = trg;
-    const r = await fetch('/api/idea_save', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({root: rootByName(ideaSel.source), file: ideaSel.file, id: ideaSel.id,
-        raw: document.getElementById('ideaRaw').value, props,
+    let payload;
+    if(_ideaTab === 'raw' && _ideaRawDirty){
+      payload = {
+        root: rootByName(ideaSel.source),
+        file: ideaSel.file,
+        id: ideaSel.id,
+        raw: document.getElementById('ideaRaw').value,
+        name: document.getElementById('ideaNameZ').value,
+        desc: document.getElementById('ideaDescZ').value,
+        name_ja: document.getElementById('ideaNameJa').value,
+        desc_ja: document.getElementById('ideaDescJa').value,
+        name_en: document.getElementById('ideaNameEn').value,
+        desc_en: document.getElementById('ideaDescEn').value,
+        props: {}
+      };
+    } else {
+      const pendingKey = (document.getElementById('ideaModKey')?.value || '').trim();
+      const pendingVal = (document.getElementById('ideaModVal')?.value || '').trim();
+      if(pendingKey && pendingVal) addIdeaMod();
+      const props = {};
+      document.querySelectorAll('#ideaProps input[data-prop]').forEach(i=>{
+        const v = (i.value || '').trim();
+        if(v !== '') props[i.dataset.prop] = v;
+      });
+      const alw = (document.getElementById('ideaAllowed').value || '').trim();
+      const trg = (document.getElementById('ideaTrigger').value || '').trim();
+      if(alw) props.allowed_raw = alw;
+      if(trg) props.trigger_raw = trg;
+      payload = {
+        root: rootByName(ideaSel.source),
+        file: ideaSel.file,
+        id: ideaSel.id,
+        raw: document.getElementById('ideaRaw').value,
+        props,
         picture: document.getElementById('ideaPic').value.trim(),
         name: document.getElementById('ideaNameZ').value,
         desc: document.getElementById('ideaDescZ').value,
         name_ja: document.getElementById('ideaNameJa').value,
         desc_ja: document.getElementById('ideaDescJa').value,
         name_en: document.getElementById('ideaNameEn').value,
-        desc_en: document.getElementById('ideaDescEn').value})});
+        desc_en: document.getElementById('ideaDescEn').value
+      };
+    }
+    const r = await fetch('/api/idea_save', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)});
     const j = await r.json();
     status(j.ok ? '国家精神已保存' : ('保存失败：' + j.msg), !j.ok);
     if(j.ok){
+      _ideaRawDirty = false;
       await loadData();
       renderIdeaList(document.getElementById('ideaSearch').value);
       const hit = (DATA.ideas||[]).find(i=>i.id===curId);
@@ -837,9 +1004,24 @@ async function addIdea(){
       await loadData();
       const sInp = document.getElementById('ideaSearch');
       if(sInp) sInp.value = '';
-      renderIdeaList('');
       const hit = (DATA.ideas||[]).find(i=>i.id===id);
-      if(hit) await selectIdea(hit);
+      if(hit){
+        const modNames = new Set((DATA.roots || []).filter(rt=>rt && !rt.readonly && rt.name).map(rt=>rt.name));
+        if(_ideaScope === 'mod' && !modNames.has(hit.source)){
+          _ideaScope = 'all';
+          const bAll = document.getElementById('ideaScopeAll');
+          const bMod = document.getElementById('ideaScopeMod');
+          if(bAll) bAll.classList.add('on');
+          if(bMod) bMod.classList.remove('on');
+        }
+        renderIdeaList('');
+        switchIdeaTab('basic');
+        await selectIdea(hit);
+        const nmEl = document.getElementById('ideaNameZ');
+        if(nmEl) nmEl.focus();
+      } else {
+        renderIdeaList('');
+      }
     }
   });
 }
@@ -857,7 +1039,7 @@ async function deleteIdeaSel(){
       ideaSel = null;
       document.getElementById('ideaRaw').value = '';
       document.getElementById('ideaTitle').textContent = '';
-      renderIdeaList('');
+      renderIdeaList(document.getElementById('ideaSearch')?.value || '');
     }
   });
 }

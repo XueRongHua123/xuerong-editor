@@ -12,7 +12,7 @@
 - 导出“覆盖包”ZIP（只含改动文件，解压覆盖到 mod 目录即可）。
 """
 import io, os, re, json, zipfile, shutil, time, argparse, threading, webbrowser, sys, string, hashlib, colorsys, zlib
-import subprocess
+import socket, subprocess
 import urllib.request, urllib.error
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
@@ -8423,6 +8423,27 @@ def set_game_dir(path="", pick=False):
     }
 
 
+class _LocalHTTPServer(ThreadingHTTPServer):
+    """本地编辑器 HTTP 服务：禁用端口复用并开启 Windows 独占绑定，防止旧进程劫持同端口流量。"""
+
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def _bind_local_server(start_port, handler_cls, host="127.0.0.1", max_offset=20):
+    """从 start_port 起依次尝试绑定最多 max_offset + 1 个端口，返回 (server, bound_port)。"""
+    for port in range(start_port, start_port + max_offset + 1):
+        try:
+            return _LocalHTTPServer((host, port), handler_cls), port
+        except OSError:
+            if port == start_port + max_offset:
+                raise
+
+
 def main():
     global GAME
     _load_options()
@@ -8441,8 +8462,10 @@ def main():
     # 端口先起：页面 0.2 秒就出来，数据在后台线程里读，前端轮询 /api/boot_status
     # 显示进度。加载期间数据类请求由 _boot_gate 拦成 503 —— reload_data 会原地
     # 清空 12 个容器，半清空状态下读它们会 KeyError（全仓没有锁，也不为这个加锁）。
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    url = "http://127.0.0.1:%d/" % args.port
+    server, bound_port = _bind_local_server(args.port, Handler)
+    if bound_port != args.port:
+        print(f"[端口提示] 端口 {args.port} 已被占用（可能仍有旧版窗口未关闭），改用端口 {bound_port}")
+    url = "http://127.0.0.1:%d/" % bound_port
     print("打开:", url)
     _lp_begin("boot")
     LOAD_PROGRESS["active"] = True

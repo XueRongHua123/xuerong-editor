@@ -20,12 +20,18 @@ from xuerong import state
 from xuerong.model.map import _map_pick
 
 
+_NO_CACHE_HEADERS = [
+    ("Cache-Control", "no-store, no-cache, must-revalidate"),
+    ("Pragma", "no-cache"),
+]
+
+
 @get("/")
 def r_index(h, path_only):
     lang = LG._lang(h.path)
     html = io.open(state.path_var("INDEX"), encoding="utf-8", errors="replace").read()
     html = i18n.inject(html, lang)
-    h._send(html.encode("utf-8"), ctype="text/html; charset=utf-8")
+    h._send(html.encode("utf-8"), ctype="text/html; charset=utf-8", extra=_NO_CACHE_HEADERS)
 
 
 @get("/api/fs")
@@ -154,7 +160,7 @@ def rp_index(h, path_only):
     lang = LG._lang(h.path)
     html = io.open(state.path_var("INDEX"), encoding="utf-8", errors="replace").read()
     html = i18n.inject(html, lang)
-    h._send(html.encode("utf-8"), ctype="text/html; charset=utf-8")
+    h._send(html.encode("utf-8"), ctype="text/html; charset=utf-8", extra=_NO_CACHE_HEADERS)
 
 
 @prefix("/help")
@@ -176,7 +182,7 @@ def rp_web(h, path_only):
             and _p.lower().endswith((".css", ".js"))):
         _ct = ("text/css; charset=utf-8" if _p.lower().endswith(".css")
                else "application/javascript; charset=utf-8")
-        h._send(io.open(_p, "rb").read(), ctype=_ct)
+        h._send(io.open(_p, "rb").read(), ctype=_ct, extra=_NO_CACHE_HEADERS)
     else:
         h._send({"err": "no static file"}, 404)
 
