@@ -522,8 +522,8 @@ def load_events(root):
         name = os.path.basename(ab.rstrip("\\/")) or ab
         rel = os.path.join("events", fn)
         text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace").read())
-        nsm = re.search(r'add_namespace\s*=\s*(\w+)', text)
-        ns = nsm.group(1) if nsm else ""
+        all_ns = re.findall(r'(?m)^\s*add_namespace\s*=\s*(\w+)', text)
+        def_ns = all_ns[0] if all_ns else ""
         for k, v, b in top_items(text):
             if not b or not k.endswith("_event"):
                 continue
@@ -531,6 +531,7 @@ def load_events(root):
             if not m:
                 continue
             eid = m.group(1)
+            ns = eid.split(".", 1)[0] if "." in eid else def_ns
             state.events()[eid] = _build_event_entry(eid, k, ns, v, rel, name)
             n += 1
     return n
@@ -618,9 +619,11 @@ def save_event(root, rel, eid, raw, title="", desc="", title_ja="", desc_ja="",
     ev_start, e = ev_span
     if not braces_balanced(raw):
         return False, "花括号不匹配，未保存"
-    nsm = re.search(r'add_namespace\s*=\s*(\w+)', text)
-    if nsm and "." in eid and not eid.startswith(nsm.group(1) + "."):
-        return False, "事件 id 前缀与文件 namespace 不一致"
+    all_ns = re.findall(r'(?m)^\s*add_namespace\s*=\s*(\w+)', text)
+    if all_ns and "." in eid:
+        ev_ns = eid.split(".", 1)[0]
+        if ev_ns not in all_ns:
+            return False, "事件 id 前缀「%s」不在文件声明的 add_namespace（%s）中" % (ev_ns, ", ".join(all_ns))
     if "option" not in raw:
         return False, "事件至少需要一个 option"
     snapshot(path)
@@ -648,7 +651,7 @@ def save_event(root, rel, eid, raw, title="", desc="", title_ja="", desc_ja="",
     rb = raw_clean.find("{")
     re_idx = raw_clean.rfind("}")
     inner_body = raw_clean[rb + 1:re_idx] if (rb >= 0 and re_idx > rb) else raw_clean
-    ns = nsm.group(1) if nsm else ""
+    ns = eid.split(".", 1)[0] if "." in eid else (all_ns[0] if all_ns else "")
     src = os.path.basename((root or "").rstrip("\\/")) or root
     state.events()[eid] = _build_event_entry(eid, ev_type, ns, inner_body, rel, src, raw_full=raw_clean)
     return True, "事件已保存"
@@ -666,7 +669,7 @@ def add_event(root, eid):
     text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read() if os.path.exists(path) else ""
     if re.search(r'(?m)^\s*id\s*=\s*"?%s"?' % re.escape(eid), text):
         return False, "事件已存在"
-    if ("add_namespace = " + ns) not in text:
+    if not re.search(r'(?m)^\s*add_namespace\s*=\s*' + re.escape(ns) + r'\b', text):
         text += "\nadd_namespace = %s\n" % ns
     block = ("country_event = {\n\tid = %s\n\ttitle = %s.t\n\tdesc = %s.d\n"
              "\tis_triggered_only = yes\n\toption = {\n\t\tname = %s.a\n\t}\n}" % (eid, eid, eid, eid))
@@ -731,8 +734,8 @@ def delete_event(root, rel, eid):
             if eid not in raw:
                 continue
             text_l = strip_comments(raw)
-            nsm = re.search(r'add_namespace\s*=\s*(\w+)', text_l)
-            ns = nsm.group(1) if nsm else ""
+            all_ns = re.findall(r'(?m)^\s*add_namespace\s*=\s*(\w+)', text_l)
+            ns = eid.split(".", 1)[0] if "." in eid else (all_ns[0] if all_ns else "")
             for k, v, b in top_items(text_l):
                 if not b or not k.endswith("_event"):
                     continue

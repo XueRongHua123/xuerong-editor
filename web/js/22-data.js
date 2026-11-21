@@ -2972,6 +2972,7 @@ function renderGameVerify(st){
   const listEl = document.getElementById('gvErrList');
 
   if(recBanner){
+    const hasMods = !!(st.mod_dirs && st.mod_dirs.length);
     if(st.recovered_msg){
       recBanner.style.display = 'block';
       recBanner.className = 'gv-banner warn';
@@ -2980,6 +2981,10 @@ function renderGameVerify(st){
       recBanner.style.display = 'block';
       recBanner.className = 'gv-banner err';
       recBanner.textContent = '✖ ' + st.env_reason;
+    }else if(!hasMods){
+      recBanner.style.display = 'block';
+      recBanner.className = 'gv-banner warn';
+      recBanner.textContent = '⚠ 当前未加载任何模组（仅原版无法启动检查），请先在欢迎页或左侧「数据源」添加你要测的 mod。';
     }else{
       recBanner.style.display = 'none';
     }
@@ -3021,7 +3026,7 @@ function renderGameVerify(st){
   }
   if(listEl){
     if(!res){
-      listEl.innerHTML = '<div style="padding:18px;text-align:center;color:var(--muted);font-size:12px">点击「开始进游戏检查」后，将自动对比主菜单 error.log 并把新增报错定位到具体文件与行号。</div>';
+      listEl.innerHTML = '<div style="padding:18px;text-align:center;color:var(--muted);font-size:12px;line-height:1.65">点击「开始进游戏检查」后，编辑器会自动启动游戏到主菜单采集 error.log 并<b>自动关闭游戏</b>（对比具体文件与行号）。<br>如需亲自选国家进档实操游玩测试，请改用 Paradox 官方启动器启用该 mod 进入游戏。</div>';
     }else if(res.ok){
       listEl.innerHTML = '<div style="padding:18px;text-align:center;color:#5bd188;font-size:12.5px">✓ 主菜单启动正常，相对基线 0 条新增 error.log 报错。</div>';
     }else{
