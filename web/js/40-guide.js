@@ -184,6 +184,29 @@ function openGuide(){
   renderGuide();
 }
 
+function bindGuideActions(){
+  const body = document.getElementById('gbBody');
+  if(!body || body.dataset.actBound) return;
+  body.dataset.actBound = '1';
+  body.addEventListener('click', function(e){
+    const b = e.target.closest('.gb-btn[data-act]');
+    if(!b) return;
+    const a = b.dataset.act;
+    if(a === 'add') openFolderPicker();
+    else if(a === 'new') openNewMod();
+    else if(a === 'world') openWorldGen();
+    else if(a === 'game_dir'){ if(typeof openGameDirPicker === 'function') openGameDirPicker(); }
+    else if(a === 'diag'){
+      if(typeof openDiag === 'function') openDiag();
+      else { const d = document.getElementById('diagEntry'); if(d) d.click(); }
+    }
+    else if(a === 'game_verify'){ if(typeof openGameVerify === 'function') openGameVerify(); }
+    else if(a === 'publish'){ if(typeof openPublishModal === 'function') openPublishModal(); }
+  });
+}
+if(document.readyState !== 'loading') bindGuideActions();
+else document.addEventListener('DOMContentLoaded', bindGuideActions);
+
 
 // v1.23.40 引导清单可拖动：位置存 localStorage，双击标题栏或点「复位」回左下角
 (function(){

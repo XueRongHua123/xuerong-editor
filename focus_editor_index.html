@@ -52,6 +52,10 @@ window.onerror = function(m, s, l, c){
         <button class="src-btn" id="vanillaBtn"><b>📖 加载原版参考</b><i>只读，可卸载</i></button>
         <button class="src-btn" id="newModBtn"><b>🆕 新建模组</b><i>生成能直接玩的空壳</i></button>
       </div>
+      <div id="srcGameBar" class="src-game-bar">
+        <span id="srcGameState" class="src-game-state">游戏目录：检测中…</span>
+        <button class="btn" id="srcGameBtn" type="button">选择游戏目录</button>
+      </div>
       <div id="srcState" class="src-state">还没有加载 mod</div>
       <div id="srcChain" class="src-chain"></div>
       <div id="srcCover" class="src-cover"></div>
@@ -283,6 +287,7 @@ window.onerror = function(m, s, l, c){
       <input type="checkbox" id="diagFullScope">含父层与完整地图
     </label>
     <button class="btn" id="diagIgnoredBtn">已忽略（0）</button>
+    <button class="btn" id="diagBundleBtn">📦 导出诊断包</button>
     <button class="btn" id="diagRun">重新扫描</button>
     <button class="btn" id="diagClose">关闭</button>
   </div>
@@ -1413,6 +1418,10 @@ window.onerror = function(m, s, l, c){
       <h1>欢迎使用雪绒的钢铁雄心编辑器</h1>
       <p class="welcome-sub">专为 HOI4 社区打造的一款免费开源模组编辑器</p>
       <p class="welcome-lead">从哪开始？三条路口随时能换着走。</p>
+      <div id="welcGameBar" class="welc-game-bar">
+        <span id="welcGameState" class="welc-game-state">游戏目录：检测中…</span>
+        <button class="btn" id="welcGameBtn" type="button">📁 选择游戏目录</button>
+      </div>
       <div class="welcome-ways">
         <button class="way" id="wayEdit">
           <span class="way-ico">✎</span>
@@ -1435,6 +1444,8 @@ window.onerror = function(m, s, l, c){
         <button class="linkbtn" id="welcomePath">直接输路径</button>
         <span class="wm-dot">·</span>
         <button class="linkbtn" id="welcomeMore">更多说明</button>
+        <span class="wm-dot">·</span>
+        <button class="linkbtn" id="welcDiagBundle">📦 导出诊断包</button>
       </div>
       <div class="welcome-extra" id="welcomeExtra">
         <p>本体 + 子模组：先加载本体，再加载子模组；后加载的覆盖同名内容。</p>

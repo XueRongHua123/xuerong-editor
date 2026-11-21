@@ -1,8 +1,8 @@
 {
  "schema": 2,
- "recorded_at": "2026-11-20 15:07:08",
+ "recorded_at": "2026-11-20 23:38:18",
  "counts": {
-  "OK": 212,
+  "OK": 214,
   "INTERNAL": 0,
   "HTTP500": 0,
   "DEAD": 0,
@@ -711,6 +711,12 @@
    "status": 200,
    "msg": ""
   },
+  "POST /api/set_game_dir": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
   "POST /api/shared_add": {
    "method": "POST",
    "state": "OK",
@@ -1258,6 +1264,12 @@
    "msg": ""
   },
   "GET /api/supply_areas": {
+   "method": "GET",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "GET /api/support_bundle": {
    "method": "GET",
    "state": "OK",
    "status": 200,

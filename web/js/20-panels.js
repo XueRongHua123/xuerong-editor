@@ -209,45 +209,90 @@ async function loadModPath(){
   await loadModByPath(p);
 }
 
-async function openFolderPicker(){
+async function openFolderPicker(opts){
+  fpMode = (opts && opts.mode === 'game') ? 'game' : 'mod';
+  const headTitle = document.querySelector('#folderPick .fp-head b');
+  const okBtn = document.getElementById('fpOk');
+  if(headTitle){
+    headTitle.textContent = fpMode === 'game'
+      ? '选择《钢铁雄心 IV》安装目录（含 hoi4.exe）'
+      : '选择 mod 文件夹';
+  }
+  if(okBtn){
+    okBtn.textContent = fpMode === 'game' ? '设为游戏目录' : '选择此文件夹';
+  }
   document.getElementById('folderPick').classList.add('show');
   document.getElementById('fpSel').textContent = '未选择文件夹';
   fpSelPath = '';
-  await fsGo(fpDir);
+  const startDir = (fpMode === 'game' && DATA && DATA.game_dir) ? DATA.game_dir : fpDir;
+  await fsGo(startDir);
 }
+window.openGameDirPicker = () => openFolderPicker({mode: 'game'});
+
+let _fsSeq = 0;
 
 async function fsGo(p){
+  const seq = ++_fsSeq;
   try {
     const r = await fetch('/api/fs?path=' + encodeURIComponent(p || ''));
     const j = await r.json();
+    if(seq !== _fsSeq) return;
     fpDir = j.path || '';
     fpParent = j.parent || '';
     document.getElementById('fpPath').value = fpDir;
     document.getElementById('fpSel').textContent = fpDir || '选择盘符或输入路径';
     renderFs(j);
-  } catch(e){ status('读取目录失败', true); }
+  } catch(e){ if(seq === _fsSeq) status('读取目录失败', true); }
 }
 
 function renderFs(j){
   const list = document.getElementById('fpList');
   list.innerHTML = '';
-  const add = (name, path, parent, has)=>{
+  const add = (name, path, parent, hasMod, hasGame)=>{
     const d = document.createElement('div');
     d.className = 'fp-row';
     d.dataset.path = path;
+    const badges = (hasMod ? '<span class="badge">mod</span>' : '') +
+                   (hasGame ? '<span class="badge">HOI4</span>' : '');
     d.innerHTML = '<span>' + (parent ? '⬆ 上级目录' : '📁 ' + escapeHtml(name)) + '</span>' +
-                  (has ? '<span class="badge">mod</span>' : '');
+                  (badges ? '<span>' + badges + '</span>' : '');
     d.onclick = ()=>fsGo(path);
     list.appendChild(d);
   };
-  if(j.parent) add('..', j.parent, true, false);
-  (j.dirs || []).forEach(x=>add(x.name, x.path, false, x.has_mod));
+  if(j.parent) add('..', j.parent, true, false, false);
+  (j.dirs || []).forEach(x=>add(x.name, x.path, false, x.has_mod, x.has_game));
   if(j.error) list.innerHTML = '<div class="fp-row">' + escapeHtml(j.error) + '</div>';
 }
 
 async function chooseFolder(){
-  const p = fpDir;
+  const rawInp = (document.getElementById('fpPath') && document.getElementById('fpPath').value || '').trim();
+  const p = rawInp || fpDir;
   if(!p){ status('先选一个文件夹'); return; }
+  if(fpMode === 'game'){
+    try{
+      const r = await fetch('/api/set_game_dir', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({path: p})
+      });
+      const j = await r.json();
+      if(!j.ok){
+        if(typeof showError === 'function') showError(j);
+        else status(j.msg || '设置游戏目录失败', true);
+        return;
+      }
+      document.getElementById('folderPick').classList.remove('show');
+      status(j.msg || '已设置游戏目录');
+      await loadData();
+      const gvm = document.getElementById('gameVerifyModal');
+      if(gvm && gvm.classList.contains('show') && typeof refreshGameVerifyStatus === 'function'){
+        await refreshGameVerifyStatus();
+      }
+    }catch(e){
+      status('设置游戏目录失败：' + e, true);
+    }
+    return;
+  }
   // 先关掉选择器再加载：原先是在遮罩还开着的情况下同步等 /api/load_mod，
   // 20 秒里画面停在「选择 mod 文件夹」那一页，看起来像卡死，也没有任何进度。
   document.getElementById('folderPick').classList.remove('show');
@@ -664,7 +709,15 @@ function treeOptions(){
     await loadIgnored();
   }
 
-  entry.onclick = function(){ panel.style.display = 'block'; run(); };
+  function openDiagPanel(){ panel.style.display = 'block'; run(); }
+  window.openDiag = openDiagPanel;
+  entry.onclick = openDiagPanel;
+  const bundleBtn = document.getElementById('diagBundleBtn');
+  if(bundleBtn){
+    bundleBtn.onclick = function(){
+      if(typeof window.downloadSupportBundle === 'function') window.downloadSupportBundle();
+    };
+  }
   document.getElementById('diagClose').onclick = function(){ panel.style.display = 'none'; };
   document.getElementById('diagRun').onclick = run;
 })();

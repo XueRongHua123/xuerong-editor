@@ -6985,6 +6985,8 @@ def data_payload():
             "layers": _payload_layers(),
             "available_mods": discover_mods(),
             "game_version": detect_game_version(),
+            "game_dir": GAME or "",
+            "game_ok": bool(GAME and os.path.isfile(os.path.join(GAME, "hoi4.exe"))),
             "layer_shadow": layer_shadow_stats(),
             "deps_hint": _deps_hint()}
 
@@ -8190,7 +8192,7 @@ def fs_list(path):
         for c in string.ascii_uppercase:
             d = c + ":\\"
             if os.path.isdir(d):
-                drives.append({"name": c + ":", "path": d, "has_mod": False})
+                drives.append({"name": c + ":", "path": d, "has_mod": False, "has_game": False})
         return {"path": "", "parent": "", "dirs": drives}
     dirs = []
     try:
@@ -8201,7 +8203,8 @@ def fs_list(path):
                 p = e.path
                 has = os.path.exists(os.path.join(p, "descriptor.mod")) or \
                       os.path.isdir(os.path.join(p, "common", "national_focus"))
-                dirs.append({"name": e.name, "path": p, "has_mod": has})
+                has_game = os.path.isfile(os.path.join(p, "hoi4.exe"))
+                dirs.append({"name": e.name, "path": p, "has_mod": has, "has_game": has_game})
     except Exception as ex:
         return {"path": path, "parent": "", "dirs": [], "error": str(ex)}
     parent = os.path.dirname(path.rstrip("\\/"))
@@ -8277,15 +8280,115 @@ def _boot_load(roots):
         LOAD_PROGRESS["t"] = time.time()
 
 
+def set_game_dir(path="", pick=False):
+    """图形化或按路径设置《钢铁雄心 IV》安装目录并持久化到 options.json。"""
+    global GAME
+    raw_path = (path or "").strip()
+    if not raw_path and pick:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root_tk = tk.Tk()
+            root_tk.withdraw()
+            try:
+                root_tk.attributes("-topmost", True)
+            except Exception:
+                pass
+            raw_path = filedialog.askdirectory(
+                title="选择《钢铁雄心 IV》安装目录（含 hoi4.exe）"
+            ) or ""
+            root_tk.destroy()
+        except Exception as e:
+            return {"ok": False, "code": "BAD_PARAM", "msg": "图形选择失败：%s" % e}
+        if not raw_path.strip():
+            return {"ok": False, "cancelled": True, "msg": "未选择目录"}
+    if not raw_path:
+        return {"ok": False, "code": "BAD_PARAM", "msg": "参数不完整：请提供游戏目录 path"}
+
+    ab = os.path.abspath(raw_path)
+    if not os.path.isdir(ab):
+        return {"ok": False, "code": "BAD_PARAM", "msg": "游戏目录不存在：%s" % ab}
+    has_exe = os.path.isfile(os.path.join(ab, "hoi4.exe"))
+    has_nf = os.path.isdir(os.path.join(ab, "common", "national_focus"))
+    if not (has_exe or has_nf):
+        return {
+            "ok": False,
+            "code": "BAD_PARAM",
+            "msg": "不是有效的 HOI4 目录（缺少 hoi4.exe 或 common/national_focus）",
+        }
+
+    old_game = os.path.abspath(GAME) if GAME else ""
+    GAME = ab
+    _state.set_game(ab)
+    _state.options()["game_dir"] = ab
+    _save_options()
+    _LAYERS_CACHE.clear()
+    _MOD_ORDER_CACHE.clear()
+    invalidate_chain_cache()
+    invalidate_object_cache()
+
+    had_vanilla_in_roots = False
+    if old_game:
+        old_nc = os.path.normcase(old_game)
+        for i, r in enumerate(list(ROOTS)):
+            try:
+                if os.path.normcase(os.path.abspath(r)) == old_nc:
+                    had_vanilla_in_roots = True
+                    ROOTS[i] = ab
+            except Exception:
+                pass
+        if had_vanilla_in_roots:
+            dedup = []
+            seen_nc = set()
+            for r in ROOTS:
+                try:
+                    k = os.path.normcase(os.path.abspath(r))
+                except Exception:
+                    k = r
+                if k not in seen_nc:
+                    seen_nc.add(k)
+                    dedup.append(r)
+            ROOTS[:] = dedup
+
+    if ROOTS or had_vanilla_in_roots:
+        reload_data()
+        try:
+            build_icons(ROOTS, GAME)
+        except Exception as e:
+            print("图标构建失败:", e)
+    else:
+        _state.loc().clear()
+        load_game_loc()
+        try:
+            build_icons(ROOTS, GAME)
+        except Exception as e:
+            print("图标构建失败:", e)
+
+    ver = detect_game_version(ab)
+    msg = "已设置游戏目录：%s（%s）" % (ab, ver if has_exe else "无 hoi4.exe，仅脚本目录")
+    return {
+        "ok": True,
+        "game_dir": ab,
+        "game_ok": has_exe,
+        "game_version": ver,
+        "msg": msg,
+    }
+
+
 def main():
     global GAME
     _load_options()
     ap = argparse.ArgumentParser()
     ap.add_argument("--mod", action="append", default=None)
-    ap.add_argument("--game", default=DEFAULT_GAME)
+    ap.add_argument("--game", default=None)
     ap.add_argument("--port", type=int, default=8766)
     args = ap.parse_args()
-    GAME = args.game
+    if args.game is not None:
+        GAME = args.game
+    else:
+        _saved_game = (OPTIONS.get("game_dir") or "").strip()
+        GAME = os.path.abspath(_saved_game) if (_saved_game and os.path.isdir(_saved_game)) else DEFAULT_GAME
+    _state.set_game(GAME)
     roots = args.mod or playset_load_saved()   # 没传 --mod 时用上次保存的播放集
     # 端口先起：页面 0.2 秒就出来，数据在后台线程里读，前端轮询 /api/boot_status
     # 显示进度。加载期间数据类请求由 _boot_gate 拦成 503 —— reload_data 会原地

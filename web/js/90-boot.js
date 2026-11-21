@@ -73,7 +73,54 @@ async function bootWait(){
 }
 
 
+function updateGameDirUI(){
+  const hasData = !!DATA;
+  const gOk = !!(DATA && DATA.game_ok);
+  const gDir = (DATA && DATA.game_dir) || '';
+
+  const sBar = document.getElementById('srcGameBar');
+  const sTxt = document.getElementById('srcGameState');
+  if(sBar && sTxt){
+    sBar.classList.toggle('ok', gOk);
+    sBar.classList.toggle('warn', hasData && !gOk);
+    if(!hasData){
+      sTxt.textContent = '游戏目录：检测中…';
+      sTxt.title = '';
+    }else if(gOk){
+      sTxt.textContent = '游戏目录：已就绪' + (gDir ? ' · ' + gDir : '');
+      sTxt.title = gDir;
+    }else if(gDir){
+      sTxt.textContent = '游戏目录无效（缺 hoi4.exe）：' + gDir;
+      sTxt.title = gDir;
+    }else{
+      sTxt.textContent = '未设置游戏目录（含 hoi4.exe）';
+      sTxt.title = '点击右侧「选择游戏目录」指定 HOI4 安装目录';
+    }
+  }
+
+  const wBar = document.getElementById('welcGameBar');
+  const wTxt = document.getElementById('welcGameState');
+  if(wBar && wTxt){
+    wBar.classList.toggle('ok', gOk);
+    wBar.classList.toggle('warn', hasData && !gOk);
+    if(!hasData){
+      wTxt.textContent = '游戏目录：检测中…';
+      wTxt.title = '';
+    }else if(gOk){
+      wTxt.textContent = '✓ 游戏目录已就绪：' + (gDir || '已检测到 hoi4.exe');
+      wTxt.title = gDir;
+    }else if(gDir){
+      wTxt.textContent = '⚠ 当前游戏目录无效（未含 hoi4.exe）：' + gDir;
+      wTxt.title = gDir;
+    }else{
+      wTxt.textContent = '⚠ 未检测到游戏目录（含 hoi4.exe），原版参考与进游戏检查需先设置';
+      wTxt.title = '';
+    }
+  }
+}
+
 function updateWelcome(){
+  updateGameDirUI();
   const w = document.getElementById('welcome'); if(!w) return;
   const empty = !(DATA && DATA.roots && DATA.roots.length);
   if(empty && !sessionStorage.getItem('welcomeDismissed') && !sessionStorage.getItem('updShown')) w.classList.add('show');
@@ -195,6 +242,7 @@ function srcShortName(l){
 
 
 function updateSourceBox(){
+  updateGameDirUI();
   const roots = (DATA && DATA.roots) || [];
   const layers = (DATA && DATA.layers) || [];
   const badge = document.getElementById('srcBadge');
@@ -714,6 +762,7 @@ function dismissWelcome(){
 
 function openWelcome(){
   sessionStorage.removeItem('welcomeDismissed');
+  updateGameDirUI();
   document.getElementById('welcome').classList.add('show');
 }
 
@@ -730,20 +779,21 @@ document.getElementById('wayWorld').onclick = ()=>{ setFlow('world'); dismissWel
 
 document.getElementById('welcomePath').onclick = loadModPath;
 
+const _welcGameBtn = document.getElementById('welcGameBtn');
+if(_welcGameBtn) _welcGameBtn.onclick = ()=>{ if(typeof openGameDirPicker === 'function') openGameDirPicker(); };
+
+const _srcGameBtn = document.getElementById('srcGameBtn');
+if(_srcGameBtn) _srcGameBtn.onclick = ()=>{ if(typeof openGameDirPicker === 'function') openGameDirPicker(); };
+
+const _welcDiagBundle = document.getElementById('welcDiagBundle');
+if(_welcDiagBundle) _welcDiagBundle.onclick = ()=>{ if(typeof downloadSupportBundle === 'function') downloadSupportBundle(); };
+
 document.getElementById('welcomeBtn').onclick = openWelcome;
 
 // v1.24.2：「❓ 打开引导」按钮换成侧栏两个勾选框（bindGuideToggles），openGuide 保留给别处用
 document.getElementById('gbClose').onclick = ()=>{ localStorage.setItem('guideHidden', '1'); document.getElementById('guideBox').classList.remove('show'); if(typeof syncGuideToggle === 'function') syncGuideToggle(); };
 
-// 引导面板里的按钮是动态生成的，用事件委托接
-document.getElementById('gbBody').onclick = function(e){
-  const b = e.target.closest('.gb-btn[data-act]');
-  if(!b) return;
-  const a = b.dataset.act;
-  if(a === 'add') openFolderPicker();
-  else if(a === 'new') openNewMod();
-  else if(a === 'world') openWorldGen();
-};
+// #gbBody 的 .gb-btn[data-act] 事件委托已移至 40-guide.js bindGuideActions()
 
 document.getElementById('welcomeMore').onclick = ()=>{
   const x = document.getElementById('welcomeExtra');

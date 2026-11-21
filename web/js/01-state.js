@@ -69,12 +69,14 @@ const FLOWS = {
       {t: '补中文名字和描述',
        d: '打开「本地化」面板，会列出所有缺名字的节点。逐条填中文名和描述，否则游戏里显示的是裸 key。',
        ok: s => s.dirty === 0 && !!s.tree},
-      {t: '跑一遍体检',
-       d: '点顶部「🩺 体检」，看有没有红色 error。有就按提示改，改完再跑一次，直到 0 error。警告可以先不管。',
-       ok: s => false},
-      {t: '装进游戏实测',
-       d: '把整个 submod 目录拷到 Documents/Paradox Interactive/Hearts of Iron IV/mod/，在启动器里同时勾上本体和它（本体在下、它在上面）。进游戏看国策树有没有你的改动。',
-       ok: s => false}
+      {t: '跑一遍体检与诊断',
+       d: '点「🩺 体检」看脚本/引用错误，再点「🩺 诊断」处理 replace 断链与缺失引用，直到没有严重 error。',
+       ok: s => false,
+       btns: [{txt: '🩺 打开诊断', act: 'diag'}]},
+      {t: '一键进游戏检查与打包发布',
+       d: '先确认游戏目录已设置，点「🎮 进游戏检查」自动拉起 HOI4 核对 error.log 差分；确认无误后点「📦 打包发布」直接输出工坊就绪目录。',
+       ok: s => false,
+       btns: [{txt: '📁 设置游戏目录', act: 'game_dir'}, {txt: '🎮 进游戏检查', act: 'game_verify'}, {txt: '📦 打包发布', act: 'publish'}]}
     ]
   },
   new: {
@@ -172,7 +174,7 @@ let aiAbort = null;
 
 let contentFilter = '';
 
-let fpDir = '', fpSelPath = '', fpParent = '';
+let fpDir = '', fpSelPath = '', fpParent = '', fpMode = 'mod';
 
 
 let drag = null;

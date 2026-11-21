@@ -50,7 +50,7 @@ SPRITE_MAP = {}
 ICONS = {}
 EQUIP_ICONS = {}
 TECH_ICONS = {}
-OPTIONS = {"follow_deps": True, "follow_launcher": False}
+OPTIONS = {"follow_deps": True, "follow_launcher": False, "game_dir": ""}
 LOAD_PROGRESS = {"active": False, "stage": "", "sub": "", "pct": 0, "t": 0.0}
 
 # ---------------------------------------------------------------- 标量

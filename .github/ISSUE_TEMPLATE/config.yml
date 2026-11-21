@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 📖 十分钟做出第一个 Submod
+    url: https://github.com/XueRongHua123/xuerong-editor/blob/main/docs/QUICKSTART_SUBMOD.md
+    about: 从加载父 mod、修改保存、进游戏查错到打包发布的完整上手指南
+  - name: 📋 功能能力与实测范围说明
+    url: https://github.com/XueRongHua123/xuerong-editor/blob/main/docs/CAPABILITIES.md
+    about: 查看各编辑域可用状态、实机测试范围及实验性功能限制

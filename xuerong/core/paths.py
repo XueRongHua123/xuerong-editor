@@ -286,7 +286,10 @@ def _load_options():
                                    errors="replace").read())
             for k in list(state.options()):
                 if k in j:
-                    state.options()[k] = bool(j[k])
+                    if k == "game_dir":
+                        state.options()[k] = str(j[k] or "").strip()
+                    else:
+                        state.options()[k] = bool(j[k])
     except Exception:
         pass
 

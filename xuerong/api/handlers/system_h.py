@@ -21,6 +21,7 @@ from xuerong.model.history import redo_last, undo_last
 from xuerong.model.replace import (
     replace_drop, replace_fix_all, replace_ignore,
     replace_ignore_clear, replace_ignore_list, replace_ignore_remove)
+from xuerong.model.support_bundle import build_support_bundle, support_bundle_zip
 
 
 @post("/api/options")
@@ -212,6 +213,11 @@ def r_api_load_vanilla(h, body):
     h._send({"ok": ok, "msg": msg})
 
 
+@post("/api/set_game_dir")
+def r_api_set_game_dir(h, body):
+    h._send(LG.set_game_dir(body.get("path") or "", bool(body.get("pick"))))
+
+
 @post("/api/copy_item")
 def r_api_copy_item(h, body):
     ok, msg = LG.copy_item(body.get("kind"), body.get("id"), body.get("new_id"))
@@ -340,6 +346,20 @@ def r_api_backups(h, path_only):
     root = unquote(qs.get("root", [""])[0])
     rel = unquote(qs.get("file", [""])[0])
     h._send({"items": LG.list_backups(root, rel)})
+
+
+@get("/api/support_bundle")
+def r_api_support_bundle(h, path_only):
+    qs = parse_qs(urlparse(h.path).query)
+    if qs.get("download", [""])[0] in ("1", "true", "yes"):
+        data = support_bundle_zip()
+        h._send(
+            data,
+            ctype="application/zip",
+            extra=[("Content-Disposition", 'attachment; filename="xuerong-diag.zip"')],
+        )
+        return
+    h._send(build_support_bundle())
 
 
 @prefix("/api/data")

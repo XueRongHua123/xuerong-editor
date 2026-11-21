@@ -7,6 +7,7 @@
 import re
 
 ERR_RULES = (
+    (r"找不到 hoi4\.exe|未检测到.*游戏目录|游戏目录不存在|不是有效的 HOI4 目录", "GAME_DIR_MISSING"),
     (r"未找到树|没有这棵树|找不到这棵|树.*不存在|没有树", "TREE_NOT_FOUND"),
     (r"写回后校验", "SAVE_VERIFY_FAILED"),
     (r"找不到可写的\s*mod|没有可写的模组|没有可写的 mod|可写的目录", "NO_WRITABLE_MOD"),

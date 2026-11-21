@@ -127,6 +127,21 @@ function _nmCollectModOptions(){
   return ordered;
 }
 
+function _nmSyncTreeCheckbox(){
+  const treeEl = document.getElementById('nmTree');
+  if(!treeEl || treeEl.dataset.userTouched === '1') return;
+  const tid = (document.getElementById('nmTreeId') && document.getElementById('nmTreeId').value || '').trim();
+  const tag = (document.getElementById('nmTag') && document.getElementById('nmTag').value || '').trim();
+  if(tid || tag){
+    treeEl.checked = true;
+    return;
+  }
+  const sel = document.getElementById('nmDepSel');
+  const dep = document.getElementById('nmDep');
+  const hasDep = !!((sel && sel.value && sel.value !== '__custom__') || (dep && dep.value.trim()));
+  treeEl.checked = !hasDep;
+}
+
 function _nmUpdateDepHint(){
   const sel = document.getElementById('nmDepSel');
   const dep = document.getElementById('nmDep');
@@ -135,17 +150,19 @@ function _nmUpdateDepHint(){
   const val = dep ? dep.value.trim() : '';
   const hasPath = dep && dep.dataset && dep.dataset.depPath;
   hint.style.display = 'block';
-  if(!val && (!sel || !sel.value)){
+  if(!val && (!sel || !sel.value || sel.value === '__custom__')){
     hint.textContent = '留空表示不依赖任何 mod，直接从原版开始制作独立 mod。';
     return;
   }
   const opt = sel && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
+  const treeNote = ' 已选父 mod，默认不生成示例国策树；独立全新开树可再勾上。';
   if(opt && opt.value && opt.value !== '__custom__' && hasPath){
     const ro = opt.dataset.readonly === '1' ? '（只读底层，不会改动原文件）' : '';
     hint.textContent = '已选依赖「' + (opt.dataset.depName || val) + '」' + ro
-                     + '；将写出 descriptor 真实 name= 到 dependencies，多级 submod 可直接继承其完整链路。';
+                     + '；将写出 descriptor 真实 name= 到 dependencies，多级 submod 可直接继承其完整链路。'
+                     + treeNote;
   }else{
-    hint.textContent = '将按填写的「' + val + '」解析其 descriptor.mod 真实 name= 并写入 dependencies。';
+    hint.textContent = '将按填写的「' + val + '」解析其 descriptor.mod 真实 name= 并写入 dependencies。' + treeNote;
   }
 }
 
@@ -155,9 +172,16 @@ function openNewMod(){
   document.getElementById('nmId').value = '';
   document.getElementById('nmName').value = '';
   document.getElementById('nmGame').value = (DATA && DATA.game_version) || '1.19.*';
-  document.getElementById('nmTreeId').value = '';
-  document.getElementById('nmTag').value = '';
-  document.getElementById('nmTree').checked = true;
+  const tidEl = document.getElementById('nmTreeId');
+  const tagEl = document.getElementById('nmTag');
+  if(tidEl){ tidEl.value = ''; tidEl.oninput = _nmSyncTreeCheckbox; }
+  if(tagEl){ tagEl.value = ''; tagEl.oninput = _nmSyncTreeCheckbox; }
+  const treeEl = document.getElementById('nmTree');
+  if(treeEl){
+    delete treeEl.dataset.userTouched;
+    treeEl.checked = true;
+    treeEl.onchange = ()=>{ treeEl.dataset.userTouched = '1'; };
+  }
 
   const sel = document.getElementById('nmDepSel');
   const dep = document.getElementById('nmDep');
@@ -216,6 +240,7 @@ function openNewMod(){
         dep.value = (opt && opt.dataset.depName) || '';
         dep.dataset.depPath = sel.value;
       }
+      _nmSyncTreeCheckbox();
       _nmUpdateDepHint();
     };
   }else if(dep){
@@ -244,9 +269,11 @@ function openNewMod(){
           }
         }
       }
+      _nmSyncTreeCheckbox();
       _nmUpdateDepHint();
     };
   }
+  _nmSyncTreeCheckbox();
   _nmUpdateDepHint();
   document.getElementById('newMod').classList.add('show');
 }

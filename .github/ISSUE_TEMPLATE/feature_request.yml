@@ -1,0 +1,27 @@
+name: 💡 功能建议
+description: 建议新的编辑能力、Submod 工作流改进或界面体验优化
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 希望解决什么制作痛点
+      description: 描述在制作 mod 或 Submod 时遇到了什么麻烦，当前工作流哪里不够顺手。
+      placeholder: 例如：在跨层接管多个决议文件时，希望可以……
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望的功能或交互方式
+      description: 描述希望编辑器提供什么功能、按钮或校验逻辑。
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: 参考示例或补充说明
+      description: 如有 HOI4 脚本写法示例、相关界面位置或其它工具参考，可附在此处。
+    validations:
+      required: false
