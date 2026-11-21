@@ -71,7 +71,7 @@ function renderEventOptions(raw){
 async function selectEvent(e){
   eventSel = e;
   document.getElementById('eventTitle').textContent = e.id + '   (' + e.file + ')';
-  fillSrcHint('eventSrc', _lastRoot(), e.file, e.source);
+  fillSrcHint('eventSrc', (typeof rootByName === 'function' ? rootByName(e.source) : '') || _lastRoot(), e.file, e.source);
   document.getElementById('eventNameZ').value = '';
   document.getElementById('eventDescZ').value = '';
   document.getElementById('eventNameJa').value = '';
@@ -89,24 +89,32 @@ async function selectEvent(e){
 
 async function saveEvent(){
   if(!eventSel){ status('先选择一个事件'); return; }
-  const options = [...document.querySelectorAll('#eventOptions input[data-key]')]
-    .map(i=>({key: i.dataset.key, text: (i.value || '').trim()}))
-    .filter(o=>o.key && o.text);
-  const r = await fetch('/api/event_save', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root: rootByName(eventSel.source), file: eventSel.file, id: eventSel.id,
-      raw: document.getElementById('eventRaw').value, options,
-      trigger_raw: document.getElementById('eventTrigger').value,
-      immediate_raw: document.getElementById('eventImmediate').value,
-      picture: document.getElementById('eventPic').value.trim(),
-      title: document.getElementById('eventNameZ').value,
-      desc: document.getElementById('eventDescZ').value,
-      title_ja: document.getElementById('eventNameJa').value,
-      desc_ja: document.getElementById('eventDescJa').value,
-      title_en: document.getElementById('eventNameEn').value,
-      desc_en: document.getElementById('eventDescEn').value})});
-  const j = await r.json();
-  status(j.msg || '', !j.ok);
-  if(j.ok){ await loadData(); renderEventList(document.getElementById('eventSearch').value); }
+  const curId = eventSel.id;
+  await withBusy('正在保存事件并刷新…', async ()=>{
+    const options = [...document.querySelectorAll('#eventOptions input[data-key]')]
+      .map(i=>({key: i.dataset.key, text: (i.value || '').trim()}))
+      .filter(o=>o.key && o.text);
+    const r = await fetch('/api/event_save', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root: rootByName(eventSel.source), file: eventSel.file, id: eventSel.id,
+        raw: document.getElementById('eventRaw').value, options,
+        trigger_raw: document.getElementById('eventTrigger').value,
+        immediate_raw: document.getElementById('eventImmediate').value,
+        picture: document.getElementById('eventPic').value.trim(),
+        title: document.getElementById('eventNameZ').value,
+        desc: document.getElementById('eventDescZ').value,
+        title_ja: document.getElementById('eventNameJa').value,
+        desc_ja: document.getElementById('eventDescJa').value,
+        title_en: document.getElementById('eventNameEn').value,
+        desc_en: document.getElementById('eventDescEn').value})});
+    const j = await r.json();
+    status(j.msg || '', !j.ok);
+    if(j.ok){
+      await loadData();
+      renderEventList(document.getElementById('eventSearch').value);
+      const hit = (DATA.events||[]).find(x=>x.id===curId);
+      if(hit) await selectEvent(hit);
+    }
+  });
 }
 
 
@@ -115,21 +123,38 @@ async function addEvent(){
   if(!id) return;
   const root = _writableRoot();
   if(!root){ status('先加载或新建一个可写的模组', true); return; }
-  const r = await fetch('/api/event_add', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root, id})});
-  const j = await r.json();
-  status(j.msg || '', !j.ok);
-  if(j.ok){ await loadData(); renderEventList(''); }
+  await withBusy('正在新建事件并刷新…', async ()=>{
+    const r = await fetch('/api/event_add', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root, id})});
+    const j = await r.json();
+    status(j.msg || '', !j.ok);
+    if(j.ok){
+      await loadData();
+      const sInp = document.getElementById('eventSearch');
+      if(sInp) sInp.value = '';
+      renderEventList('');
+      const hit = (DATA.events||[]).find(x=>x.id===id);
+      if(hit) await selectEvent(hit);
+    }
+  });
 }
 
 async function deleteEventSel(){
   if(!eventSel){ status('先选择事件'); return; }
   if(!confirm('确定删除事件 ' + eventSel.id + ' ？')) return;
-  const r = await fetch('/api/event_delete', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root: rootByName(eventSel.source), file: eventSel.file, id: eventSel.id})});
-  const j = await r.json();
-  status(j.msg || '', !j.ok);
-  if(j.ok){ eventSel = null; await loadData(); renderEventList(''); }
+  await withBusy('正在删除事件并刷新…', async ()=>{
+    const r = await fetch('/api/event_delete', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root: rootByName(eventSel.source), file: eventSel.file, id: eventSel.id})});
+    const j = await r.json();
+    status(j.msg || '', !j.ok);
+    if(j.ok){
+      eventSel = null;
+      document.getElementById('eventRaw').value = '';
+      document.getElementById('eventTitle').textContent = '';
+      await loadData();
+      renderEventList('');
+    }
+  });
 }
 
 async function addShared(){

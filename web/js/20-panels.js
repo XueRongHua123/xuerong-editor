@@ -66,6 +66,15 @@ function _switchLocTab(tab){
   if(lgSel) lgSel.onchange = _loadLocBrowse;
   if(qInp) qInp.addEventListener('keydown', e=>{ if(e.key === 'Enter') _loadLocBrowse(); });
   if(bList){
+    bList.addEventListener('keydown', e=>{
+      if(e.key !== 'Enter') return;
+      const inp = e.target.closest('.loc-val-inp');
+      if(!inp) return;
+      e.preventDefault();
+      const row = inp.closest('.loc-browse-row');
+      const btn = row ? row.querySelector('.loc-save-btn') : null;
+      if(btn && !btn.disabled) btn.click();
+    });
     bList.addEventListener('click', async e=>{
       const btn = e.target.closest('.loc-save-btn');
       if(!btn) return;
@@ -74,14 +83,31 @@ function _switchLocTab(tab){
       const key = btn.dataset.key || '';
       const lang = document.getElementById('locLang')?.value || 'simp_chinese';
       if(!key || !inp) return;
-      const root = (typeof _writableRoot === 'function' ? _writableRoot() : '') || (DATA && DATA.roots && DATA.roots[0]) || '';
+      const root = (typeof _writableRoot === 'function' ? _writableRoot() : '') || (DATA && DATA.roots && DATA.roots[0] && DATA.roots[0].path) || '';
       if(!root){ status('没有可写的模组目录', true); return; }
       const entries = {}; entries[lang] = {}; entries[lang][key] = inp.value;
       btn.disabled = true;
       try{
         const r = await (await fetch('/api/loc_save', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({root, entries})})).json();
         status(r.ok ? ('已保存本地化：' + key) : ('保存失败：' + (r.msg || '')), !r.ok);
-        if(r.ok) _loadLocBrowse();
+        if(r.ok){
+          const prevSel = typeof selId !== 'undefined' ? selId : null;
+          await _loadLocBrowse();
+          if(typeof loadData === 'function') await loadData();
+          if(prevSel && typeof curTree === 'function' && typeof nodeById === 'function'){
+            const t = curTree();
+            if(t && nodeById(t, prevSel)){
+              selId = prevSel;
+              if(typeof renderTree === 'function') renderTree();
+              if(typeof showPanel === 'function') showPanel();
+            }
+          }
+          const statEl = document.getElementById('locBrowseStat');
+          if(statEl){
+            const tail = statEl.textContent ? (' · ' + _locEsc(statEl.textContent)) : '';
+            statEl.innerHTML = '<span style="color:var(--accent);font-weight:600">已保存：' + _locEsc(key) + '</span>' + tail;
+          }
+        }
       }catch(err){
         status('保存失败：' + err, true);
       }finally{

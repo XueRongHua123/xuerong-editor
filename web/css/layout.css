@@ -32,8 +32,8 @@
   .toolbar{position:absolute;top:10px;left:10px;display:flex;gap:6px;flex-wrap:wrap;z-index:5}
   .panel{position:absolute;top:56px;right:10px;width:320px;max-height:calc(100% - 70px);overflow:auto;
     background:#1c2124f2;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12px;display:none}
-  #status{position:absolute;bottom:10px;left:10px;right:10px;background:#141a21ee;border:1px solid var(--panel2);pointer-events:none;
-    border-radius:6px;padding:6px 10px;font-size:12px;color:var(--text);display:none;z-index:95}
+  #status{position:fixed;left:50%;bottom:18px;right:auto;transform:translateX(-50%);max-width:min(720px,calc(100% - 40px));background:#141a21ee;border:1px solid var(--panel2);pointer-events:none;
+    border-radius:6px;padding:6px 10px;font-size:12px;color:var(--text);display:none;z-index:210}
   /* v1.24.0 错误卡片：三行（发生什么 / 为什么 / 怎么办） */
   #errBar{position:fixed;left:50%;bottom:52px;z-index:200;width:min(640px,calc(100% - 40px));
     transform:translateX(-50%) translateY(14px);opacity:0;pointer-events:none;

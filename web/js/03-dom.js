@@ -2,6 +2,12 @@
 // themeSel / fsSel / search / mapOpEl 是 4 个在加载时求值的 getElementById 句柄；
 // 其余是 tech / event / equip / idea 四个列表面板共用的「一行 + 来源说明 + 取原文」工具。
 
+window.withBusy = async function(msg, fn){
+  startLoading(msg);
+  try{ return await fn(); }
+  finally { stopLoading(); }
+};
+
 function openEquip(){
   document.getElementById('equipModal').style.display = 'flex';
   renderEquipList('');
@@ -22,21 +28,25 @@ async function entrySource(root, file, layer){
   return j;
 }
 
-function srcHintHtml(j){
-  if(!j || !j.ok || !j.layer) return '<div class="src-hint"></div>';
+function srcHintHtml(j, elId){
+  const idAttr = elId ? ' id="' + escapeHtml(elId) + '"' : '';
+  if(!j || !j.ok || !j.layer) return '<div class="src-hint"' + idAttr + '></div>';
   const txt = j.readonly
     ? '来源: ' + j.layer + '（只读）· 保存时会复制到 ' + (j.adopt_to || '你的 mod')
     : '来源: ' + j.layer;
-  return '<div class="src-hint' + (j.readonly ? ' ro' : '') + '">' + escapeHtml(txt) + '</div>';
+  return '<div class="src-hint' + (j.readonly ? ' ro' : '') + '"' + idAttr + '>' + escapeHtml(txt) + '</div>';
 }
 
+const _srcHintSeq = {};
 function fillSrcHint(elId, root, file, layer){
   const el = document.getElementById(elId);
   if(!el) return;
+  const seq = (_srcHintSeq[elId] = (_srcHintSeq[elId] || 0) + 1);
   el.outerHTML = '<div class="src-hint" id="' + elId + '">…</div>';
   entrySource(root, file, layer).then(function(j){
+    if(_srcHintSeq[elId] !== seq) return;
     const el2 = document.getElementById(elId);
-    if(el2) el2.outerHTML = srcHintHtml(j);
+    if(el2) el2.outerHTML = srcHintHtml(j, elId);
   });
 }
 
@@ -83,7 +93,7 @@ function renderEquipList(q){
 async function selectEquip(e){
   equipSel = e;
   document.getElementById('equipTitle').textContent = e.id + '   (' + e.file + ')';
-  fillSrcHint('equipSrc', _lastRoot(), e.file, e.source);
+  fillSrcHint('equipSrc', (typeof rootByName === 'function' ? rootByName(e.source) : '') || _lastRoot(), e.file, e.source);
   document.getElementById('equipNameZ').value = e.name || '';
   document.getElementById('equipPic').value = e.picture || '';
   const ep = e.props || {};
@@ -114,33 +124,41 @@ async function selectEquip(e){
 
 async function saveEquip(){
   if(!equipSel){ status('先选择一件装备'); return; }
-  const props = {};
-  document.querySelectorAll('#equipProps input[data-prop]').forEach(i=>{
-    const v = (i.value || '').trim();
-    if(v !== '') props[i.dataset.prop] = v;
+  const curId = equipSel.id;
+  await withBusy('正在保存装备并刷新…', async ()=>{
+    const props = {};
+    document.querySelectorAll('#equipProps input[data-prop]').forEach(i=>{
+      const v = (i.value || '').trim();
+      if(v !== '') props[i.dataset.prop] = v;
+    });
+    [['archetype','equipArch'], ['is_archetype','equipIsArch'], ['can_be_produced','equipProduced']].forEach(pair=>{
+      const v = (document.getElementById(pair[1]).value || '').trim();
+      if(v !== '') props[pair[0]] = v;
+    });
+    const upg = (document.getElementById('equipUpgrades').value || '').trim();
+    if(upg) props.upgrades_raw = upg;
+    const slotsRaw = (document.getElementById('equipSlots').value || '').trim();
+    if(slotsRaw) props.module_slots_raw = slotsRaw;
+    const r = await fetch('/api/equip_save', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root: rootByName(equipSel.source), file: equipSel.file, id: equipSel.id,
+        raw: document.getElementById('equipRaw').value,
+        props,
+        name: document.getElementById('equipNameZ').value,
+        desc: document.getElementById('equipDescZ').value,
+        name_ja: document.getElementById('equipNameJa').value,
+        desc_ja: document.getElementById('equipDescJa').value,
+        name_en: document.getElementById('equipNameEn').value,
+        desc_en: document.getElementById('equipDescEn').value,
+        picture: document.getElementById('equipPic').value.trim()})});
+    const j = await r.json();
+    status(j.msg || '', !j.ok);
+    if(j.ok){
+      await loadData();
+      renderEquipList(document.getElementById('equipSearch').value);
+      const hit = (DATA.equipment||[]).find(x=>x.id===curId);
+      if(hit) await selectEquip(hit);
+    }
   });
-  [['archetype','equipArch'], ['is_archetype','equipIsArch'], ['can_be_produced','equipProduced']].forEach(pair=>{
-    const v = (document.getElementById(pair[1]).value || '').trim();
-    if(v !== '') props[pair[0]] = v;
-  });
-  const upg = (document.getElementById('equipUpgrades').value || '').trim();
-  if(upg) props.upgrades_raw = upg;
-  const slotsRaw = (document.getElementById('equipSlots').value || '').trim();
-  if(slotsRaw) props.module_slots_raw = slotsRaw;
-  const r = await fetch('/api/equip_save', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root: rootByName(equipSel.source), file: equipSel.file, id: equipSel.id,
-      raw: document.getElementById('equipRaw').value,
-      props,
-      name: document.getElementById('equipNameZ').value,
-      desc: document.getElementById('equipDescZ').value,
-      name_ja: document.getElementById('equipNameJa').value,
-      desc_ja: document.getElementById('equipDescJa').value,
-      name_en: document.getElementById('equipNameEn').value,
-      desc_en: document.getElementById('equipDescEn').value,
-      picture: document.getElementById('equipPic').value.trim()})});
-  const j = await r.json();
-  status(j.msg || '', !j.ok);
-  if(j.ok){ await loadData(); renderEquipList(document.getElementById('equipSearch').value); }
 }
 
 const themeSel = document.getElementById('themeSel');

@@ -239,14 +239,14 @@ async function showPanel(){
     <div style="display:flex;gap:6px"><input type="number" step="1" id="edCost" value="${escapeHtml(f.cost||'')}" style="width:80px"><input type="text" id="edIcon" value="${escapeHtml(f.icon||'')}"></div>
     <div style="margin-bottom:8px"><button class="btn" id="btnIconPick">🖼 选择图标</button></div>
     <div class="k">中文名称 / 描述</div>
-    <input type="text" id="edNameZ" value="${escapeHtml(f.name||'')}">
-    <textarea id="edDescZ">${escapeHtml(fdet.desc||'')}</textarea>
+    <input type="text" id="edNameZ" value="${escapeHtml((d.loc && d.loc.simp_chinese && d.loc.simp_chinese[f.id] !== undefined) ? d.loc.simp_chinese[f.id] : (f.name||''))}">
+    <textarea id="edDescZ">${escapeHtml((d.loc && d.loc.simp_chinese && d.loc.simp_chinese[f.id+'_desc'] !== undefined) ? d.loc.simp_chinese[f.id+'_desc'] : (fdet.desc||''))}</textarea>
     <div class="k">English name / description</div>
-    <input type="text" id="edNameE" value="">
-    <textarea id="edDescE"></textarea>
+    <input type="text" id="edNameE" value="${escapeHtml((d.loc && d.loc.english && d.loc.english[f.id] !== undefined) ? d.loc.english[f.id] : '')}">
+    <textarea id="edDescE">${escapeHtml((d.loc && d.loc.english && d.loc.english[f.id+'_desc'] !== undefined) ? d.loc.english[f.id+'_desc'] : '')}</textarea>
     <div class="k">日本語 名前 / 説明</div>
-    <input type="text" id="edNameJ" value="">
-    <textarea id="edDescJ"></textarea>
+    <input type="text" id="edNameJ" value="${escapeHtml((d.loc && d.loc.japanese && d.loc.japanese[f.id] !== undefined) ? d.loc.japanese[f.id] : '')}">
+    <textarea id="edDescJ">${escapeHtml((d.loc && d.loc.japanese && d.loc.japanese[f.id+'_desc'] !== undefined) ? d.loc.japanese[f.id+'_desc'] : '')}</textarea>
     <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
       <button class="btn" id="btnCopy">⧉ 复制分支</button>
       <button class="btn" id="btnLoc">保存名称/描述</button>
@@ -302,6 +302,31 @@ function bindPanelDirty(f){
     };
     el.addEventListener('input', onChange);
     el.addEventListener('change', onChange);
+  });
+  const locMap = [
+    ['edNameZ', 'simp_chinese', f.id],
+    ['edDescZ', 'simp_chinese', f.id + '_desc'],
+    ['edNameE', 'english', f.id],
+    ['edDescE', 'english', f.id + '_desc'],
+    ['edNameJ', 'japanese', f.id],
+    ['edDescJ', 'japanese', f.id + '_desc']
+  ];
+  locMap.forEach(function(item){
+    const el = document.getElementById(item[0]);
+    if(!el) return;
+    const lang = item[1], locKey = item[2];
+    const onLocChange = function(){
+      const was = dirty.has(f.id);
+      const cur = dirty.get(f.id) || {};
+      cur.loc = cur.loc || {};
+      cur.loc[lang] = cur.loc[lang] || {};
+      cur.loc[lang][locKey] = el.value;
+      dirty.set(f.id, cur);
+      if(!was) renderTree();
+      renderStats();
+    };
+    el.addEventListener('input', onLocChange);
+    el.addEventListener('change', onLocChange);
   });
 }
 
@@ -470,18 +495,45 @@ async function postSave(f, fields){
 async function saveAll(){
   if(!dirty.size){ status('没有未保存的改动'); return; }
   const t = curTree(); let ok=0, bad=0, firstFail=null, adoptedTo='';
+  const locEntries = {simp_chinese:{}, english:{}, japanese:{}};
+  let hasLoc = false, locOnlyNodes = 0;
   for(const [id,d] of [...dirty.entries()]){
     const f = nodeById(t,id); if(!f) continue;
+    let nodeHasLoc = false;
+    if(d.loc){
+      ['simp_chinese','english','japanese'].forEach(lang=>{
+        const m = d.loc[lang];
+        if(!m) return;
+        Object.keys(m).forEach(k=>{
+          const v = (m[k] || '').trim();
+          if(v !== ''){ locEntries[lang][k] = v; hasLoc = true; nodeHasLoc = true; }
+        });
+      });
+    }
     const fields = {};
     ['x','y','cost','icon','effect','select_effect','prereq','mutex'].forEach(function(k){
       if(d[k] !== undefined) fields[k] = d[k];
     });
-    if(!Object.keys(fields).length) continue;
+    if(!Object.keys(fields).length){
+      if(nodeHasLoc) locOnlyNodes++;
+      continue;
+    }
     const r = await fetch('/api/save', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({root: rootOf(t), file:f.file, id:f.id, fields})});
     const j = await r.json();
     if(j.ok){ ok++; if(j.adopted_to) adoptedTo = j.adopted_to; }
     else { bad++; if(!firstFail) firstFail = j; }
+  }
+  if(hasLoc){
+    const lr = await fetch('/api/loc_save', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root: rootOf(t), entries: locEntries})});
+    const lj = await lr.json();
+    if(lj.ok){
+      ok += locOnlyNodes;
+      if(lj.adopted_to) adoptedTo = lj.adopted_to;
+    }else{
+      bad++; if(!firstFail) firstFail = lj;
+    }
   }
   if(firstFail) showError(firstFail);
   // v1.24.1：后端若因为「写到了只读层」自动接管，把复制到的目标一起说出来
@@ -518,29 +570,27 @@ async function addNode(){
 }
 
 async function saveLoc(f){
-  const entries = {simp_chinese:{}, english:{}};
-  const nz = document.getElementById('edNameZ').value.trim();
-  const dz = document.getElementById('edDescZ').value.trim();
-  const ne = document.getElementById('edNameE').value.trim();
-  const de = document.getElementById('edDescE').value.trim();
-  const nj = document.getElementById('edNameJ').value.trim();
-  const dj = document.getElementById('edDescJ').value.trim();
-  if(nz) entries.simp_chinese[f.id] = nz;
-  if(dz) entries.simp_chinese[f.id+'_desc'] = dz;
-  if(ne) entries.english[f.id] = ne;
-  if(de) entries.english[f.id+'_desc'] = de;
-  if(nj) entries.japanese[f.id] = nj;
-  if(dj) entries.japanese[f.id+'_desc'] = dj;
-  const nen = document.getElementById('ideaNameEn').value.trim();
-  const den = document.getElementById('ideaDescEn').value.trim();
-  if(nen) entries.english[f.id] = nen;
-  if(den) entries.english[f.id+'_desc'] = den;
-  const t = curTree();
-  const r = await fetch('/api/loc_save', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root: rootOf(t), entries})});
-  const j = await r.json();
-  status(j.ok ? '名称/描述已保存' : ('保存失败：' + j.msg), !j.ok);
-  if(j.ok) await loadData();
+  await withBusy('正在保存名称/描述并刷新…', async ()=>{
+    const entries = {simp_chinese:{}, english:{}, japanese:{}};
+    const nz = document.getElementById('edNameZ').value.trim();
+    const dz = document.getElementById('edDescZ').value.trim();
+    const ne = document.getElementById('edNameE').value.trim();
+    const de = document.getElementById('edDescE').value.trim();
+    const nj = document.getElementById('edNameJ').value.trim();
+    const dj = document.getElementById('edDescJ').value.trim();
+    if(nz) entries.simp_chinese[f.id] = nz;
+    if(dz) entries.simp_chinese[f.id+'_desc'] = dz;
+    if(ne) entries.english[f.id] = ne;
+    if(de) entries.english[f.id+'_desc'] = de;
+    if(nj) entries.japanese[f.id] = nj;
+    if(dj) entries.japanese[f.id+'_desc'] = dj;
+    const t = curTree();
+    const r = await fetch('/api/loc_save', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root: rootOf(t), entries})});
+    const j = await r.json();
+    status(j.ok ? '名称/描述已保存' : ('保存失败：' + j.msg), !j.ok);
+    if(j.ok) await loadData();
+  });
 }
 
 async function addTree(){
@@ -679,7 +729,7 @@ async function fetchRaw(kind, id){
 async function selectIdea(i){
   ideaSel = i;
   document.getElementById('ideaTitle').textContent = i.id + '   (' + i.file + ')';
-  fillSrcHint('ideaSrc', _lastRoot(), i.file, i.source);
+  fillSrcHint('ideaSrc', rootByName(i.source) || _lastRoot(), i.file, i.source);
   document.getElementById('ideaNameZ').value = i.name||'';
   document.getElementById('ideaDescZ').value = i.desc||'';
   document.getElementById('ideaPic').value = i.picture||'';
@@ -705,30 +755,72 @@ async function selectIdea(i){
   });
 }
 
+function addIdeaMod(){
+  const keyEl = document.getElementById('ideaModKey');
+  const valEl = document.getElementById('ideaModVal');
+  const pg = document.getElementById('ideaProps');
+  if(!keyEl || !valEl || !pg) return;
+  const k = (keyEl.value || '').trim();
+  const v = (valEl.value || '').trim();
+  if(!k){ status('请输入或选择 modifier 键名', true); keyEl.focus(); return; }
+  const existing = [...pg.querySelectorAll('input[data-prop]')].find(i=>i.dataset.prop === k);
+  if(existing){
+    if(v !== '') existing.value = v;
+    existing.focus();
+    keyEl.value = '';
+    valEl.value = '';
+    return;
+  }
+  if(!pg.querySelector('input[data-prop]')) pg.innerHTML = '';
+  const lab = document.createElement('label');
+  lab.textContent = k;
+  const inp = document.createElement('input');
+  inp.type = 'text';
+  inp.value = v;
+  inp.dataset.prop = k;
+  lab.appendChild(inp);
+  pg.appendChild(lab);
+  keyEl.value = '';
+  valEl.value = '';
+  if(v === '') inp.focus();
+  else keyEl.focus();
+}
+
 async function saveIdea(){
   if(!ideaSel){ status('先选择一个国家精神'); return; }
-  const props = {};
-  document.querySelectorAll('#ideaProps input[data-prop]').forEach(i=>{
-    const v = (i.value || '').trim();
-    if(v !== '') props[i.dataset.prop] = v;
+  const curId = ideaSel.id;
+  await withBusy('正在保存国家精神并刷新…', async ()=>{
+    const pendingKey = (document.getElementById('ideaModKey')?.value || '').trim();
+    const pendingVal = (document.getElementById('ideaModVal')?.value || '').trim();
+    if(pendingKey && pendingVal) addIdeaMod();
+    const props = {};
+    document.querySelectorAll('#ideaProps input[data-prop]').forEach(i=>{
+      const v = (i.value || '').trim();
+      if(v !== '') props[i.dataset.prop] = v;
+    });
+    const alw = (document.getElementById('ideaAllowed').value || '').trim();
+    const trg = (document.getElementById('ideaTrigger').value || '').trim();
+    if(alw) props.allowed_raw = alw;
+    if(trg) props.trigger_raw = trg;
+    const r = await fetch('/api/idea_save', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root: rootByName(ideaSel.source), file: ideaSel.file, id: ideaSel.id,
+        raw: document.getElementById('ideaRaw').value, props,
+        picture: document.getElementById('ideaPic').value.trim(),
+        name: document.getElementById('ideaNameZ').value,
+        desc: document.getElementById('ideaDescZ').value,
+        name_ja: document.getElementById('ideaNameJa').value,
+        desc_ja: document.getElementById('ideaDescJa').value,
+        name_en: document.getElementById('ideaNameEn').value,
+        desc_en: document.getElementById('ideaDescEn').value})});
+    const j = await r.json();
+    status(j.ok ? '国家精神已保存' : ('保存失败：' + j.msg), !j.ok);
+    if(j.ok){
+      await loadData();
+      renderIdeaList(document.getElementById('ideaSearch').value);
+      const hit = (DATA.ideas||[]).find(i=>i.id===curId);
+      if(hit) await selectIdea(hit);
+    }
   });
-  const alw = (document.getElementById('ideaAllowed').value || '').trim();
-  const trg = (document.getElementById('ideaTrigger').value || '').trim();
-  if(alw) props.allowed_raw = alw;
-  if(trg) props.trigger_raw = trg;
-  const r = await fetch('/api/idea_save', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root: rootByName(ideaSel.source), file: ideaSel.file, id: ideaSel.id,
-      raw: document.getElementById('ideaRaw').value, props,
-      picture: document.getElementById('ideaPic').value.trim(),
-      name: document.getElementById('ideaNameZ').value,
-      desc: document.getElementById('ideaDescZ').value,
-      name_ja: document.getElementById('ideaNameJa').value,
-      desc_ja: document.getElementById('ideaDescJa').value,
-      name_en: document.getElementById('ideaNameEn').value,
-      desc_en: document.getElementById('ideaDescEn').value})});
-  const j = await r.json();
-  status(j.ok ? '国家精神已保存' : ('保存失败：' + j.msg), !j.ok);
-  if(j.ok){ await loadData(); renderIdeaList(document.getElementById('ideaSearch').value); }
 }
 
 async function addIdea(){
@@ -736,32 +828,38 @@ async function addIdea(){
   if(!id) return;
   const root = _writableRoot();
   if(!root){ status('先加载或新建一个可写的模组', true); return; }
-  const r = await fetch('/api/add_idea', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root, id})});
-  const j = await r.json();
-  status(j.ok ? j.msg : ('新建失败：' + j.msg), !j.ok);
-  if(j.ok){
-    await loadData();
-    renderIdeaList('');
-    const hit = (DATA.ideas||[]).find(i=>i.id===id);
-    if(hit) selectIdea(hit);
-  }
+  await withBusy('正在新建国家精神并刷新…', async ()=>{
+    const r = await fetch('/api/add_idea', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root, id})});
+    const j = await r.json();
+    status(j.msg || '', !j.ok);
+    if(j.ok){
+      await loadData();
+      const sInp = document.getElementById('ideaSearch');
+      if(sInp) sInp.value = '';
+      renderIdeaList('');
+      const hit = (DATA.ideas||[]).find(i=>i.id===id);
+      if(hit) await selectIdea(hit);
+    }
+  });
 }
 
 async function deleteIdeaSel(){
   if(!ideaSel){ status('先选择一个国家精神'); return; }
   if(!confirm('确定删除国家精神 ' + ideaSel.id + ' ？（可用 .bak 恢复）')) return;
-  const r = await fetch('/api/delete_idea', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root: rootByName(ideaSel.source), file: ideaSel.file, id: ideaSel.id})});
-  const j = await r.json();
-  status(j.ok ? j.msg : ('删除失败：' + j.msg), !j.ok);
-  if(j.ok){
-    await loadData();
-    ideaSel = null;
-    document.getElementById('ideaRaw').value = '';
-    document.getElementById('ideaTitle').textContent = '';
-    renderIdeaList('');
-  }
+  await withBusy('正在删除国家精神并刷新…', async ()=>{
+    const r = await fetch('/api/delete_idea', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root: rootByName(ideaSel.source), file: ideaSel.file, id: ideaSel.id})});
+    const j = await r.json();
+    status(j.msg || '', !j.ok);
+    if(j.ok){
+      await loadData();
+      ideaSel = null;
+      document.getElementById('ideaRaw').value = '';
+      document.getElementById('ideaTitle').textContent = '';
+      renderIdeaList('');
+    }
+  });
 }
 
 function addFxLine(line){

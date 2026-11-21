@@ -8,21 +8,38 @@ async function addTech(){
   if(!folder) return;
   const root = _writableRoot();
   if(!root){ status('先加载或新建一个可写的模组', true); return; }
-  const r = await fetch('/api/tech_add', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root, id: tid, folder})});
-  const j = await r.json();
-  status(j.msg || '', !j.ok);
-  if(j.ok){ await loadData(); renderTechList(''); }
+  await withBusy('正在新建科技并刷新…', async ()=>{
+    const r = await fetch('/api/tech_add', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root, id: tid, folder})});
+    const j = await r.json();
+    status(j.msg || '', !j.ok);
+    if(j.ok){
+      await loadData();
+      const sInp = document.getElementById('techSearch');
+      if(sInp) sInp.value = '';
+      renderTechList('');
+      const hit = (DATA.techs||[]).find(x=>x.id===tid);
+      if(hit) await selectTech(hit);
+    }
+  });
 }
 
 async function deleteTechSel(){
   if(!techSel){ status('先选择一项科技'); return; }
   if(!confirm('确定删除科技 ' + techSel.id + ' ？（可用 .bak 恢复）')) return;
-  const r = await fetch('/api/tech_delete', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root: rootByName(techSel.source), file: techSel.file, id: techSel.id})});
-  const j = await r.json();
-  status(j.msg || '', !j.ok);
-  if(j.ok){ techSel = null; await loadData(); renderTechList(''); }
+  await withBusy('正在删除科技并刷新…', async ()=>{
+    const r = await fetch('/api/tech_delete', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root: rootByName(techSel.source), file: techSel.file, id: techSel.id})});
+    const j = await r.json();
+    status(j.msg || '', !j.ok);
+    if(j.ok){
+      techSel = null;
+      document.getElementById('techRaw').value = '';
+      document.getElementById('techTitle').textContent = '';
+      await loadData();
+      renderTechList('');
+    }
+  });
 }
 
 function openTech(){
@@ -136,7 +153,7 @@ function extractBlock(text, key){
 async function selectTech(t){
   techSel = t;
   document.getElementById('techTitle').textContent = t.id + '   (' + t.file + ')';
-  fillSrcHint('techSrc', _lastRoot(), t.file, t.source);
+  fillSrcHint('techSrc', (typeof rootByName === 'function' ? rootByName(t.source) : '') || _lastRoot(), t.file, t.source);
   document.getElementById('techNameZ').value = t.name || '';
   document.getElementById('techDescZ').value = '';
   document.getElementById('techNameJa').value = '';
@@ -155,26 +172,34 @@ async function selectTech(t){
 
 async function saveTech(){
   if(!techSel){ status('先选择一项科技'); return; }
-  const props = {
-    year: document.getElementById('techYear').value.trim(),
-    research_cost: document.getElementById('techCost').value.trim(),
-    path: document.getElementById('techPath').value.trim(),
-    prereq_raw: document.getElementById('techPrereq').value.trim(),
-    enable_equipments_raw: document.getElementById('techEnable').value.trim(),
-    sub_technologies_raw: document.getElementById('techSub').value.trim()
-  };
-  const r = await fetch('/api/tech_save', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root: rootByName(techSel.source), file: techSel.file, id: techSel.id,
-      raw: document.getElementById('techRaw').value, props,
-      name: document.getElementById('techNameZ').value,
-      desc: document.getElementById('techDescZ').value,
-      name_ja: document.getElementById('techNameJa').value,
-      desc_ja: document.getElementById('techDescJa').value,
-      name_en: document.getElementById('techNameEn').value,
-      desc_en: document.getElementById('techDescEn').value})});
-  const j = await r.json();
-  status(j.msg || '', !j.ok);
-  if(j.ok){ await loadData(); renderTechList(document.getElementById('techSearch').value); }
+  const curId = techSel.id;
+  await withBusy('正在保存科技并刷新…', async ()=>{
+    const props = {
+      year: document.getElementById('techYear').value.trim(),
+      research_cost: document.getElementById('techCost').value.trim(),
+      path: document.getElementById('techPath').value.trim(),
+      prereq_raw: document.getElementById('techPrereq').value.trim(),
+      enable_equipments_raw: document.getElementById('techEnable').value.trim(),
+      sub_technologies_raw: document.getElementById('techSub').value.trim()
+    };
+    const r = await fetch('/api/tech_save', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root: rootByName(techSel.source), file: techSel.file, id: techSel.id,
+        raw: document.getElementById('techRaw').value, props,
+        name: document.getElementById('techNameZ').value,
+        desc: document.getElementById('techDescZ').value,
+        name_ja: document.getElementById('techNameJa').value,
+        desc_ja: document.getElementById('techDescJa').value,
+        name_en: document.getElementById('techNameEn').value,
+        desc_en: document.getElementById('techDescEn').value})});
+    const j = await r.json();
+    status(j.msg || '', !j.ok);
+    if(j.ok){
+      await loadData();
+      renderTechList(document.getElementById('techSearch').value);
+      const hit = (DATA.techs||[]).find(x=>x.id===curId);
+      if(hit) await selectTech(hit);
+    }
+  });
 }
 
 

@@ -98,7 +98,8 @@ def _scan_mod_loc_files(top, lang_filter=""):
     if not os.path.isdir(loc_dir):
         return items
     line_re = re.compile(r'^\s*([A-Za-z0-9_.\-]+):\d*\s+"(.*)"\s*$')
-    for cur, _dirs, files in os.walk(loc_dir):
+    for cur, dirs, files in os.walk(loc_dir):
+        dirs[:] = sorted(dirs, key=lambda x: (x.lower() == "replace", x.lower()))
         for fn in sorted(files):
             if not fn.lower().endswith(".yml"):
                 continue

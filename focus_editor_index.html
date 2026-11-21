@@ -1375,6 +1375,7 @@ window.onerror = function(m, s, l, c){
           <button class="btn" id="ideaCopy">📋 复制</button>
           <button class="btn" id="ideaAdd">＋ 新建精神</button>
           <button class="btn" id="ideaDelete">🗑 删除精神</button>
+          <button class="btn primary" id="ideaSaveTop">保存国家精神</button>
           <button class="btn" id="ideaClose">关闭</button>
         </div>
       </div>
@@ -1384,28 +1385,45 @@ window.onerror = function(m, s, l, c){
           <div id="ideaList" style="overflow:auto;flex:1"></div>
         </div>
         <div style="flex:1;display:flex;flex-direction:column;min-height:0">
-          <div id="ideaTitle" style="color:#ffd479;margin-bottom:4px"></div>
-          <div class="src-hint" id="ideaSrc"></div>
-          <div class="k">中文名称 / 描述</div>
-          <input type="text" id="ideaNameZ">
-          <textarea id="ideaDescZ" style="height:50px"></textarea>
-          <div class="k">日本語 名前 / 説明</div>
-          <input type="text" id="ideaNameJa">
-          <textarea id="ideaDescJa" style="height:40px"></textarea>
-          <div class="k">English name / description</div>
-          <input type="text" id="ideaNameEn">
-          <textarea id="ideaDescEn" style="height:40px"></textarea>
-          <div class="k">图标 picture</div>
-          <div style="display:flex;gap:6px;margin-bottom:6px"><input type="text" id="ideaPic"><button class="btn" id="ideaPicBtn">选择图标</button></div>
-          <div class="k">修正项（modifier，留空不改）</div>
-          <div id="ideaProps" class="fxgrid" style="grid-template-columns:repeat(2,1fr)"></div>
-          <div class="k">allowed（原始块，可留空）</div>
-          <textarea id="ideaAllowed" style="height:50px"></textarea>
-          <div class="k">trigger（原始块，可留空）</div>
-          <textarea id="ideaTrigger" style="height:50px"></textarea>
-          <div class="k">脚本原文（保存会重写该块，注释会丢失）</div>
-          <textarea id="ideaRaw" style="flex:1;min-height:120px;font-family:Consolas,monospace"></textarea>
-          <div style="margin-top:6px"><button class="btn" id="ideaSave">保存国家精神</button></div>
+          <div style="flex:1;min-height:0;overflow-y:auto;padding-right:4px">
+            <div id="ideaTitle" style="color:#ffd479;margin-bottom:4px"></div>
+            <div class="src-hint" id="ideaSrc"></div>
+            <div class="k">中文名称 / 描述</div>
+            <input type="text" id="ideaNameZ" placeholder="中文名称（游戏中显示的精神名称）">
+            <textarea id="ideaDescZ" style="height:50px" placeholder="中文描述（游戏内悬停说明，不要把脚本效果填在这里）"></textarea>
+            <div class="k">日本語 名前 / 説明</div>
+            <input type="text" id="ideaNameJa">
+            <textarea id="ideaDescJa" style="height:40px"></textarea>
+            <div class="k">English name / description</div>
+            <input type="text" id="ideaNameEn">
+            <textarea id="ideaDescEn" style="height:40px"></textarea>
+            <div class="k">图标 picture</div>
+            <div style="display:flex;gap:6px;margin-bottom:6px"><input type="text" id="ideaPic"><button class="btn" id="ideaPicBtn">选择图标</button></div>
+            <div class="k">修正项（modifier，留空不改）</div>
+            <div id="ideaProps" class="fxgrid" style="grid-template-columns:repeat(2,1fr)"></div>
+            <div style="display:flex;gap:6px;align-items:center;margin:6px 0 8px">
+              <input type="text" id="ideaModKey" list="ideaModPresets" placeholder="modifier 键名（如 political_power_gain）" style="flex:2;min-width:0;margin:0">
+              <input type="text" id="ideaModVal" placeholder="数值（如 0.25）" style="flex:1;min-width:0;margin:0">
+              <button class="btn" id="ideaModAdd" type="button" style="flex-shrink:0">＋ 添加修正项</button>
+            </div>
+            <datalist id="ideaModPresets">
+              <option value="political_power_gain"></option>
+              <option value="stability_factor"></option>
+              <option value="war_support_factor"></option>
+              <option value="consumer_goods_factor"></option>
+              <option value="industrial_capacity_factory"></option>
+              <option value="production_speed_buildings_factor"></option>
+              <option value="research_speed_factor"></option>
+              <option value="army_attack_factor"></option>
+            </datalist>
+            <div class="k">allowed（原始块，可留空）</div>
+            <textarea id="ideaAllowed" style="height:50px"></textarea>
+            <div class="k">trigger（原始块，可留空）</div>
+            <textarea id="ideaTrigger" style="height:50px"></textarea>
+            <div class="k">脚本原文（保存会重写该块，注释会丢失）</div>
+            <textarea id="ideaRaw" style="height:140px;min-height:110px;flex-shrink:0;font-family:Consolas,monospace"></textarea>
+          </div>
+          <div style="margin-top:6px;padding-top:6px;border-top:1px solid #2f3a3c;flex-shrink:0"><button class="btn primary" id="ideaSave">保存国家精神</button></div>
         </div>
       </div>
     </div>
@@ -1464,46 +1482,48 @@ window.onerror = function(m, s, l, c){
   </div>
 </div>
 <div id="equipModal" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1020px,calc(100% - 70px));height:min(720px,calc(100% - 80px));background:#171b1d;border:1px solid #3a4346;border-radius:14px;z-index:60;padding:12px;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.55)">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="color:#c2ae82;font-size:14px">装备编辑器</b><div style="display:flex;gap:6px"><button class="btn" id="equipDesigner">🛠 设计器</button><button class="btn" id="equipRef">🔗 引用</button><button class="btn" id="equipCopy">📋 复制</button><button class="btn" id="equipClose">关闭</button></div></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="color:#c2ae82;font-size:14px">装备编辑器</b><div style="display:flex;gap:6px"><button class="btn" id="equipDesigner">🛠 设计器</button><button class="btn" id="equipRef">🔗 引用</button><button class="btn" id="equipCopy">📋 复制</button><button class="btn primary" id="equipSaveTop">保存装备</button><button class="btn" id="equipClose">关闭</button></div></div>
   <div style="display:flex;gap:10px;flex:1;min-height:0">
     <div style="width:300px;display:flex;flex-direction:column;min-height:0">
       <input id="equipSearch" placeholder="搜索装备 id / 名称" style="margin:0 0 6px">
       <div id="equipList" style="overflow:auto;flex:1;background:#141719;border:1px solid #2f3a3c;border-radius:8px;padding:4px"></div>
     </div>
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
-      <div id="equipTitle" style="color:#ffd479;margin-bottom:4px"></div>
-      <div class="src-hint" id="equipSrc"></div>
-      <div class="k">中文名称 / 描述</div>
-      <input type="text" id="equipNameZ">
-      <textarea id="equipDescZ" style="height:44px"></textarea>
-      <div class="k">日本語 名前 / 説明</div>
-      <input type="text" id="equipNameJa">
-      <textarea id="equipDescJa" style="height:40px"></textarea>
-      <div class="k">English name / description</div>
-      <input type="text" id="equipNameEn">
-      <textarea id="equipDescEn" style="height:40px"></textarea>
-      <div class="k">图标 picture</div>
-      <div style="display:flex;gap:6px;margin-bottom:6px"><input type="text" id="equipPic"><button class="btn" id="equipPicBtn">选择图标</button></div>
-      <div class="k">设计器字段（留空不改）</div>
-      <div style="display:flex;gap:6px;margin-bottom:6px">
-        <input type="text" id="equipArch" placeholder="archetype">
-        <input type="text" id="equipIsArch" placeholder="is_archetype">
-        <input type="text" id="equipProduced" placeholder="can_be_produced">
+      <div style="flex:1;min-height:0;overflow-y:auto;padding-right:4px">
+        <div id="equipTitle" style="color:#ffd479;margin-bottom:4px"></div>
+        <div class="src-hint" id="equipSrc"></div>
+        <div class="k">中文名称 / 描述</div>
+        <input type="text" id="equipNameZ" placeholder="中文名称（游戏中显示的装备名称）">
+        <textarea id="equipDescZ" style="height:44px" placeholder="中文描述（游戏内悬停说明，不要把脚本属性填在这里）"></textarea>
+        <div class="k">日本語 名前 / 説明</div>
+        <input type="text" id="equipNameJa">
+        <textarea id="equipDescJa" style="height:40px"></textarea>
+        <div class="k">English name / description</div>
+        <input type="text" id="equipNameEn">
+        <textarea id="equipDescEn" style="height:40px"></textarea>
+        <div class="k">图标 picture</div>
+        <div style="display:flex;gap:6px;margin-bottom:6px"><input type="text" id="equipPic"><button class="btn" id="equipPicBtn">选择图标</button></div>
+        <div class="k">设计器字段（留空不改）</div>
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <input type="text" id="equipArch" placeholder="archetype">
+          <input type="text" id="equipIsArch" placeholder="is_archetype">
+          <input type="text" id="equipProduced" placeholder="can_be_produced">
+        </div>
+        <div class="k">upgrades（原始块，可留空）</div>
+        <textarea id="equipUpgrades" style="height:50px"></textarea>
+        <div class="k">module_slots（原始块，可留空）</div>
+        <textarea id="equipSlots" style="height:70px"></textarea>
+        <div class="k">属性（留空 = 不改）</div>
+        <div id="equipProps" class="fxgrid" style="grid-template-columns:repeat(3,1fr)"></div>
+        <div class="k">脚本原文（保存会重写该块）</div>
+        <textarea id="equipRaw" style="height:140px;min-height:110px;flex-shrink:0;font-family:Consolas,monospace"></textarea>
       </div>
-      <div class="k">upgrades（原始块，可留空）</div>
-      <textarea id="equipUpgrades" style="height:50px"></textarea>
-      <div class="k">module_slots（原始块，可留空）</div>
-      <textarea id="equipSlots" style="height:70px"></textarea>
-      <div class="k">属性（留空 = 不改）</div>
-      <div id="equipProps" class="fxgrid" style="grid-template-columns:repeat(3,1fr)"></div>
-      <div class="k">脚本原文（保存会重写该块）</div>
-      <textarea id="equipRaw" style="flex:1;min-height:140px;font-family:Consolas,monospace"></textarea>
-      <div style="margin-top:6px"><button class="btn" id="equipSave">保存装备</button><button class="btn" id="equipAdd">＋ 新建</button><button class="btn" id="equipDelete">🗑 删除</button></div>
+      <div style="margin-top:6px;padding-top:6px;border-top:1px solid #2f3a3c;flex-shrink:0;display:flex;gap:6px"><button class="btn primary" id="equipSave">保存装备</button><button class="btn" id="equipAdd">＋ 新建</button><button class="btn" id="equipDelete">🗑 删除</button></div>
     </div>
   </div>
 </div>
 <div id="techModal" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1020px,calc(100% - 70px));height:min(720px,calc(100% - 80px));background:#171b1d;border:1px solid #3a4346;border-radius:14px;z-index:60;padding:12px;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.55)">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="color:#c2ae82;font-size:14px">科技编辑器</b><div style="display:flex;gap:6px"><button class="btn" id="techRef">🔗 引用</button><button class="btn" id="techCopy">📋 复制</button><button class="btn" id="techAdd">＋ 新建</button><button class="btn" id="techDelete">🗑 删除</button><button class="btn" id="techClose">关闭</button></div></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="color:#c2ae82;font-size:14px">科技编辑器</b><div style="display:flex;gap:6px"><button class="btn" id="techRef">🔗 引用</button><button class="btn" id="techCopy">📋 复制</button><button class="btn" id="techAdd">＋ 新建</button><button class="btn" id="techDelete">🗑 删除</button><button class="btn primary" id="techSaveTop">保存科技</button><button class="btn" id="techClose">关闭</button></div></div>
   <div style="display:flex;gap:6px;margin-bottom:6px">
     <button class="btn on" id="techTabEdit">编辑</button>
     <button class="btn" id="techTabTree">科技树</button>
@@ -1514,29 +1534,31 @@ window.onerror = function(m, s, l, c){
       <div id="techList" style="overflow:auto;flex:1;background:#141719;border:1px solid #2f3a3c;border-radius:8px;padding:4px"></div>
     </div>
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
-      <div id="techTitle" style="color:#ffd479;margin-bottom:4px"></div>
-      <div class="src-hint" id="techSrc"></div>
-      <div class="k">中文名称 / 描述</div>
-      <input type="text" id="techNameZ"><textarea id="techDescZ" style="height:44px"></textarea>
-      <div class="k">日本語 名前 / 説明</div>
-      <input type="text" id="techNameJa"><textarea id="techDescJa" style="height:40px"></textarea>
-      <div class="k">English name / description</div>
-      <input type="text" id="techNameEn"><textarea id="techDescEn" style="height:40px"></textarea>
-      <div class="k">年份 / 科研花费 / 科技树路径</div>
-      <div style="display:flex;gap:6px">
-        <input type="text" id="techYear" placeholder="year" style="width:90px">
-        <input type="text" id="techCost" placeholder="research_cost" style="width:120px">
-        <input type="text" id="techPath" placeholder="path / folder" style="flex:1">
+      <div style="flex:1;min-height:0;overflow-y:auto;padding-right:4px">
+        <div id="techTitle" style="color:#ffd479;margin-bottom:4px"></div>
+        <div class="src-hint" id="techSrc"></div>
+        <div class="k">中文名称 / 描述</div>
+        <input type="text" id="techNameZ" placeholder="中文名称（游戏中显示的科技名称）"><textarea id="techDescZ" style="height:44px" placeholder="中文描述（游戏内悬停说明，不要把脚本效果填在这里）"></textarea>
+        <div class="k">日本語 名前 / 説明</div>
+        <input type="text" id="techNameJa"><textarea id="techDescJa" style="height:40px"></textarea>
+        <div class="k">English name / description</div>
+        <input type="text" id="techNameEn"><textarea id="techDescEn" style="height:40px"></textarea>
+        <div class="k">年份 / 科研花费 / 科技树路径</div>
+        <div style="display:flex;gap:6px">
+          <input type="text" id="techYear" placeholder="year" style="width:90px">
+          <input type="text" id="techCost" placeholder="research_cost" style="width:120px">
+          <input type="text" id="techPath" placeholder="path / folder" style="flex:1">
+        </div>
+        <div class="k">前置（原始块，如 prerequisite = { ... }）</div>
+        <textarea id="techPrereq" style="height:70px"></textarea>
+        <div class="k">enable_equipments（原始块，可留空）</div>
+        <textarea id="techEnable" style="height:50px"></textarea>
+        <div class="k">sub_technologies（原始块，可留空）</div>
+        <textarea id="techSub" style="height:50px"></textarea>
+        <div class="k">脚本原文（保存会重写该块）</div>
+        <textarea id="techRaw" style="height:140px;min-height:110px;flex-shrink:0;font-family:Consolas,monospace"></textarea>
       </div>
-      <div class="k">前置（原始块，如 prerequisite = { ... }）</div>
-      <textarea id="techPrereq" style="height:70px"></textarea>
-      <div class="k">enable_equipments（原始块，可留空）</div>
-      <textarea id="techEnable" style="height:50px"></textarea>
-      <div class="k">sub_technologies（原始块，可留空）</div>
-      <textarea id="techSub" style="height:50px"></textarea>
-      <div class="k">脚本原文（保存会重写该块）</div>
-      <textarea id="techRaw" style="flex:1;min-height:140px;font-family:Consolas,monospace"></textarea>
-      <div style="margin-top:6px"><button class="btn" id="techSave">保存科技</button></div>
+      <div style="margin-top:6px;padding-top:6px;border-top:1px solid #2f3a3c;flex-shrink:0"><button class="btn primary" id="techSave">保存科技</button></div>
     </div>
   </div>
   <div id="techTreePane" style="display:none;flex-direction:column;flex:1;min-height:0;position:relative">
@@ -1553,33 +1575,35 @@ window.onerror = function(m, s, l, c){
   </div>
 </div>
 <div id="eventModal" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1020px,calc(100% - 70px));height:min(720px,calc(100% - 80px));background:#171b1d;border:1px solid #3a4346;border-radius:14px;z-index:60;padding:12px;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.55)">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="color:#c2ae82;font-size:14px">事件编辑器</b><div style="display:flex;gap:6px"><button class="btn" id="eventRef">🔗 引用</button><button class="btn" id="eventCopy">📋 复制</button><button class="btn" id="eventAdd">＋ 新建</button><button class="btn" id="eventDelete">🗑 删除</button><button class="btn" id="eventClose">关闭</button></div></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="color:#c2ae82;font-size:14px">事件编辑器</b><div style="display:flex;gap:6px"><button class="btn" id="eventRef">🔗 引用</button><button class="btn" id="eventCopy">📋 复制</button><button class="btn" id="eventAdd">＋ 新建</button><button class="btn" id="eventDelete">🗑 删除</button><button class="btn primary" id="eventSaveTop">保存事件</button><button class="btn" id="eventClose">关闭</button></div></div>
   <div style="display:flex;gap:10px;flex:1;min-height:0">
     <div style="width:320px;display:flex;flex-direction:column;min-height:0">
       <input id="eventSearch" placeholder="搜索事件 id / 标题" style="margin:0 0 6px">
       <div id="eventList" style="overflow:auto;flex:1;background:#141719;border:1px solid #2f3a3c;border-radius:8px;padding:4px"></div>
     </div>
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
-      <div id="eventTitle" style="color:#ffd479;margin-bottom:4px"></div>
-      <div class="src-hint" id="eventSrc"></div>
-      <div class="k">中文标题 / 描述</div>
-      <input type="text" id="eventNameZ"><textarea id="eventDescZ" style="height:44px"></textarea>
-      <div class="k">日本語 タイトル / 説明</div>
-      <input type="text" id="eventNameJa"><textarea id="eventDescJa" style="height:40px"></textarea>
-      <div class="k">English name / description</div>
-      <input type="text" id="eventNameEn"><textarea id="eventDescEn" style="height:40px"></textarea>
-      <div class="k">事件图片 picture</div>
-      <input type="text" id="eventPic">
-      <div class="k">选项（名称 key / 选项文本）</div>
-      <div id="eventOptions"></div>
-      <div style="margin:2px 0 8px"><button class="btn" id="eventAddOption">＋ 添加选项</button></div>
-      <div class="k">trigger（原始块，可留空）</div>
-      <textarea id="eventTrigger" style="height:60px"></textarea>
-      <div class="k">immediate（原始块，可留空）</div>
-      <textarea id="eventImmediate" style="height:60px"></textarea>
-      <div class="k">脚本原文（保存会重写该事件块）</div>
-      <textarea id="eventRaw" style="flex:1;min-height:140px;font-family:Consolas,monospace"></textarea>
-      <div style="margin-top:6px"><button class="btn" id="eventSave">保存事件</button></div>
+      <div style="flex:1;min-height:0;overflow-y:auto;padding-right:4px">
+        <div id="eventTitle" style="color:#ffd479;margin-bottom:4px"></div>
+        <div class="src-hint" id="eventSrc"></div>
+        <div class="k">中文标题 / 描述</div>
+        <input type="text" id="eventNameZ" placeholder="中文标题（事件弹窗顶部标题）"><textarea id="eventDescZ" style="height:44px" placeholder="中文描述（事件正文文本，不要把 trigger/immediate 脚本填在这里）"></textarea>
+        <div class="k">日本語 タイトル / 説明</div>
+        <input type="text" id="eventNameJa"><textarea id="eventDescJa" style="height:40px"></textarea>
+        <div class="k">English name / description</div>
+        <input type="text" id="eventNameEn"><textarea id="eventDescEn" style="height:40px"></textarea>
+        <div class="k">事件图片 picture</div>
+        <input type="text" id="eventPic">
+        <div class="k">选项（名称 key / 选项文本）</div>
+        <div id="eventOptions"></div>
+        <div style="margin:2px 0 8px"><button class="btn" id="eventAddOption">＋ 添加选项</button></div>
+        <div class="k">trigger（原始块，可留空）</div>
+        <textarea id="eventTrigger" style="height:60px"></textarea>
+        <div class="k">immediate（原始块，可留空）</div>
+        <textarea id="eventImmediate" style="height:60px"></textarea>
+        <div class="k">脚本原文（保存会重写该事件块）</div>
+        <textarea id="eventRaw" style="height:140px;min-height:110px;flex-shrink:0;font-family:Consolas,monospace"></textarea>
+      </div>
+      <div style="margin-top:6px;padding-top:6px;border-top:1px solid #2f3a3c;flex-shrink:0"><button class="btn primary" id="eventSave">保存事件</button></div>
     </div>
   </div>
 </div>

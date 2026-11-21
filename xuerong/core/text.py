@@ -240,19 +240,40 @@ def set_raw_block(block, key, content):
 
 # ---------------- 国家精神 ----------------
 def apply_modifier_props(raw, props):
-    if not props:
+    mod_props = {
+        k: v for k, v in (props or {}).items()
+        if k and not str(k).endswith("_raw") and str(v).strip() != ""
+    }
+    if not mod_props:
         return raw
-    m = re.search(r'(?m)^[ \t]*modifier\s*=\s*\{', raw)
+    m = re.search(r'(?m)^([ \t]*)modifier\s*=\s*\{', raw)
     if m:
+        lead = m.group(1) or ""
         b = raw.find('{', m.start())
         e = brace_match(raw, b)
         inner = raw[b + 1:e - 1]
-        for k, v in props.items():
-            inner = set_scalar(inner, k, v)
-        body = "\n".join("\t" + ln for ln in inner.strip("\n").splitlines())
-        return raw[:m.start()] + "modifier = {\n" + body + "\n\t\t}" + raw[e:]
-    lines = ["modifier = {"]
-    for k, v in props.items():
-        lines.append("\t%s = %s" % (k, v))
-    lines.append("}")
-    return raw.rstrip() + "\n\t\t" + "\n\t\t".join(lines) + "\n"
+        lines = [ln.strip() for ln in inner.splitlines() if ln.strip()]
+        for k, v in mod_props.items():
+            pat = re.compile(r'^%s\s*=\s*[^\s#]+$' % re.escape(k))
+            replaced = False
+            for idx, ln in enumerate(lines):
+                if pat.match(ln):
+                    lines[idx] = "%s = %s" % (k, v)
+                    replaced = True
+                    break
+            if not replaced:
+                lines.append("%s = %s" % (k, v))
+        body = "\n".join((lead + "\t" + ln) for ln in lines)
+        new_block = "%smodifier = {\n%s\n%s}" % (lead, body, lead) if body else "%smodifier = {\n%s}" % (lead, lead)
+        return raw[:m.start()] + new_block + raw[e:]
+
+    # 块内原本没有 modifier = { ... } 时，插在最外层结尾 '}' 之前保持括号平衡
+    block_lines = ["\tmodifier = {"]
+    for k, v in mod_props.items():
+        block_lines.append("\t\t%s = %s" % (k, v))
+    block_lines.append("\t}")
+    block_txt = "\n".join(block_lines)
+    last_rb = raw.rfind("}")
+    if last_rb != -1:
+        return raw[:last_rb].rstrip() + "\n" + block_txt + "\n" + raw[last_rb:]
+    return raw.rstrip() + "\n" + block_txt + "\n"

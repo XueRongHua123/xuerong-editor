@@ -661,6 +661,14 @@ document.getElementById('ideaSearch').oninput = (e)=>renderIdeaList(e.target.val
 
 document.getElementById('ideaSave').onclick = saveIdea;
 
+document.getElementById('ideaSaveTop').onclick = saveIdea;
+
+document.getElementById('ideaModAdd').onclick = addIdeaMod;
+
+document.getElementById('ideaModVal').addEventListener('keydown', e=>{
+  if(e.key === 'Enter'){ e.preventDefault(); addIdeaMod(); }
+});
+
 document.getElementById('ideaAdd').onclick = addIdea;
 
 document.getElementById('ideaDelete').onclick = deleteIdeaSel;
@@ -673,6 +681,8 @@ document.getElementById('equipSearch').addEventListener('input', e=>renderEquipL
 
 document.getElementById('equipSave').onclick = saveEquip;
 
+document.getElementById('equipSaveTop').onclick = saveEquip;
+
 document.getElementById('techEntry').onclick = openTech;
 
 document.getElementById('techClose').onclick = ()=>{ document.getElementById('techModal').style.display = 'none'; };
@@ -683,6 +693,8 @@ document.getElementById('techSearch').addEventListener('input', e=>{
 });
 
 document.getElementById('techSave').onclick = saveTech;
+
+document.getElementById('techSaveTop').onclick = saveTech;
 
 document.getElementById('techAdd').onclick = addTech;
 
@@ -731,6 +743,8 @@ document.getElementById('eventClose').onclick = ()=>{ document.getElementById('e
 document.getElementById('eventSearch').addEventListener('input', e=>renderEventList(e.target.value.trim().toLowerCase()));
 
 document.getElementById('eventSave').onclick = saveEvent;
+
+document.getElementById('eventSaveTop').onclick = saveEvent;
 
 document.getElementById('eventAdd').onclick = addEvent;
 

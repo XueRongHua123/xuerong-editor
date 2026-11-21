@@ -315,8 +315,9 @@ def load_game_loc():
         if not os.path.isdir(d):
             continue
         line_re = re.compile(r'^\s*([A-Za-z0-9_.\-]+):\d*\s+"(.*)"\s*$')
-        for dirpath, _, files in os.walk(d):
-            for fn in files:
+        for dirpath, dirs, files in os.walk(d):
+            dirs[:] = sorted(dirs, key=lambda x: (x.lower() == "replace", x.lower()))
+            for fn in sorted(files):
                 if not fn.endswith(".yml"):
                     continue
                 try:
@@ -437,8 +438,9 @@ def load_mod(root):
             d = os.path.join(ab, "localisation", lang)
             if not os.path.isdir(d):
                 continue
-            for dirpath, _, files in os.walk(d):
-                for fn in files:
+            for dirpath, dirs, files in os.walk(d):
+                dirs[:] = sorted(dirs, key=lambda x: (x.lower() == "replace", x.lower()))
+                for fn in sorted(files):
                     if not fn.endswith(".yml"):
                         continue
                     for ln in io.open(os.path.join(dirpath, fn), encoding="utf-8-sig", errors="replace").read().splitlines():
@@ -499,8 +501,29 @@ def analyze(tree):
     return {"edges": edges, "missing": missing, "cycles": cycles, "overlaps": overlaps}
 
 
+def _normalize_roots_order():
+    """保证原版在最底层、只读父层居中、可写顶层在最后（避免后加载原版反盖 mod）。"""
+    if not ROOTS:
+        return
+    ab_game = os.path.normcase(os.path.abspath(GAME)) if GAME else ""
+    seen = set()
+    items = []
+    for r in ROOTS:
+        if not r:
+            continue
+        k = os.path.normcase(os.path.abspath(r))
+        if k in seen:
+            continue
+        seen.add(k)
+        tier = 0 if (ab_game and k == ab_game) else (1 if _is_readonly_root(r) else 2)
+        items.append((tier, r))
+    items.sort(key=lambda x: x[0])
+    ROOTS[:] = [x[1] for x in items]
+
+
 def reload_data():
     """重新读取所有 mod，保证保存后界面数据是最新的"""
+    _normalize_roots_order()
     # 规则 3：清空用 clear()，不要重新赋值。重新赋值只改本模块的名字，
     # 搬迁到 model 的模块会继续看着旧对象（P0-3 障碍 4）。
     _state.trees().clear()
@@ -7635,7 +7658,20 @@ def entry_source(root, file, layer=None):
     rel = (file or "").replace("\\", "/").lstrip("/")
     if not rel:
         return {"ok": False, "msg": "参数不完整：缺少 file"}
-    layers = [x for x in (mod_layers(root) or []) if x]
+    layers, _seen_layers = [], set()
+    for r in (list(ROOTS or []) + ([root] if root else [])):
+        for x in (mod_layers(r) or ([r] if r else [])):
+            if not x:
+                continue
+            ab = os.path.abspath(x)
+            if ab not in _seen_layers:
+                _seen_layers.add(ab)
+                layers.append(x)
+    _ab_game = os.path.abspath(GAME) if GAME else ""
+    if _ab_game:
+        _game_items = [x for x in layers if os.path.abspath(x) == _ab_game]
+        if _game_items:
+            layers = _game_items + [x for x in layers if os.path.abspath(x) != _ab_game]
 
     def _hit(base):
         ro = _readonly_flag(base)
@@ -7663,16 +7699,20 @@ def _writable_top(after=None):
     """最顶层可写的 mod 目录（不是原版、不是创意工坊）。
 
     给了 after 就从它所在位置往上找：改 A 的内容应该落到「A 之后加载的
-    第一个可写层」，而不是全局最后加载的那个。A 不在链上（比如创意工坊
-    目录只是被依赖，没进 ROOTS）时退回全局查找。
+    第一个可写层」，而不是全局最后加载的那个。若 after 不在链上或末尾无后续层，
+    则退回全局查找最顶层可写 mod。
     """
     try:
         seq = list(ROOTS)
         if after:
-            aab = os.path.abspath(after)
+            aab = os.path.normcase(os.path.abspath(after))
             for i, r in enumerate(seq):
-                if os.path.abspath(r) == aab:
-                    seq = seq[i + 1:]
+                if os.path.normcase(os.path.abspath(r)) == aab:
+                    sub_seq = seq[i + 1:]
+                    for sr in reversed(sub_seq):
+                        srab = os.path.abspath(sr)
+                        if srab and not _is_readonly_root(srab):
+                            return srab
                     break
         for r in reversed(seq):
             rab = os.path.abspath(r)
@@ -7703,9 +7743,17 @@ def _adopt_file(dst_root, src_root, rel):
 def load_vanilla():
     if not os.path.isdir(GAME):
         return False, "没有找到游戏目录"
-    if GAME not in ROOTS:
-        ROOTS.append(GAME)
-    n = load_mod(GAME)
+    ab_game = os.path.normcase(os.path.abspath(GAME))
+    if not any(os.path.normcase(os.path.abspath(r)) == ab_game for r in ROOTS if r):
+        ROOTS.insert(0, GAME)
+    _normalize_roots_order()
+    _LAYERS_CACHE.clear()
+    invalidate_chain_cache()
+    invalidate_object_cache()
+    if len(ROOTS) > 1:
+        n = reload_data()
+    else:
+        n = load_mod(GAME)
     _lp("构建图标索引", "", 98)
     try:
         build_icons(ROOTS, GAME)
