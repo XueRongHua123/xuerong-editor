@@ -231,33 +231,38 @@ async function openReport(){
 }
 
 async function openIconPicker(source){
-  iconSource = source || 'focus';
+  iconSource = (typeof source === 'string' && source) ? source : 'focus';
   document.getElementById('iconPick').classList.add('show');
   document.getElementById('ipSearch').value = '';
-  const kind = iconSource === 'equip' ? 'equip' : 'focus';
+  const kind = (iconSource === 'equip' || iconSource === 'idea') ? iconSource : 'focus';
   if(!iconCache[kind]){
     try {
       const r = await fetch('/api/icons?kind=' + kind);
       iconCache[kind] = await r.json();
     } catch(e){ iconCache[kind] = {list: [], map: {}}; }
   }
-  renderIcons('');
+  const curQ = (document.getElementById('ipSearch')?.value || '').trim().toLowerCase();
+  renderIcons(curQ);
 }
 
 function renderIcons(q){
   const g = document.getElementById('ipGrid'); if(!g) return;
   q = (q || '').toLowerCase();
-  const kind = iconSource === 'equip' ? 'equip' : 'focus';
+  const kind = (iconSource === 'equip' || iconSource === 'idea') ? iconSource : 'focus';
   const c = iconCache[kind] || {list: [], map: {}};
   const map = c.map || {};
-  const list = (c.list || []).filter(n=>!q || n.toLowerCase().includes(q)).slice(0, 500);
+  const allMatches = (c.list || []).filter(n=>!q || n.toLowerCase().includes(q));
+  const limit = q ? 240 : 120;
+  const list = allMatches.slice(0, limit);
   g.innerHTML = '';
   list.forEach(gfx=>{
     const d = document.createElement('div');
     d.className = 'ip-item';
     const m = map[gfx] || '';
     const src = m.startsWith('/') ? m : ('/icons/' + encodeURIComponent(m));
-    d.innerHTML = '<img src="' + src + '" alt=""><span>' + escapeHtml(gfx) + '</span>';
+    d.innerHTML = '<img src="' + src + '" loading="lazy" alt=""><span>' + escapeHtml(gfx) + '</span>';
+    const img = d.querySelector('img');
+    if(img) img.onerror = ()=>{ d.style.display = 'none'; };
     d.onclick = ()=>{
       if(batchIconMode){
         batchIconMode = false;
@@ -267,7 +272,11 @@ function renderIcons(q){
       }
       if(iconPickTarget){
         const t = document.getElementById(iconPickTarget);
-        if(t) t.value = gfx;
+        if(t){
+          t.value = (iconSource === 'idea' && iconPickTarget === 'ideaPic')
+            ? gfx.replace(/^GFX_idea_/, '')
+            : gfx;
+        }
         iconPickTarget = null;
         document.getElementById('iconPick').classList.remove('show');
         return;

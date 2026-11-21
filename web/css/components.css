@@ -3,7 +3,7 @@
    规则顺序与原单文件一致，未做任何合并或重排。 */
   #side summary{cursor:pointer;font-size:13px;color:var(--accent);margin:8px 0 6px;user-select:none;outline:none}
   #side summary:hover{color:var(--accent)}
-  .mascot-float{position:fixed;left:14px;bottom:14px;width:300px;z-index:45;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px;cursor:move;box-shadow:0 8px 28px rgba(0,0,0,.45);user-select:none;animation:mfIn .5s ease-out}
+  .mascot-float{position:fixed;right:calc(var(--pane-r,356px) + 14px);left:auto;bottom:14px;width:236px;z-index:45;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px;cursor:move;box-shadow:0 8px 28px rgba(0,0,0,.45);user-select:none;animation:mfIn .5s ease-out}
   @keyframes mfIn{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
   .mascot-float.large{width:480px}
   .mf-bubble{position:absolute;left:10px;right:10px;bottom:calc(100% - 4px);background:var(--panel2);color:var(--text);border:1px solid var(--line2);border-radius:10px;padding:6px 9px;font-size:12px;line-height:1.45;box-shadow:0 6px 18px rgba(0,0,0,.4);opacity:0;transform:translateY(6px) scale(.96);pointer-events:none;transition:opacity .25s,transform .25s}

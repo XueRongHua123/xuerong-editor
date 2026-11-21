@@ -326,9 +326,17 @@ def r_api_icons(h, path_only):
         h._send({"list": sorted(state.tech_icons().keys()), "map": state.tech_icons()})
     elif kind == "equip":
         h._send({"list": sorted(state.equip_icons().keys()), "map": state.equip_icons()})
+    elif kind == "idea":
+        lst = [g for g in sorted((state.sprite_map() or {}).keys())
+               if g.startswith("GFX_idea_") and not g.endswith("_shine")]
+        if not lst:
+            lst = [g for g in sorted(state.icons().keys())
+                   if g.startswith("GFX_idea_") and not g.endswith("_shine")]
+        h._send({"list": lst, "map": {g: "/api/icon?gfx=" + g for g in lst}})
     else:
-        h._send({"list": LG.all_goal_icons() or sorted(state.icons().keys()),
-                    "map": {g: "/api/icon?gfx=" + g for g in (LG.all_goal_icons() or sorted(state.icons().keys()))}})
+        raw_lst = LG.all_goal_icons() or sorted(state.icons().keys())
+        lst = [g for g in raw_lst if not g.endswith("_shine")]
+        h._send({"list": lst, "map": {g: "/api/icon?gfx=" + g for g in lst}})
 
 
 @prefix("/icons/")

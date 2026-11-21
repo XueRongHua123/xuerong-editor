@@ -781,6 +781,8 @@ document.getElementById('eventAddOption').onclick = ()=>{
   if(idx < 0) return;
   el.value = raw.slice(0, idx) + '\n\toption = {\n\t\tname = ' + key + '\n\t}\n' + raw.slice(idx);
   renderEventOptions(el.value);
+  const optInputs = document.querySelectorAll('#eventOptions input[data-key]');
+  if(optInputs.length) optInputs[optInputs.length - 1].focus();
 };
 
 document.getElementById('sharedAddBtn').onclick = addShared;
@@ -846,7 +848,7 @@ document.getElementById('unloadModBtn').onclick = unloadMod;
 
 document.getElementById('vanillaBtn').onclick = loadVanillaWithProgress;
 
-document.getElementById('ideaPicBtn').onclick = ()=>{ iconPickTarget = 'ideaPic'; openIconPicker(); };
+document.getElementById('ideaPicBtn').onclick = ()=>{ iconPickTarget = 'ideaPic'; openIconPicker('idea'); };
 
 document.getElementById('equipPicBtn').onclick = ()=>{ iconPickTarget = 'equipPic'; openIconPicker('equip'); };
 

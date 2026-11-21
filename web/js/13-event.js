@@ -82,8 +82,10 @@ function renderEventOptions(raw, optLoc){
   });
 }
 
+let _evSelSeq = 0;
 async function selectEvent(e){
   if(!e) return;
+  const seq = ++_evSelSeq;
   eventSel = e;
   document.querySelectorAll('#eventList .lr').forEach(el=>{
     el.classList.toggle('on', el.dataset.eventId === e.id);
@@ -96,21 +98,28 @@ async function selectEvent(e){
   document.getElementById('eventDescJa').value = '';
   document.getElementById('eventNameEn').value = '';
   document.getElementById('eventDescEn').value = '';
+  const snap = _snapFieldValues([
+    'eventNameZ', 'eventDescZ', 'eventNameJa', 'eventDescJa',
+    'eventNameEn', 'eventDescEn', 'eventRaw', 'eventTrigger',
+    'eventImmediate', 'eventPic'
+  ]);
   const detail = await fetchRawDetail('event', e.id);
-  if(eventSel !== e) return;
+  if(seq !== _evSelSeq || eventSel !== e) return;
   const raw = detail.raw || '';
   const loc = detail.loc || {};
-  document.getElementById('eventNameZ').value = (loc && (loc.title || loc.name)) || e.title || '';
-  document.getElementById('eventDescZ').value = (loc && loc.desc) || e.desc || '';
-  document.getElementById('eventNameJa').value = (loc && (loc.title_ja || loc.name_ja)) || '';
-  document.getElementById('eventDescJa').value = (loc && loc.desc_ja) || '';
-  document.getElementById('eventNameEn').value = (loc && (loc.title_en || loc.name_en)) || '';
-  document.getElementById('eventDescEn').value = (loc && loc.desc_en) || '';
-  document.getElementById('eventRaw').value = raw;
-  document.getElementById('eventTrigger').value = extractBlock(raw, 'trigger');
-  document.getElementById('eventImmediate').value = extractBlock(raw, 'immediate');
   const pm = /^\s*picture\s*=\s*"?([^\s#"]+)/m.exec(raw);
-  document.getElementById('eventPic').value = pm ? pm[1] : '';
+  _applyCleanFields(snap, [
+    ['eventNameZ', (loc && (loc.title || loc.name)) || e.title || ''],
+    ['eventDescZ', (loc && loc.desc) || e.desc || ''],
+    ['eventNameJa', (loc && (loc.title_ja || loc.name_ja)) || ''],
+    ['eventDescJa', (loc && loc.desc_ja) || ''],
+    ['eventNameEn', (loc && (loc.title_en || loc.name_en)) || ''],
+    ['eventDescEn', (loc && loc.desc_en) || ''],
+    ['eventRaw', raw],
+    ['eventTrigger', extractBlock(raw, 'trigger')],
+    ['eventImmediate', extractBlock(raw, 'immediate')],
+    ['eventPic', pm ? pm[1] : '']
+  ]);
   renderEventOptions(raw, (loc && loc.options) || {});
 }
 
@@ -195,19 +204,38 @@ async function addEvent(){
 async function deleteEventSel(){
   if(!eventSel){ status('先选择事件'); return; }
   if(!confirm('确定删除事件 ' + eventSel.id + ' ？')) return;
-  await withBusy('正在删除事件并刷新…', async ()=>{
+  const cur = eventSel;
+  const btn = document.getElementById('eventDelete');
+  if(btn) btn.disabled = true;
+  status('正在删除事件…');
+  try{
     const r = await fetch('/api/event_delete', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({root: rootByName(eventSel.source), file: eventSel.file, id: eventSel.id})});
+      body: JSON.stringify({root: rootByName(cur.source), file: cur.file, id: cur.id})});
     const j = await r.json();
     status(j.msg || '', !j.ok);
     if(j.ok){
-      eventSel = null;
-      document.getElementById('eventRaw').value = '';
-      document.getElementById('eventTitle').textContent = '';
-      await loadData();
-      renderEventList('');
+      const q = document.getElementById('eventSearch')?.value || '';
+      if(j.restored){
+        _upsertDataItem('events', j.restored);
+        renderEventList(q);
+        await selectEvent(j.restored);
+      } else {
+        if(j.deleted_id) _removeDataItem('events', j.deleted_id);
+        else await loadData();
+        eventSel = null;
+        ['eventTitle', 'eventSrc'].forEach(id=>{ const el = document.getElementById(id); if(el) el.textContent = ''; });
+        const optBox = document.getElementById('eventOptions');
+        if(optBox) optBox.innerHTML = '';
+        ['eventNameZ', 'eventDescZ', 'eventNameJa', 'eventDescJa', 'eventNameEn', 'eventDescEn',
+         'eventPic', 'eventTrigger', 'eventImmediate', 'eventRaw'].forEach(id=>{
+          const el = document.getElementById(id); if(el) el.value = '';
+        });
+        renderEventList(q);
+      }
     }
-  });
+  } finally {
+    if(btn) btn.disabled = false;
+  }
 }
 
 async function addShared(){

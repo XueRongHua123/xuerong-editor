@@ -556,8 +556,12 @@ def add_tech(root, tid, folder, year="1936"):
 
 
 def delete_tech(root, rel, tid):
-    path = os.path.join(root, rel)
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read()
+    if not rel or not tid:
+        return False, "参数不完整"
+    path = os.path.join(root, rel) if root else ""
+    if not path or not os.path.isfile(path):
+        return False, "找不到文件：" + str(rel)
+    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read()
     m = re.search(r'(?m)^[ \t]*%s\s*=\s*\{' % re.escape(tid), text)
     if not m:
         return False, "未找到科技 " + tid
@@ -566,7 +570,63 @@ def delete_tech(root, rel, tid):
     snapshot(path)
     _atomic_write(path, _bom_for(path) + (text[:m.start()] + text[e:]).encode("utf-8"))
     state.changed()[path] = rel
-    _reload()
+    techs = state.techs()
+    techs.pop(tid, None)
+    restored = False
+    roots = list(state.roots() or [])
+    if not roots and root:
+        roots = [root]
+    for r in reversed(roots):
+        for base, d, fn in reversed(effective_layer_files("common/technologies", r)):
+            fp = os.path.join(d, fn)
+            try:
+                raw = io.open(fp, encoding="utf-8-sig", errors="replace", newline="").read()
+            except Exception:
+                continue
+            if tid not in raw:
+                continue
+            text_l = strip_comments(raw)
+            macros = {}
+            for mm in re.finditer(r'(?m)^\s*@([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', text_l):
+                macros[mm.group(1)] = mm.group(2)
+            found = None
+            for _s, _e, body in find_blocks(text_l, "technologies"):
+                for k, v, kb in top_items(body):
+                    if not kb:
+                        continue
+                    if k == tid and _looks_tech(v):
+                        found = v
+                        break
+                    if not _looks_tech(v):
+                        for k2, v2, b2 in top_items(v):
+                            if b2 and k2 == tid and _looks_tech(v2):
+                                found = v2
+                                break
+                        if found is not None:
+                            break
+                if found is not None:
+                    break
+            if found is not None:
+                src_l = os.path.basename((base or "").rstrip("\\/")) or base
+                rel_l = os.path.join("common", "technologies", fn)
+                entry = _build_tech_entry(tid, found, rel_l, src_l, macros=macros)
+                entry["leads"] = [x for x in entry.get("leads", []) if x in techs and x != tid]
+                pre = {p for p in entry.get("prereq", []) if p in techs and p != tid}
+                for other_id, other in techs.items():
+                    if other_id != tid and tid in (other.get("leads") or []):
+                        pre.add(other_id)
+                entry["prereq"] = sorted(pre)
+                techs[tid] = entry
+                restored = True
+                break
+        if restored:
+            break
+    if not restored:
+        for other in techs.values():
+            if tid in (other.get("leads") or []):
+                other["leads"] = [x for x in other["leads"] if x != tid]
+            if tid in (other.get("prereq") or []):
+                other["prereq"] = [x for x in other["prereq"] if x != tid]
     return True, "已删除科技 " + tid
 
 

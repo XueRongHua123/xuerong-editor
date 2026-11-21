@@ -570,7 +570,10 @@ async function addNode(){
 }
 
 async function saveLoc(f){
-  await withBusy('正在保存名称/描述并刷新…', async ()=>{
+  const btn = document.getElementById('btnLoc');
+  if(btn) btn.disabled = true;
+  status('正在保存名称/描述…');
+  try{
     const entries = {simp_chinese:{}, english:{}, japanese:{}};
     const nz = document.getElementById('edNameZ').value.trim();
     const dz = document.getElementById('edDescZ').value.trim();
@@ -589,8 +592,19 @@ async function saveLoc(f){
       body: JSON.stringify({root: rootOf(t), entries})});
     const j = await r.json();
     status(j.ok ? '名称/描述已保存' : ('保存失败：' + j.msg), !j.ok);
-    if(j.ok) await loadData();
-  });
+    if(j.ok){
+      if(nz) f.name = nz;
+      const cur = dirty.get(f.id);
+      if(cur){
+        delete cur.loc;
+        if(!Object.keys(cur).length) dirty.delete(f.id);
+      }
+      renderTree();
+      renderStats();
+    }
+  } finally {
+    if(btn) btn.disabled = false;
+  }
 }
 
 async function addTree(){
@@ -872,8 +886,10 @@ async function fetchRaw(kind, id){
   } catch(e){ return ''; }
 }
 
+let _ideaSelSeq = 0;
 async function selectIdea(i){
   if(!i) return;
+  const seq = ++_ideaSelSeq;
   ideaSel = i;
   _ideaRawDirty = false;
   document.querySelectorAll('#ideaList .lr').forEach(el=>{
@@ -897,19 +913,26 @@ async function selectIdea(i){
   } else {
     keys.forEach(k=>_appendIdeaProp(pg, k, props[k]));
   }
+  const snap = _snapFieldValues([
+    'ideaNameZ', 'ideaDescZ', 'ideaNameJa', 'ideaDescJa',
+    'ideaNameEn', 'ideaDescEn', 'ideaRaw', 'ideaAllowed', 'ideaTrigger'
+  ]);
   const detail = await fetchRawDetail('idea', i.id);
-  if(ideaSel !== i) return;
+  if(seq !== _ideaSelSeq || ideaSel !== i) return;
   const raw = detail.raw || '';
   const loc = detail.loc || {};
-  document.getElementById('ideaNameZ').value = (loc && loc.name) || i.name || '';
-  document.getElementById('ideaDescZ').value = (loc && loc.desc) || i.desc || '';
-  if(loc && loc.name_ja) document.getElementById('ideaNameJa').value = loc.name_ja;
-  if(loc && loc.desc_ja) document.getElementById('ideaDescJa').value = loc.desc_ja;
-  if(loc && loc.name_en) document.getElementById('ideaNameEn').value = loc.name_en;
-  if(loc && loc.desc_en) document.getElementById('ideaDescEn').value = loc.desc_en;
-  document.getElementById('ideaRaw').value = raw;
-  document.getElementById('ideaAllowed').value = extractBlock(raw, 'allowed');
-  document.getElementById('ideaTrigger').value = extractBlock(raw, 'trigger');
+  const pairs = [
+    ['ideaNameZ', (loc && loc.name) || i.name || ''],
+    ['ideaDescZ', (loc && loc.desc) || i.desc || ''],
+    ['ideaRaw', raw],
+    ['ideaAllowed', extractBlock(raw, 'allowed')],
+    ['ideaTrigger', extractBlock(raw, 'trigger')]
+  ];
+  if(loc && loc.name_ja) pairs.push(['ideaNameJa', loc.name_ja]);
+  if(loc && loc.desc_ja) pairs.push(['ideaDescJa', loc.desc_ja]);
+  if(loc && loc.name_en) pairs.push(['ideaNameEn', loc.name_en]);
+  if(loc && loc.desc_en) pairs.push(['ideaDescEn', loc.desc_en]);
+  _applyCleanFields(snap, pairs);
 }
 
 function addIdeaMod(presetKey, presetVal){
@@ -1061,19 +1084,39 @@ async function addIdea(){
 async function deleteIdeaSel(){
   if(!ideaSel){ status('先选择一个国家精神'); return; }
   if(!confirm('确定删除国家精神 ' + ideaSel.id + ' ？（可用 .bak 恢复）')) return;
-  await withBusy('正在删除国家精神并刷新…', async ()=>{
+  const cur = ideaSel;
+  const btn = document.getElementById('ideaDelete');
+  if(btn) btn.disabled = true;
+  status('正在删除国家精神…');
+  try{
     const r = await fetch('/api/delete_idea', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({root: rootByName(ideaSel.source), file: ideaSel.file, id: ideaSel.id})});
+      body: JSON.stringify({root: rootByName(cur.source), file: cur.file, id: cur.id})});
     const j = await r.json();
     status(j.msg || '', !j.ok);
     if(j.ok){
-      await loadData();
-      ideaSel = null;
-      document.getElementById('ideaRaw').value = '';
-      document.getElementById('ideaTitle').textContent = '';
-      renderIdeaList(document.getElementById('ideaSearch')?.value || '');
+      const q = document.getElementById('ideaSearch')?.value || '';
+      if(j.restored){
+        _upsertDataItem('ideas', j.restored);
+        renderIdeaList(q);
+        await selectIdea(j.restored);
+      } else {
+        if(j.deleted_id) _removeDataItem('ideas', j.deleted_id);
+        else await loadData();
+        ideaSel = null;
+        _ideaRawDirty = false;
+        ['ideaTitle', 'ideaSrc'].forEach(id=>{ const el = document.getElementById(id); if(el) el.textContent = ''; });
+        const pg = document.getElementById('ideaProps');
+        if(pg) pg.innerHTML = '';
+        ['ideaNameZ', 'ideaDescZ', 'ideaPic', 'ideaNameJa', 'ideaDescJa',
+         'ideaNameEn', 'ideaDescEn', 'ideaAllowed', 'ideaTrigger', 'ideaRaw'].forEach(id=>{
+          const el = document.getElementById(id); if(el) el.value = '';
+        });
+        renderIdeaList(q);
+      }
     }
-  });
+  } finally {
+    if(btn) btn.disabled = false;
+  }
 }
 
 function addFxLine(line){

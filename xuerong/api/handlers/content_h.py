@@ -87,8 +87,13 @@ def r_api_add_idea(h, body):
 
 @post("/api/delete_idea")
 def r_api_delete_idea(h, body):
-    ok, msg = delete_idea(body.get("root"), body.get("file"), body.get("id"))
-    h._send({"ok": ok, "msg": msg})
+    oid = body.get("id")
+    ok, msg = delete_idea(body.get("root"), body.get("file"), oid)
+    res = {"ok": ok, "msg": msg}
+    if ok:
+        res["deleted_id"] = oid
+        res["restored"] = idea_view(oid)
+    h._send(res)
 
 
 @post("/api/equipment_edit")
@@ -250,8 +255,13 @@ def r_api_tech_add(h, body):
 
 @post("/api/tech_delete")
 def r_api_tech_delete(h, body):
-    ok, msg = delete_tech(body.get("root"), body.get("file"), body.get("id"))
-    h._send({"ok": ok, "msg": msg})
+    tid = body.get("id")
+    ok, msg = delete_tech(body.get("root"), body.get("file"), tid)
+    res = {"ok": ok, "msg": msg}
+    if ok:
+        res["deleted_id"] = tid
+        res["restored"] = tech_view(tid)
+    h._send(res)
 
 
 @post("/api/event_save")
@@ -282,8 +292,13 @@ def r_api_equip_add(h, body):
 
 @post("/api/equip_delete")
 def r_api_equip_delete(h, body):
-    ok, msg = delete_equipment(body.get("root"), body.get("file"), body.get("id"))
-    h._send({"ok": ok, "msg": msg})
+    eid = body.get("id")
+    ok, msg = delete_equipment(body.get("root"), body.get("file"), eid)
+    res = {"ok": ok, "msg": msg}
+    if ok:
+        res["deleted_id"] = eid
+        res["restored"] = equip_view(eid)
+    h._send(res)
 
 
 @post("/api/event_add")
@@ -298,8 +313,13 @@ def r_api_event_add(h, body):
 
 @post("/api/event_delete")
 def r_api_event_delete(h, body):
-    ok, msg = delete_event(body.get("root"), body.get("file"), body.get("id"))
-    h._send({"ok": ok, "msg": msg})
+    eid = body.get("id")
+    ok, msg = delete_event(body.get("root"), body.get("file"), eid)
+    res = {"ok": ok, "msg": msg}
+    if ok:
+        res["deleted_id"] = eid
+        res["restored"] = event_view(eid)
+    h._send(res)
 
 
 # --------------------------------------------------------------- GET（P5 从 routes_get.py 原样搬出，10 条）

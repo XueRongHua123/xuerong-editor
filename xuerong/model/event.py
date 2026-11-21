@@ -686,16 +686,65 @@ def add_event(root, eid):
 
 
 def delete_event(root, rel, eid):
-    path = os.path.join(root, rel)
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read()
-    m = re.search(r'(?m)^[ \t]*id\s*=\s*"?%s"?' % re.escape(eid), text)
-    if not m:
+    if not rel or not eid:
+        return False, "参数不完整"
+    path = os.path.join(root, rel) if root else ""
+    if not path or not os.path.isfile(path) or is_under_game(root or ""):
+        path, err = _adopt_rel_to_top(root, rel)
+        if not path:
+            return False, err
+    with io.open(path, "rb") as f:
+        raw_bytes = f.read()
+    text = raw_bytes.decode("utf-8-sig" if raw_bytes.startswith(b"\xef\xbb\xbf") else "utf-8", errors="replace")
+    ev_span = None
+    id_pat = re.compile(r'(?m)^[ \t]*id\s*=\s*"?%s"?(?![A-Za-z0-9_.\-])' % re.escape(eid))
+    for em in re.finditer(r'(?m)^[ \t]*[A-Za-z_]*_event[ \t]*=\s*\{', text):
+        eb = text.find("{", em.end() - 1)
+        ee = brace_match(text, eb)
+        if ee <= eb:
+            continue
+        ebody = text[eb + 1:ee - 1]
+        if id_pat.search(ebody):
+            ev_span = (em.start(), ee)
+            break
+    if not ev_span:
         return False, "未找到事件 " + eid
-    start = text.rfind("_event", 0, m.start())
-    brace = text.find('{', start)
-    e = brace_match(text, brace)
+    ev_start, ee = ev_span
+    new_text = text[:ev_start] + text[ee:]
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(text[:start - 1] + text[e:])
+    _atomic_write(path, _bom_for(path) + new_text.encode("utf-8"))
     state.changed()[path] = rel
-    _reload()
+    _EVENT_GRAPH_CACHE.clear()
+    events = state.events()
+    events.pop(eid, None)
+    roots = list(state.roots() or [])
+    if not roots and root:
+        roots = [root]
+    for r in reversed(roots):
+        hit = False
+        for ab, d, fn in reversed(effective_layer_files("events", r)):
+            fp = os.path.join(d, fn)
+            try:
+                raw = io.open(fp, encoding="utf-8-sig", errors="replace", newline="").read()
+            except Exception:
+                continue
+            if eid not in raw:
+                continue
+            text_l = strip_comments(raw)
+            nsm = re.search(r'add_namespace\s*=\s*(\w+)', text_l)
+            ns = nsm.group(1) if nsm else ""
+            for k, v, b in top_items(text_l):
+                if not b or not k.endswith("_event"):
+                    continue
+                em2 = re.search(r'(?m)^\s*id\s*=\s*"?([A-Za-z0-9_.\-]+)"?', v)
+                if em2 and em2.group(1) == eid:
+                    src_l = os.path.basename(ab.rstrip("\\/")) or ab
+                    rel_l = os.path.join("events", fn)
+                    events[eid] = _build_event_entry(eid, k, ns, v, rel_l, src_l)
+                    hit = True
+                    break
+            if hit:
+                break
+        if hit:
+            break
     return True, "已删除事件 " + eid

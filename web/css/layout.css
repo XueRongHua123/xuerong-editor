@@ -116,9 +116,9 @@
     animation:none;transition:width .35s ease-out}
   .busy-foot{display:flex;justify-content:space-between;align-items:center;
     font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
-  #guideBox{position:fixed;left:14px;bottom:14px;width:292px;background:var(--panel);
+  #guideBox{position:fixed;left:calc(var(--pane-l,288px) + 14px);bottom:14px;width:280px;background:var(--panel);
     border:1px solid var(--line);border-radius:11px;box-shadow:0 12px 34px rgba(0,0,0,.5);
-    z-index:70;display:none;overflow:hidden;max-height:76vh;flex-direction:column}
+    z-index:44;display:none;overflow:hidden;max-height:76vh;flex-direction:column}
   #guideBox.show{display:flex}
   .gb-head{display:flex;justify-content:space-between;align-items:center;
     padding:7px 9px 7px 11px;border-bottom:1px solid var(--line);

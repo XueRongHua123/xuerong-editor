@@ -225,7 +225,7 @@ else document.addEventListener('DOMContentLoaded', bindGuideActions);
   function reset(){
     const box = document.getElementById('guideBox');
     if(!box) return;
-    box.style.left = '14px'; box.style.top = ''; box.style.bottom = '14px';
+    box.style.left = 'calc(var(--pane-l,288px) + 14px)'; box.style.top = ''; box.style.bottom = '14px';
     try{ localStorage.removeItem(K); }catch(e){}
   }
   let dg = null;

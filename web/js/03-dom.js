@@ -90,8 +90,26 @@ function renderEquipList(q){
   if(!items.length) box.textContent = '没有匹配的装备';
 }
 
+function _snapFieldValues(ids){
+  const snap = {};
+  ids.forEach(fid=>{
+    const el = document.getElementById(fid);
+    if(el) snap[fid] = el.value;
+  });
+  return snap;
+}
+
+function _applyCleanFields(snap, pairs){
+  pairs.forEach(([fid, val])=>{
+    const el = document.getElementById(fid);
+    if(el && el.value === snap[fid]) el.value = val;
+  });
+}
+
+let _equipSelSeq = 0;
 async function selectEquip(e){
   if(!e) return;
+  const seq = ++_equipSelSeq;
   equipSel = e;
   document.getElementById('equipTitle').textContent = e.id + '   (' + e.file + ')';
   fillSrcHint('equipSrc', (typeof rootByName === 'function' ? rootByName(e.source) : '') || _lastRoot(), e.file, e.source);
@@ -117,19 +135,25 @@ async function selectEquip(e){
     inp.type = 'text'; inp.value = props[k]; inp.dataset.prop = k;
     lab.appendChild(inp); pg.appendChild(lab);
   });
+  const snap = _snapFieldValues([
+    'equipNameZ', 'equipDescZ', 'equipNameJa', 'equipDescJa',
+    'equipNameEn', 'equipDescEn', 'equipRaw', 'equipUpgrades', 'equipSlots'
+  ]);
   const detail = await fetchRawDetail('equip', e.id);
-  if(equipSel !== e) return;
+  if(seq !== _equipSelSeq || equipSel !== e) return;
   const eqRaw = detail.raw || '';
   const loc = detail.loc || {};
-  document.getElementById('equipNameZ').value = (loc && loc.name) || e.name || '';
-  document.getElementById('equipDescZ').value = (loc && loc.desc) || e.desc || '';
-  document.getElementById('equipNameJa').value = (loc && loc.name_ja) || '';
-  document.getElementById('equipDescJa').value = (loc && loc.desc_ja) || '';
-  document.getElementById('equipNameEn').value = (loc && loc.name_en) || '';
-  document.getElementById('equipDescEn').value = (loc && loc.desc_en) || '';
-  document.getElementById('equipRaw').value = eqRaw;
-  document.getElementById('equipUpgrades').value = extractBlock(eqRaw, 'upgrades');
-  document.getElementById('equipSlots').value = extractBlock(eqRaw, 'module_slots');
+  _applyCleanFields(snap, [
+    ['equipNameZ', (loc && loc.name) || e.name || ''],
+    ['equipDescZ', (loc && loc.desc) || e.desc || ''],
+    ['equipNameJa', (loc && loc.name_ja) || ''],
+    ['equipDescJa', (loc && loc.desc_ja) || ''],
+    ['equipNameEn', (loc && loc.name_en) || ''],
+    ['equipDescEn', (loc && loc.desc_en) || ''],
+    ['equipRaw', eqRaw],
+    ['equipUpgrades', extractBlock(eqRaw, 'upgrades')],
+    ['equipSlots', extractBlock(eqRaw, 'module_slots')]
+  ]);
 }
 
 async function saveEquip(){
@@ -199,6 +223,19 @@ function _upsertDataItem(listKey, item){
   if(idx >= 0) arr[idx] = item;
   else arr.unshift(item);
   return item;
+}
+
+function _removeDataItem(listKey, id){
+  if(!DATA || !id || !Array.isArray(DATA[listKey])) return false;
+  const arr = DATA[listKey];
+  let removed = false;
+  for(let i = arr.length - 1; i >= 0; i--){
+    if(arr[i] && arr[i].id === id){
+      arr.splice(i, 1);
+      removed = true;
+    }
+  }
+  return removed;
 }
 
 async function fetchRawDetail(kind, id){

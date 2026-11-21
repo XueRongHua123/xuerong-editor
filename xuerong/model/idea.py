@@ -369,5 +369,44 @@ def delete_idea(root, rel, oid):
     snapshot(path)
     _atomic_write(path, _bom_for(path) + newtext.encode("utf-8"))
     state.changed()[path] = rel
-    _reload()
+    ideas = state.ideas()
+    ideas.pop(oid, None)
+    roots = list(state.roots() or [])
+    if not roots and root:
+        roots = [root]
+    for r in reversed(roots):
+        hit = False
+        for base, d, fn in reversed(effective_layer_files("common/ideas", r)):
+            fp = os.path.join(d, fn)
+            try:
+                txt = io.open(fp, encoding="utf-8-sig", errors="replace", newline="").read()
+            except Exception:
+                continue
+            if oid not in txt:
+                continue
+            src_l = os.path.basename(base.rstrip("\\/")) or base
+            rel_l = os.path.join("common", "ideas", fn)
+            text_l = strip_comments(txt)
+            for _s, _e, body in find_blocks(text_l, "ideas"):
+                for k, v, b in top_items(body):
+                    if not b:
+                        continue
+                    if k == oid and _looks_like_idea(v):
+                        ideas[oid] = _build_idea_entry(oid, v, rel_l, src_l)
+                        hit = True
+                        break
+                    if not _looks_like_idea(v):
+                        for k2, v2, b2 in top_items(v):
+                            if b2 and k2 == oid and _looks_like_idea(v2):
+                                ideas[oid] = _build_idea_entry(oid, v2, rel_l, src_l)
+                                hit = True
+                                break
+                        if hit:
+                            break
+                if hit:
+                    break
+            if hit:
+                break
+        if hit:
+            break
     return True, "已删除国家精神 " + oid

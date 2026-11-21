@@ -37,19 +37,36 @@ async function addTech(){
 async function deleteTechSel(){
   if(!techSel){ status('先选择一项科技'); return; }
   if(!confirm('确定删除科技 ' + techSel.id + ' ？（可用 .bak 恢复）')) return;
-  await withBusy('正在删除科技并刷新…', async ()=>{
+  const cur = techSel;
+  const btn = document.getElementById('techDelete');
+  if(btn) btn.disabled = true;
+  status('正在删除科技…');
+  try{
     const r = await fetch('/api/tech_delete', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({root: rootByName(techSel.source), file: techSel.file, id: techSel.id})});
+      body: JSON.stringify({root: rootByName(cur.source), file: cur.file, id: cur.id})});
     const j = await r.json();
     status(j.msg || '', !j.ok);
     if(j.ok){
-      techSel = null;
-      document.getElementById('techRaw').value = '';
-      document.getElementById('techTitle').textContent = '';
-      await loadData();
-      renderTechList('');
+      const q = document.getElementById('techSearch')?.value || '';
+      if(j.restored){
+        _upsertDataItem('techs', j.restored);
+        renderTechList(q);
+        await selectTech(j.restored);
+      } else {
+        if(j.deleted_id) _removeDataItem('techs', j.deleted_id);
+        else await loadData();
+        techSel = null;
+        ['techTitle', 'techSrc'].forEach(id=>{ const el = document.getElementById(id); if(el) el.textContent = ''; });
+        ['techNameZ', 'techDescZ', 'techNameJa', 'techDescJa', 'techNameEn', 'techDescEn',
+         'techYear', 'techCost', 'techPath', 'techPrereq', 'techEnable', 'techSub', 'techRaw'].forEach(id=>{
+          const el = document.getElementById(id); if(el) el.value = '';
+        });
+        renderTechList(q);
+      }
     }
-  });
+  } finally {
+    if(btn) btn.disabled = false;
+  }
 }
 
 function openTech(){
@@ -160,8 +177,10 @@ function extractBlock(text, key){
   return '';
 }
 
+let _techSelSeq = 0;
 async function selectTech(t){
   if(!t) return;
+  const seq = ++_techSelSeq;
   techSel = t;
   document.getElementById('techTitle').textContent = t.id + '   (' + t.file + ')';
   fillSrcHint('techSrc', (typeof rootByName === 'function' ? rootByName(t.source) : '') || _lastRoot(), t.file, t.source);
@@ -174,20 +193,26 @@ async function selectTech(t){
   document.getElementById('techYear').value = t.year || '';
   document.getElementById('techCost').value = t.cost || '';
   document.getElementById('techPath').value = t.path || '';
+  const snap = _snapFieldValues([
+    'techNameZ', 'techDescZ', 'techNameJa', 'techDescJa',
+    'techNameEn', 'techDescEn', 'techPrereq', 'techEnable', 'techSub', 'techRaw'
+  ]);
   const detail = await fetchRawDetail('tech', t.id);
-  if(techSel !== t) return;
+  if(seq !== _techSelSeq || techSel !== t) return;
   const raw = detail.raw || '';
   const loc = detail.loc || {};
-  document.getElementById('techNameZ').value = (loc && loc.name) || t.name || '';
-  document.getElementById('techDescZ').value = (loc && loc.desc) || t.desc || '';
-  document.getElementById('techNameJa').value = (loc && loc.name_ja) || '';
-  document.getElementById('techDescJa').value = (loc && loc.desc_ja) || '';
-  document.getElementById('techNameEn').value = (loc && loc.name_en) || '';
-  document.getElementById('techDescEn').value = (loc && loc.desc_en) || '';
-  document.getElementById('techPrereq').value = extractBlock(raw, 'prerequisite');
-  document.getElementById('techEnable').value = extractBlock(raw, 'enable_equipments');
-  document.getElementById('techSub').value = extractBlock(raw, 'sub_technologies');
-  document.getElementById('techRaw').value = raw;
+  _applyCleanFields(snap, [
+    ['techNameZ', (loc && loc.name) || t.name || ''],
+    ['techDescZ', (loc && loc.desc) || t.desc || ''],
+    ['techNameJa', (loc && loc.name_ja) || ''],
+    ['techDescJa', (loc && loc.desc_ja) || ''],
+    ['techNameEn', (loc && loc.name_en) || ''],
+    ['techDescEn', (loc && loc.desc_en) || ''],
+    ['techPrereq', extractBlock(raw, 'prerequisite')],
+    ['techEnable', extractBlock(raw, 'enable_equipments')],
+    ['techSub', extractBlock(raw, 'sub_technologies')],
+    ['techRaw', raw]
+  ]);
 }
 
 async function saveTech(){

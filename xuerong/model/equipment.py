@@ -409,15 +409,60 @@ def add_equipment(root, eid):
 
 
 def delete_equipment(root, rel, eid):
-    path = os.path.join(root, rel)
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read()
+    if not rel or not eid:
+        return False, "参数不完整"
+    path = os.path.join(root, rel) if root else ""
+    if not path or not os.path.isfile(path):
+        return False, "找不到文件：" + str(rel)
+    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read()
     m = re.search(r'(?m)^[ \t]*%s\s*=\s*\{' % re.escape(eid), text)
     if not m:
         return False, "未找到装备 " + eid
     b = text.find('{', m.start())
     e = brace_match(text, b)
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(text[:m.start()] + text[e:])
+    _atomic_write(path, _bom_for(path) + (text[:m.start()] + text[e:]).encode("utf-8"))
     state.changed()[path] = rel
-    _reload()
+    equips = state.equipments()
+    equips.pop(eid, None)
+    roots = list(state.roots() or [])
+    if not roots and root:
+        roots = [root]
+    for r in reversed(roots):
+        hit = False
+        seen_fn = set()
+        for base, d in _layer_dirs("common/units/equipment", r):
+            src_l = os.path.basename((base or "").rstrip("\\/")) or base
+            try:
+                fns = sorted(f for f in os.listdir(d) if f.endswith(".txt"))
+            except Exception:
+                continue
+            for fn in fns:
+                fk = fn.lower()
+                if fk in seen_fn:
+                    continue
+                seen_fn.add(fk)
+                fp = os.path.join(d, fn)
+                try:
+                    raw = io.open(fp, encoding="utf-8-sig", errors="replace", newline="").read()
+                except Exception:
+                    continue
+                if eid not in raw:
+                    continue
+                rel_l = os.path.join("common", "units", "equipment", fn)
+                text_l = strip_comments(raw)
+                for _s, _e, body in find_blocks(text_l, "equipments"):
+                    for k, v, kb in top_items(body):
+                        if kb and k == eid:
+                            equips[eid] = _build_equip_entry(eid, v, rel_l, src_l)
+                            hit = True
+                            break
+                    if hit:
+                        break
+                if hit:
+                    break
+            if hit:
+                break
+        if hit:
+            break
     return True, "已删除装备 " + eid

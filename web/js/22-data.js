@@ -288,20 +288,30 @@ async function createNewMod(){
   if(depEl && depEl.dataset && depEl.dataset.depPath && selEl && selEl.value === depEl.dataset.depPath){
     depVal = depEl.dataset.depPath;
   }
+  const createTree = document.getElementById('nmTree').checked;
+  const rawTag = document.getElementById('nmTag').value.trim().toUpperCase();
   const body = {
     base: document.getElementById('nmBase').value.trim() || (DATA && DATA.mod_home) || '',
     id, name,
     version: document.getElementById('nmVer').value.trim() || '0.1.0',
     game_version: document.getElementById('nmGame').value.trim() || (DATA && DATA.game_version) || '',
-    create_tree: document.getElementById('nmTree').checked,
+    create_tree: createTree,
     tree_id: document.getElementById('nmTreeId').value.trim() || (id + '_tree'),
-    tag: document.getElementById('nmTag').value.trim().toUpperCase(),
+    tag: (createTree && !rawTag) ? 'GER' : rawTag,
     dep: depVal
   };
-  const r = await fetch('/api/new_mod', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-  const j = await r.json();
-  status(j.msg || '', !j.ok);
-  if(j.ok){ document.getElementById('newMod').classList.remove('show'); await loadData(); }
+  const okBtn = document.getElementById('nmOk');
+  if(okBtn) okBtn.disabled = true;
+  try{
+    await withBusy('正在创建并加载模组…', async ()=>{
+      const r = await fetch('/api/new_mod', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+      const j = await r.json();
+      status(j.msg || '', !j.ok);
+      if(j.ok){ document.getElementById('newMod').classList.remove('show'); await loadData(); }
+    });
+  }finally{
+    if(okBtn) okBtn.disabled = false;
+  }
 }
 
 async function addEquip(){
@@ -338,11 +348,38 @@ async function addEquip(){
 async function deleteEquip(){
   if(!equipSel){ status('先选择装备'); return; }
   if(!confirm('确定删除装备 ' + equipSel.id + ' ？（可用 .bak 恢复）')) return;
-  const r = await fetch('/api/equip_delete', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({root: rootByName(equipSel.source), file: equipSel.file, id: equipSel.id})});
-  const j = await r.json();
-  status(j.msg || '', !j.ok);
-  if(j.ok){ equipSel = null; await loadData(); renderEquipList(''); }
+  const cur = equipSel;
+  const btn = document.getElementById('equipDelete');
+  if(btn) btn.disabled = true;
+  status('正在删除装备…');
+  try{
+    const r = await fetch('/api/equip_delete', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({root: rootByName(cur.source), file: cur.file, id: cur.id})});
+    const j = await r.json();
+    status(j.msg || '', !j.ok);
+    if(j.ok){
+      const q = document.getElementById('equipSearch')?.value || '';
+      if(j.restored){
+        _upsertDataItem('equipment', j.restored);
+        renderEquipList(q);
+        await selectEquip(j.restored);
+      } else {
+        if(j.deleted_id) _removeDataItem('equipment', j.deleted_id);
+        else await loadData();
+        equipSel = null;
+        ['equipTitle', 'equipSrc'].forEach(id=>{ const el = document.getElementById(id); if(el) el.textContent = ''; });
+        const propsBox = document.getElementById('equipProps');
+        if(propsBox) propsBox.innerHTML = '';
+        ['equipNameZ', 'equipDescZ', 'equipNameJa', 'equipDescJa', 'equipNameEn', 'equipDescEn',
+         'equipPic', 'equipArch', 'equipIsArch', 'equipProduced', 'equipUpgrades', 'equipSlots', 'equipRaw'].forEach(id=>{
+          const el = document.getElementById(id); if(el) el.value = '';
+        });
+        renderEquipList(q);
+      }
+    }
+  } finally {
+    if(btn) btn.disabled = false;
+  }
 }
 
 function techFolderNames(){
@@ -3275,6 +3312,10 @@ async function openPublishModal(){
   if(outEl) outEl.value = '';
   const sel = document.getElementById('pubModSel');
   if(sel) sel.value = '';
+  const badge = document.getElementById('pubBadge');
+  if(badge){ badge.className = 'lc-badge'; badge.textContent = '预检中…'; }
+  const runBtn = document.getElementById('pubRunBtn');
+  if(runBtn) runBtn.disabled = true;
   document.getElementById('publishModal').classList.add('show');
   await loadPublishPreview(false);
 }
@@ -3309,6 +3350,9 @@ async function runPublishExport(){
   const ovModEl = document.getElementById('pubOverwriteMod');
   const zipEl = document.getElementById('pubAlsoZip');
   const resBox = document.getElementById('pubResultBox');
+  const runBtn = document.getElementById('pubRunBtn');
+  const origTxt = runBtn ? runBtn.textContent : '';
+  if(runBtn){ runBtn.disabled = true; runBtn.textContent = '⏳ 正在打包导出…'; }
 
   const body = {
     mod_root: sel ? sel.value : '',
@@ -3319,29 +3363,40 @@ async function runPublishExport(){
     also_zip: zipEl ? !!zipEl.checked : false,
     overrides: _pubReadOverrides(),
   };
-  const r = await fetch('/api/publish/export', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body),
-  });
-  const j = await r.json();
-  if(resBox){
-    resBox.style.display = 'block';
-    if(j.ok){
-      resBox.className = 'gv-banner';
-      resBox.innerHTML = '<div style="font-weight:600;color:#5bd188;margin-bottom:4px">✓ ' + escapeHtml(j.msg || '导出成功') + '</div>'
-        + '<div style="font-size:11.5px;line-height:1.6">'
-        + '<div><b>工坊导出目录：</b><code>' + escapeHtml(j.export_dir || '') + '</code></div>'
-        + (j.launcher_mod ? ('<div><b>官方启动器 .mod：</b><code>' + escapeHtml(j.launcher_mod) + '</code></div>') : '')
-        + (j.zip_path ? ('<div><b>ZIP 压缩包：</b><code>' + escapeHtml(j.zip_path) + '</code></div>') : '')
-        + '<div style="color:var(--muted);margin-top:4px">下一步：打开 Paradox 官方启动器 → 所有已安装模组 → 上传模组，即可在列表中选择并上传到 Steam 创意工坊。</div>'
-        + '</div>';
-      status(j.msg || '打包发布成功');
-    }else{
-      resBox.className = 'gv-banner err';
-      resBox.textContent = '✖ ' + (j.msg || '导出失败');
-      status(j.msg || '导出失败', true);
+  try{
+    const r = await fetch('/api/publish/export', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if(resBox){
+      resBox.style.display = 'block';
+      if(j.ok){
+        resBox.className = 'gv-banner';
+        resBox.innerHTML = '<div style="font-weight:600;color:#5bd188;margin-bottom:4px">✓ ' + escapeHtml(j.msg || '导出成功') + '</div>'
+          + '<div style="font-size:11.5px;line-height:1.6">'
+          + '<div><b>工坊导出目录：</b><code>' + escapeHtml(j.export_dir || '') + '</code></div>'
+          + (j.launcher_mod ? ('<div><b>官方启动器 .mod：</b><code>' + escapeHtml(j.launcher_mod) + '</code></div>') : '')
+          + (j.zip_path ? ('<div><b>ZIP 压缩包：</b><code>' + escapeHtml(j.zip_path) + '</code></div>') : '')
+          + '<div style="color:var(--muted);margin-top:4px">下一步：打开 Paradox 官方启动器 → 所有已安装模组 → 上传模组，即可在列表中选择并上传到 Steam 创意工坊。</div>'
+          + '</div>';
+        status(j.msg || '打包发布成功');
+      }else{
+        resBox.className = 'gv-banner err';
+        resBox.textContent = '✖ ' + (j.msg || '导出失败');
+        status(j.msg || '导出失败', true);
+      }
     }
+  }catch(e){
+    if(resBox){
+      resBox.style.display = 'block';
+      resBox.className = 'gv-banner err';
+      resBox.textContent = '✖ 导出请求异常：' + (e.message || e);
+    }
+    status('导出请求异常', true);
+  }finally{
+    if(runBtn){ runBtn.disabled = false; runBtn.textContent = origTxt || '🚀 导出工坊就绪目录'; }
   }
 }
 

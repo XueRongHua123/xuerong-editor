@@ -174,6 +174,7 @@ function initMascot(){
   if(st.large) box.classList.add('large');
   if(st.left !== null && st.left !== undefined){
     box.style.left = st.left + 'px';
+    box.style.right = 'auto';
     box.style.bottom = 'auto';
     box.style.top = (st.top || 14) + 'px';
   }
@@ -191,7 +192,7 @@ function initMascot(){
     box.style.transform = 'rotate(' + Math.max(-6, Math.min(6, dx * 0.12)) + 'deg)';
     const x = Math.max(0, Math.min(window.innerWidth - box.offsetWidth, drag.ox + dx));
     const y = Math.max(0, Math.min(window.innerHeight - box.offsetHeight, drag.oy + dy));
-    box.style.left = x + 'px'; box.style.top = y + 'px'; box.style.bottom = 'auto';
+    box.style.left = x + 'px'; box.style.right = 'auto'; box.style.top = y + 'px'; box.style.bottom = 'auto';
   });
   window.addEventListener('mouseup', ()=>{
     if(!drag) return;
