@@ -14,6 +14,7 @@
     catDirty: false,
     loading: false,
     yearCrossHint: null,
+    lastTid: '',
   };
 
   function el(id){ return document.getElementById(id); }
@@ -188,9 +189,9 @@
     }
     gbs.forEach(gb=>{
       const row = document.createElement('div');
-      row.className = 'tt-root-item' + (techSel && techSel.id === gb.root_tech ? ' on' : '');
+      row.className = 'tt-root-item' + (gb.orphan ? ' orphan' : '') + (techSel && techSel.id === gb.root_tech ? ' on' : '');
       row.innerHTML = '<span class="rn" title="' + escapeHtml(gb.name) + '">' + escapeHtml(gb.root_tech || gb.name) + '</span>' +
-        '<span class="rm">' + escapeHtml(gb.format || 'LEFT') + ' (' + gb.x + ',' + gb.y + ')</span>' +
+        '<span class="rm">' + (gb.orphan ? '<b style="color:var(--warn)">空框</b> ' : '') + escapeHtml(gb.format || 'LEFT') + ' (' + gb.x + ',' + gb.y + ')</span>' +
         '<button class="tt-root-del" title="编辑此 gridbox">✎</button>' +
         '<button class="tt-root-del" title="删除此 gridbox">×</button>';
       const btns = row.querySelectorAll('button');
@@ -359,10 +360,11 @@
         }
         const bw = Math.max(120, maxX - minX);
         const bh = Math.max(60, maxY - minY);
-        const label = gb.name + ' [' + (gb.format || 'LEFT') + ']';
-        const hw = Math.max(120, label.length * 7 + 18);
-        out += '<rect class="tt-gb-box" x="' + minX + '" y="' + minY + '" width="' + bw + '" height="' + bh + '" rx="8"/>' +
-          '<g class="tt-gb-handle" data-idx="' + idx + '" transform="translate(' + minX + ',' + (minY - 20) + ')">' +
+        const isOrphan = !!(gb.orphan && !members.length);
+        const label = (isOrphan ? '⚠ ' : '') + gb.name + ' [' + (gb.format || 'LEFT') + (isOrphan ? ' · 空框' : '') + ']';
+        const hw = Math.max(120, label.length * 7 + 20);
+        out += '<rect class="tt-gb-box' + (isOrphan ? ' orphan' : '') + '" x="' + minX + '" y="' + minY + '" width="' + bw + '" height="' + bh + '" rx="8"/>' +
+          '<g class="tt-gb-handle' + (isOrphan ? ' orphan' : '') + '" data-idx="' + idx + '" transform="translate(' + minX + ',' + (minY - 20) + ')">' +
           '<rect width="' + hw + '" height="18"/>' +
           '<text x="7" y="13">' + escapeHtml(label) + '</text></g>';
       });
@@ -893,6 +895,11 @@
 
   function renderTechNodePanel(t, detail){
     if(!t) return;
+    if(S.lastTid !== t.id){
+      S.lastTid = t.id;
+      const rp = el('ttRPaneTech');
+      if(rp) rp.scrollTop = 0;
+    }
     const view = el('ttView');
     if(view){
       view.querySelectorAll('.tt-node').forEach(gn=>{
@@ -1191,9 +1198,11 @@
     const ov = diag.overlaps || [];
     const mc = diag.missing_cats || [];
     const mg = diag.missing_gfx || [];
+    const ogb = diag.orphan_gridboxes || [];
 
     const dv = el('techDiagVis');
     const fixBtn = el('ttFixInvisibleBtn');
+    const cleanBtn = el('ttCleanOrphanGbBtn');
     if(dv){
       if(inv.length){
         dv.className = 'tt-diag-warn';
@@ -1204,6 +1213,10 @@
       }
     }
     if(fixBtn) fixBtn.style.display = inv.length ? 'inline-flex' : 'none';
+    if(cleanBtn){
+      cleanBtn.style.display = ogb.length ? 'inline-flex' : 'none';
+      if(ogb.length) cleanBtn.textContent = '🧹 清理 ' + ogb.length + ' 个空根树框';
+    }
 
     const dov = el('techDiagOverlap');
     if(dov){
@@ -1597,8 +1610,26 @@
     [['tech', 'ttRTabTech', 'ttRPaneTech'], ['gui', 'ttRTabGui', 'ttRPaneGui'], ['country', 'ttRTabCountry', 'ttRPaneCountry']].forEach(([k, tid, pid])=>{
       const tb = el(tid), pn = el(pid);
       if(tb) tb.classList.toggle('on', tab === k);
-      if(pn) pn.style.display = (tab === k) ? 'flex' : 'none';
+      if(pn){
+        pn.style.display = (tab === k) ? 'block' : 'none';
+        if(tab === k) pn.scrollTop = 0;
+      }
     });
+  }
+
+  async function cleanOrphanGridboxes(){
+    const diag = (S.data && S.data.diagnostics) || {};
+    const ogb = diag.orphan_gridboxes || [];
+    if(!ogb.length) return;
+    let cnt = 0;
+    for(const item of ogb){
+      const r = await apiPost('/api/tech_gridbox_save', {
+        root: activeRoot(), folder: S.folder, op: 'delete', data: {name: item.name}
+      });
+      if(r && r.ok) cnt++;
+    }
+    status('已清理 ' + cnt + ' 个空根树框', cnt === 0);
+    await techStudioLoad({silent: true, fit: false});
   }
 
   function bindStudioEvents(){
@@ -1609,6 +1640,19 @@
     on('ttFolderReorder', openReorderFoldersDialog);
     on('ttAddRootBox', ()=>openGridboxDialog(null));
     on('ttFixInvisibleBtn', fixInvisibleRoots);
+    on('ttCleanOrphanGbBtn', cleanOrphanGridboxes);
+    on('ttPanelDel', ()=>{ if(typeof deleteTechSel === 'function') deleteTechSel(); });
+    on('ttGuiDelFolder', async ()=>{
+      if(!S.folder) return;
+      if(!confirm('从当前 mod 移除科技页签 ' + S.folder + ' 及对应 GUI 页面？')) return;
+      const r = await apiPost('/api/tech_folder_delete', {root: activeRoot(), id: S.folder});
+      status(r.msg || '', !r.ok);
+      if(r.ok){
+        S.folder = '';
+        ttFolder = '';
+        await techStudioLoad({folder: '', fit: true});
+      }
+    });
 
     on('ttModeSelect', ()=>setMode('select'));
     on('ttModeLink', ()=>setMode('link'));

@@ -1044,7 +1044,7 @@
   .tt-body{display:flex;gap:10px;flex:1;min-height:0}
   .tt-left{width:260px;flex-shrink:0;display:flex;flex-direction:column;min-height:0;gap:6px}
   .tt-center{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;background:var(--input);border:1px solid var(--line);border-radius:10px;padding:6px;position:relative}
-  .tt-right{width:340px;flex-shrink:0;display:flex;flex-direction:column;min-height:0;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px}
+  .tt-right{width:clamp(350px,26vw,400px);flex-shrink:0;display:flex;flex-direction:column;min-height:0;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px}
   .tt-sec-head{display:flex;justify-content:space-between;align-items:center;font-size:11.5px;font-weight:600;color:var(--muted);gap:6px}
   .tt-mini-btn{height:22px!important;padding:0 7px!important;font-size:11px!important}
   .tt-root-list{max-height:142px;overflow:auto;background:var(--input);border:1px solid var(--line);border-radius:8px;padding:4px;display:flex;flex-direction:column;gap:3px}
@@ -1062,8 +1062,16 @@
   #techModal #techSvg{flex:1;min-height:0;border-radius:8px;background:radial-gradient(circle at 1px 1px,var(--dot) 1px,transparent 0) 0 0/22px 22px,var(--bg)}
   .tt-rtabs{display:flex;gap:4px;margin-bottom:8px;flex-shrink:0}
   .tt-rtabs .btn{flex:1;justify-content:center;font-size:11.5px;height:28px}
-  .tt-rpane{flex:1;min-height:0;overflow-y:auto;padding-right:4px;display:block}
-  .tt-rpane > *{flex-shrink:0}
+  .tt-rpane{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-right:4px;display:block}
+  .tt-rpane > *{flex-shrink:0;max-width:100%;box-sizing:border-box}
+  .tt-meta-3{display:grid;grid-template-columns:76px 76px 1fr;gap:6px;margin-bottom:4px}
+  .tt-meta-3 label{display:flex;flex-direction:column;gap:2px;font-size:10.5px;color:var(--muted)}
+  .tt-meta-3 input{margin:0!important;height:28px;font-size:12px}
+  .tt-sticky-act{position:sticky;bottom:-1px;background:var(--panel2);padding:8px 0 2px;margin-top:8px;border-top:1px solid var(--line);display:flex;gap:6px;align-items:center;z-index:3}
+  .tt-gb-box.orphan{stroke:var(--warn);fill:color-mix(in srgb,var(--warn) 6%,transparent)}
+  .tt-gb-handle.orphan rect{stroke:var(--warn)}
+  .tt-gb-handle.orphan text{fill:var(--warn)}
+  .tt-root-item.orphan{border-color:color-mix(in srgb,var(--warn) 55%,transparent)}
   .tt-icon-box{display:flex;align-items:center;gap:10px;padding:6px 8px;background:var(--input);border:1px solid var(--line);border-radius:8px;margin:4px 0 6px}
   #techIconImg{width:48px;height:48px;object-fit:contain;border-radius:6px;background:var(--panel2);border:1px solid var(--line);flex-shrink:0}
   .tt-icon-acts{display:flex;flex-direction:column;gap:4px;flex:1}

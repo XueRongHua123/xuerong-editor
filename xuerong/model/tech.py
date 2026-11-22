@@ -849,7 +849,7 @@ def delete_tech(root, rel, tid):
     _atomic_write(path, _bom_for(path) + (text[:m.start()] + text[e:]).encode("utf-8"))
     state.changed()[path] = rel
     techs = state.techs()
-    techs.pop(tid, None)
+    old_entry = techs.pop(tid, None)
     restored = False
     roots = list(state.roots() or [])
     if not roots and root:
@@ -899,13 +899,39 @@ def delete_tech(root, rel, tid):
                 break
         if restored:
             break
+    cleaned_gb = []
     if not restored:
-        for other in techs.values():
+        for other_id, other in list(techs.items()):
+            o_rel = other.get("file") or ""
+            o_writable = bool(root and o_rel and os.path.isfile(os.path.join(root, o_rel)))
             if tid in (other.get("leads") or []):
                 other["leads"] = [x for x in other["leads"] if x != tid]
+                if o_writable:
+                    tech_unlink(root, o_rel, other_id, tid, mode="path")
             if tid in (other.get("prereq") or []):
                 other["prereq"] = [x for x in other["prereq"] if x != tid]
-    return True, "已删除科技 " + tid
+            if tid in (other.get("xor") or []):
+                other["xor"] = [x for x in other["xor"] if x != tid]
+                if o_writable:
+                    _edit_xor_in_file(root, o_rel, other_id, tid, add=False)
+        gui_fp = os.path.join(root, "interface", "countrytechtreeview.gui") if root else ""
+        if gui_fp and os.path.isfile(gui_fp):
+            try:
+                from xuerong.model.tech_gui import load_techtree_gui, tech_gridbox_save
+                gui_info = load_techtree_gui(root)
+                target_gbs = []
+                for pfid, pg in (gui_info.get("pages") or {}).items():
+                    for gb in (pg.get("gridboxes") or []):
+                        if gb.get("name") == tid + "_tree" or gb.get("root_tech") == tid:
+                            target_gbs.append((pfid, gb["name"]))
+                for pfid, gb_name in target_gbs:
+                    res = tech_gridbox_save(root, pfid, "delete", {"name": gb_name})
+                    if res.get("ok"):
+                        cleaned_gb.append(gb_name)
+            except Exception:
+                pass
+    extra = ("（已同步清理根树框 %s）" % ", ".join(cleaned_gb)) if cleaned_gb else ""
+    return True, "已删除科技 " + tid + extra
 
 
 

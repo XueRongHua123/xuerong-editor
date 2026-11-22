@@ -30,9 +30,9 @@ from xuerong.model.tech import (
     add_tech, delete_tech, save_tech, tech_batch_move, tech_link, tech_move,
     tech_tree_graph, tech_unlink, tech_view)
 from xuerong.model.tech_gui import (
-    tech_category_add, tech_folder_save, tech_folders_reorder,
-    tech_gridbox_save, tech_item_style_save, tech_studio_payload,
-    tech_subtitle_save, tech_year_save)
+    tech_category_add, tech_folder_delete, tech_folder_save,
+    tech_folders_reorder, tech_gridbox_save, tech_item_style_save,
+    tech_studio_payload, tech_subtitle_save, tech_year_save)
 from xuerong.model.world import loc_generate, loc_missing
 
 
@@ -285,6 +285,12 @@ def r_api_tech_folder_save(h, body):
     h._send(tech_folder_save(body.get("root") or None,
                              body.get("id") or body.get("fid") or "",
                              fields))
+
+
+@post("/api/tech_folder_delete")
+def r_api_tech_folder_delete(h, body):
+    h._send(tech_folder_delete(body.get("root") or None,
+                               body.get("id") or body.get("fid") or ""))
 
 
 @post("/api/tech_folders_reorder")

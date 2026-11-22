@@ -1680,11 +1680,10 @@ window.onerror = function(m, s, l, c){
             <input type="text" id="techNameEn"><textarea id="techDescEn" style="height:40px"></textarea>
           </div>
         </details>
-        <div class="k">年份 / 科研花费 / 科技树路径</div>
-        <div style="display:flex;gap:6px">
-          <input type="text" id="techYear" placeholder="year" style="width:78px">
-          <input type="text" id="techCost" placeholder="cost" style="width:80px">
-          <input type="text" id="techPath" placeholder="folder" style="flex:1">
+        <div class="tt-meta-3">
+          <label><span>年份</span><input type="text" id="techYear" placeholder="1936"></label>
+          <label><span>科研花费</span><input type="text" id="techCost" placeholder="1"></label>
+          <label><span>科技树页签</span><input type="text" id="techPath" placeholder="folder"></label>
         </div>
         <div id="techGridInfo" class="tt-grid-info">所属根树：-</div>
         <div class="k" style="display:flex;justify-content:space-between;align-items:center">
@@ -1709,8 +1708,11 @@ window.onerror = function(m, s, l, c){
           </div>
         </details>
         <div class="k">脚本原文（保存会重写该块）</div>
-        <textarea id="techRaw" style="height:130px;min-height:96px;flex-shrink:0;font-family:Consolas,monospace"></textarea>
-        <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--line);flex-shrink:0"><button class="btn primary" id="techSave">保存科技</button></div>
+        <textarea id="techRaw" style="height:110px;min-height:84px;font-family:Consolas,monospace"></textarea>
+        <div class="tt-sticky-act">
+          <button class="btn primary" id="techSave" style="flex:1">保存科技</button>
+          <button class="btn" id="ttPanelDel" title="删除当前选中科技">🗑 删除</button>
+        </div>
       </div>
       <div id="ttRPaneGui" class="tt-rpane" style="display:none">
         <div class="k">页签配置（00_technology.txt）</div>
@@ -1725,6 +1727,7 @@ window.onerror = function(m, s, l, c){
           <button class="btn" id="ttGuiTabUploadBtn">📥 导入页签PNG</button>
           <input type="file" id="ttGuiTabFile" accept="image/*" style="display:none">
           <button class="btn primary" id="ttGuiSaveMeta">保存页签</button>
+          <button class="btn" id="ttGuiDelFolder" title="从当前 mod 删除此科技页签与 GUI">🗑 删除本页签</button>
         </div>
         <div class="k">背景与画布尺寸（countrytechtreeview.gui）</div>
         <div style="display:flex;gap:6px;align-items:center">
@@ -1769,6 +1772,7 @@ window.onerror = function(m, s, l, c){
   <div id="techStudioFoot" class="tt-foot">
     <span id="techDiagVis">游戏可见性：-</span>
     <button class="btn tt-mini-btn" id="ttFixInvisibleBtn" style="display:none">🔧 一键修复隐身根科技</button>
+    <button class="btn tt-mini-btn" id="ttCleanOrphanGbBtn" style="display:none">🧹 清理空根树框</button>
     <span id="techDiagOverlap">重叠：0</span>
     <span id="techDiagMeta" class="muted"></span>
   </div>

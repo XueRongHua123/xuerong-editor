@@ -687,9 +687,13 @@ def tech_studio_payload(root=None, folder=None, tag=None):
 
     cur_techs = {tid: t for tid, t in techs.items() if (t.get("path") or "") == cur_folder}
 
-    # 从每个 gridbox 的 root_tech 沿 leads BFS 推导归属
+    # 从每个 gridbox 的 root_tech 沿 leads BFS 推导归属，并标记空孤立根树框
     tech_to_gb = {}
-    gridboxes = page.get("gridboxes") or []
+    gridboxes = [dict(gb, orphan=bool((gb.get("root_tech") or "") and (gb.get("root_tech") not in techs)))
+                 for gb in (page.get("gridboxes") or [])]
+    page["gridboxes"] = gridboxes
+    orphan_gridboxes = [{"name": gb["name"], "root_tech": gb.get("root_tech") or ""}
+                        for gb in gridboxes if gb.get("orphan")]
     for gb in gridboxes:
         rtech = gb.get("root_tech") or ""
         if rtech not in cur_techs:
@@ -832,6 +836,7 @@ def tech_studio_payload(root=None, folder=None, tag=None):
             "overlaps": overlaps,
             "missing_cats": missing_cats,
             "missing_gfx": missing_gfx,
+            "orphan_gridboxes": orphan_gridboxes,
         },
     }
 
@@ -1344,6 +1349,81 @@ def tech_folder_save(root, fid, fields=None):
 
     return {"ok": True, "id": fid, "created": is_new_folder,
             "msg": "已%s科技页 %s" % ("新建" if is_new_folder else "保存", fid)}
+
+
+def tech_folder_delete(root, fid):
+    """从可写层 00_technology.txt 与 countrytechtreeview.gui 删除科技页签及其 GUI 页面/皮肤。"""
+    fid = (fid or "").strip()
+    if not fid:
+        return {"ok": False, "msg": "缺少 folder id"}
+    top = paths._pick(root)
+    if not top:
+        return {"ok": False, "msg": "请先选择可写 mod 目录"}
+
+    using = [tid for tid, t in (state.techs() or {}).items() if (t.get("path") or "").strip() == fid]
+    if using:
+        return {"ok": False,
+                "msg": "页签 %s 下仍有 %d 项科技（如 %s），请先删除或移走这些科技再删页签" % (fid, len(using), ", ".join(using[:3]))}
+
+    removed_tags = False
+    tag_path = os.path.join(top, _TAGS_REL.replace("/", os.sep))
+    if os.path.isfile(tag_path):
+        tag_text = io.open(tag_path, encoding="utf-8-sig", errors="replace").read()
+        clean_tag = _strip_keep_len(tag_text)
+        tf_blocks = find_blocks(clean_tag, "technology_folders")
+        if tf_blocks:
+            tf_s, tf_e, tf_body_clean = tf_blocks[0]
+            tf_body_raw = tag_text[tf_s + 1:tf_e - 1]
+            for k, s, e, _is_s, _is_e in _iter_child_blocks(tf_body_clean, tf_body_clean):
+                if k == fid:
+                    new_body = tf_body_raw[:s].rstrip() + "\n" + tf_body_raw[e:].lstrip("\r\n")
+                    if not new_body.startswith("\n"):
+                        new_body = "\n" + new_body
+                    new_tag_text = tag_text[:tf_s + 1] + new_body + tag_text[tf_e - 1:]
+                    if braces_balanced(new_tag_text):
+                        snapshot(tag_path)
+                        _atomic_write(tag_path, new_tag_text.encode("utf-8"))
+                        removed_tags = True
+                    break
+
+    removed_gui = False
+    gui_path = os.path.join(top, _GUI_REL.replace("/", os.sep))
+    if os.path.isfile(gui_path):
+        gui_text = io.open(gui_path, encoding="utf-8-sig", errors="replace").read()
+        changed_g = False
+        tv = _find_tv_range(gui_text)
+        if tv:
+            ft_pos = _find_tv_child(gui_text, tv[2], tv[3], "folder_tabs")
+            if ft_pos:
+                ft_s, ft_e = ft_pos[0], ft_pos[1]
+                ft_raw = gui_text[ft_s:ft_e]
+                ft_clean = _strip_keep_len(ft_raw)
+                tab_name = fid + "_tab"
+                for bk, bs, be, bis_s, bis_e in _iter_block_children(ft_raw, ft_clean):
+                    if bk.lower() == "buttontype" and _block_scalar(ft_clean[bis_s:bis_e], "name") == tab_name:
+                        ft_new = ft_raw[:bs].rstrip() + "\n" + ft_raw[be:].lstrip("\r\n")
+                        gui_text = gui_text[:ft_s] + ft_new + gui_text[ft_e:]
+                        changed_g = True
+                        break
+            tv = _find_tv_range(gui_text)
+            if tv:
+                pg_pos = _find_tv_child(gui_text, tv[2], tv[3], fid)
+                if pg_pos:
+                    gui_text = gui_text[:pg_pos[0]].rstrip() + "\n" + gui_text[pg_pos[1]:].lstrip("\r\n")
+                    changed_g = True
+        for skin_name in ("techtree_%s_item" % fid, "techtree_%s_small_item" % fid):
+            sk = _find_top_skin(gui_text, skin_name)
+            if sk:
+                gui_text = gui_text[:sk[0]].rstrip() + "\n" + gui_text[sk[1]:].lstrip("\r\n")
+                changed_g = True
+        if changed_g and braces_balanced(gui_text):
+            snapshot(gui_path)
+            _atomic_write(gui_path, gui_text.encode("utf-8"))
+            removed_gui = True
+
+    if not removed_tags and not removed_gui:
+        return {"ok": False, "msg": "当前可写层未包含页签 %s（若来自原版或父 mod 只读层请勿直接删除）" % fid}
+    return {"ok": True, "id": fid, "msg": "已从当前 mod 移除科技页签 " + fid}
 
 
 def tech_folders_reorder(root, order):
