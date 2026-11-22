@@ -3,6 +3,38 @@
 // 这些 IIFE 本来就是模块形态：内部定义，末尾 window.map* = 导出，HTML 的 onclick="mapApply()" 靠它。
 // window.* 赋值一行未改。
 
+(function(){
+  const BRUSH_OFF = {};
+  window.mapRegisterBrush = function(name, offFn){
+    if(name && typeof offFn === 'function') BRUSH_OFF[name] = offFn;
+  };
+  window.mapDeactivateBrushes = function(except){
+    Object.keys(BRUSH_OFF).forEach(function(k){
+      if(k !== except){
+        try{ BRUSH_OFF[k](); }catch(e){}
+      }
+    });
+  };
+  window._mapWriteWithAdopt = async function(url, body){
+    const send = async function(extra){
+      const payload = Object.assign({root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''}, body || {}, extra || {});
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      return await resp.json();
+    };
+    let r = await send();
+    if(r && r.need_adopt){
+      const ok = window.confirm((r.msg || '目标地图文件来自只读或下层目录') + '\n\n是否单文件复制到当前可写 mod 并继续操作？');
+      if(!ok) return r;
+      r = await send({adopt: true});
+    }
+    return r;
+  };
+})();
+
 /* ---------- v0.85 地图检查 ---------- */
 function mapFocusProvince(pid){
   // 注意：MAP 是 const 声明，不会挂到 window 上，这里只能用词法变量
@@ -106,7 +138,9 @@ async function mapRunCheck(){
   }
 
   async function paintBegin(){
-    const r = await paintCall({act:'begin', root: MAP.root || ''});
+    const r = window._mapWriteWithAdopt
+      ? await window._mapWriteWithAdopt('/api/map_paint', {act:'begin', root: MAP.root || ''})
+      : await paintCall({act:'begin', root: MAP.root || ''});
     if(!r.ok){ status(r.msg || '无法开始涂色', true); return false; }
     begun = true;
     pending = 0;
@@ -2221,24 +2255,21 @@ function makePannable(svg, body){
     if(!sel || !curPid){ tmsg('先在地图上选一个省', true); return; }
     const want = sel.value;
     tmsg('写入中…');
-    const r = await (await fetch('/api/terrain_set', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({pid: curPid, terrain: want})})).json();
+    const r = await window._mapWriteWithAdopt('/api/terrain_set', {pid: curPid, terrain: want});
     tmsg(r.msg || (r.ok ? '已应用' : '失败'), !r.ok);
     if(r.ok){
       status(r.msg);
       const el = document.getElementById('msTerrain');
       if(el) el.textContent = want;
       if(MAP.idx && MAP.idx[String(curPid)]) MAP.idx[String(curPid)].terrain = want;
-      // 地形图变了，自动重建地形层（否则地图上还是旧颜色）
-      tmsg(r.msg + '　正在重建地形图层…');
+      tmsg(r.msg + '　正在刷新地形图层…');
       try{
         const br = await (await fetch('/api/map_build', {method:'POST',
           headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({force:true})})).json();
-        tmsg(r.msg + (br.ok ? '　图层已重建' : '　图层重建失败'), !br.ok);
-        if(br.ok && window.mapReloadLayers) window.mapReloadLayers();
-      }catch(e){ tmsg(r.msg + '　图层重建失败：' + e.message, true); }
+          body: JSON.stringify({force:true, only:'terrain', root: MAP.root || ''})})).json();
+        tmsg(r.msg + (br.ok ? '　图层已更新' : '　图层刷新失败'), !br.ok);
+        if(br.ok && window.mapReloadLayers) window.mapReloadLayers('terrain');
+      }catch(e){ tmsg(r.msg + '　图层刷新失败：' + e.message, true); }
     }
   }
 
@@ -2313,14 +2344,12 @@ function makePannable(svg, body){
     if(!pids.length){ bmsg('先在地图上选中省（拖框可多选）', true); return; }
     if(!sel || !sel.value){ bmsg('先选一种地形', true); return; }
     bmsg('写入中（' + pids.length + ' 个省）…');
-    const r = await (await fetch('/api/terrain_batch', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({pids: pids, terrain: sel.value})})).json();
+    const r = await window._mapWriteWithAdopt('/api/terrain_batch', {pids: pids, terrain: sel.value});
     bmsg(r.msg || '', !r.ok);
     if(r.ok){
       status(r.msg);
       pids.forEach(function(p){ if(MAP.idx && MAP.idx[String(p)]) MAP.idx[String(p)].terrain = sel.value; });
-      await rebuildMap();
+      await rebuildMap('terrain');
     }
   }
 
@@ -2330,19 +2359,17 @@ function makePannable(svg, body){
     if(!from || !to || !from.value || !to.value){ bmsg('选源类型和目标类型', true); return; }
     if(from.value === to.value){ bmsg('源和目标相同', true); return; }
     bmsg('转换中…');
-    const r = await (await fetch('/api/terrain_by_type', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({from: from.value, to: to.value})})).json();
+    const r = await window._mapWriteWithAdopt('/api/terrain_by_type', {from: from.value, to: to.value});
     bmsg(r.msg || '', !r.ok);
-    if(r.ok){ status(r.msg); await rebuildMap(); }
+    if(r.ok){ status(r.msg); await rebuildMap('terrain'); }
   }
 
-  async function rebuildMap(){
+  async function rebuildMap(only){
     try{
       const br = await (await fetch('/api/map_build', {method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({force:true})})).json();
-      if(br.ok && window.mapReloadLayers) window.mapReloadLayers();
+        body: JSON.stringify({force:true, only: only || undefined, root: MAP.root || ''})})).json();
+      if(br.ok && window.mapReloadLayers) window.mapReloadLayers(only || undefined);
     }catch(e){}
   }
 
@@ -2352,11 +2379,24 @@ function makePannable(svg, body){
     const size = Number(document.getElementById('msBrushSize').value || 5);
     const pts = BRUSH_PTS.slice();
     BRUSH_PTS = [];
-    const r = await (await fetch('/api/terrain_paint', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({points: pts, terrain: sel ? sel.value : '', brush: size})})).json();
+    const r = await window._mapWriteWithAdopt('/api/terrain_paint', {points: pts, terrain: sel ? sel.value : '', brush: size});
     bmsg(r.msg || '', !r.ok);
-    if(r.ok){ status(r.msg); await rebuildMap(); }
+    if(r.ok){ status(r.msg); await rebuildMap('terrain'); }
+  }
+
+  function setBrush(on){
+    if(on && typeof MAP !== 'undefined' && MAP.mode !== 'view' && typeof mapSetMode === 'function'){
+      mapSetMode('view');
+    }
+    BRUSH_ON = !!on;
+    if(BRUSH_ON && window.mapDeactivateBrushes){
+      window.mapDeactivateBrushes('terrain');
+    }
+    const b3 = document.getElementById('msBrushToggle');
+    if(b3){
+      b3.textContent = BRUSH_ON ? '关闭笔刷' : '开启笔刷';
+      b3.style.color = BRUSH_ON ? 'var(--accent)' : '';
+    }
   }
 
   function bind(){
@@ -2367,10 +2407,9 @@ function makePannable(svg, body){
     const b3 = document.getElementById('msBrushToggle');
     if(b3 && !b3.dataset.bound){
       b3.dataset.bound='1';
+      if(window.mapRegisterBrush) window.mapRegisterBrush('terrain', function(){ if(BRUSH_ON) setBrush(false); });
       b3.onclick = function(){
-        BRUSH_ON = !BRUSH_ON;
-        b3.textContent = BRUSH_ON ? '关闭笔刷' : '开启笔刷';
-        b3.style.color = BRUSH_ON ? 'var(--accent)' : '';
+        setBrush(!BRUSH_ON);
         status(BRUSH_ON ? '笔刷已开启：按住左键拖动刷地形，松手保存' : '笔刷已关闭');
       };
     }
@@ -3417,25 +3456,52 @@ function makePannable(svg, body){
     const br = Number((document.getElementById('hpBrush')||{}).value || 8);
     const fe = !!(document.getElementById('hpFeather')||{}).checked;
     try{
-      const r = await (await fetch('/api/height_paint', {method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({points: points, height: hv, brush: br, feather: fe})})).json();
+      const r = await window._mapWriteWithAdopt('/api/height_paint', {
+        points: points, height: hv, brush: br, feather: fe
+      });
       if(r.ok){
         msg(r.msg);
+        window.__heightPreviewTs = Date.now();
+        if(typeof mapApplyLayers === 'function') mapApplyLayers();
+        fetch('/api/map_build', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({force:true, only:'terrain', root: (typeof MAP !== 'undefined' && MAP.root) || ''})
+        }).then(x=>x.json()).then(br2=>{
+          if(br2 && br2.ok && window.mapReloadLayers) window.mapReloadLayers('terrain');
+        }).catch(()=>{});
       } else msg(r.msg || '失败', true);
     }catch(e){ msg('请求失败：' + e, true); }
+  }
+
+  function setHeightBrush(on){
+    if(on && typeof MAP !== 'undefined' && MAP.mode !== 'view' && typeof mapSetMode === 'function'){
+      mapSetMode('view');
+    }
+    ON = !!on;
+    window.__heightBrush = ON;
+    if(ON){
+      if(window.mapDeactivateBrushes) window.mapDeactivateBrushes('height');
+      const hl = document.getElementById('mapLHeight');
+      if(hl && !hl.checked){
+        hl.checked = true;
+        if(typeof mapApplyLayers === 'function') mapApplyLayers();
+      }
+    }
+    const btn = document.getElementById('hpToggle');
+    if(btn){
+      btn.textContent = ON ? '停止刷' : '开始刷';
+      btn.style.background = ON ? 'var(--accent)' : '';
+    }
   }
 
   function bind(){
     const btn = document.getElementById('hpToggle');
     if(!btn || btn.dataset.bound) return;
     btn.dataset.bound = '1';
+    if(window.mapRegisterBrush) window.mapRegisterBrush('height', function(){ if(ON) setHeightBrush(false); });
     btn.onclick = function(){
-      ON = !ON;
-      btn.textContent = ON ? '停止刷' : '开始刷';
-      btn.style.background = ON ? 'var(--accent)' : '';
-      msg(ON ? '左键点击或拖拽刷高度（抬手写盘）' : '已停止');
-      window.__heightBrush = ON;
+      setHeightBrush(!ON);
+      msg(ON ? '左键点击或拖拽刷高度（抬手写盘并刷新高程热力图）' : '已停止');
     };
   }
 
@@ -3488,20 +3554,28 @@ function makePannable(svg, body){
 })();
 
 
-/* ---------- v1.23.48 河流笔刷 ---------- */
+/* ---------- v1.23.48 / v1.26.2 河流笔刷 ---------- */
 (function(){
   let ON = false, drawing = false, erasing = false, strokeNew = false;
   let pending = [], sending = false, lastSent = 0;
 
-  const KIND_COLOR = {main:'rgba(0,210,255,.85)', tributary:'rgba(40,120,255,.85)',
-                      stream:'rgba(130,220,255,.85)', deep:'rgba(0,70,200,.9)'};
+  const KIND_COLOR = {
+    main:'rgba(0,225,255,.9)',
+    stream:'rgba(0,200,255,.85)',
+    tributary:'rgba(40,120,255,.9)',
+    deep:'rgba(0,70,200,.92)',
+    source:'rgba(0,255,0,.98)',
+    flow_in:'rgba(255,40,40,.98)',
+    split:'rgba(255,252,0,.98)'
+  };
+  const CTRL_KINDS = {source:true, flow_in:true, split:true};
 
   function msg(t, bad){
     const el = document.getElementById('rvMsg');
     if(el){ el.textContent = t || ''; el.style.color = bad ? 'var(--danger)' : ''; }
   }
   function kind(){ return ((document.getElementById('rvKind')||{}).value || 'main'); }
-  function brush(){ return Number((document.getElementById('rvBrush')||{}).value || 2); }
+  function brush(){ return Number((document.getElementById('rvBrush')||{}).value || 1); }
 
   function ensureCanvas(){
     const stack = document.getElementById('mapStack');
@@ -3518,8 +3592,9 @@ function makePannable(svg, body){
       cv.width = MAP.w; cv.height = MAP.h;
       cv.style.width = MAP.w + 'px';
       cv.style.height = MAP.h + 'px';
-      reloadPreview();
+      if(ON) reloadPreview();
     }
+    cv.style.display = ON ? 'block' : 'none';
     return cv;
   }
   window.__riverSync = function(){ ensureCanvas(); };
@@ -3533,7 +3608,8 @@ function makePannable(svg, body){
       c.clearRect(0, 0, cv.width, cv.height);
       c.drawImage(img, 0, 0);
     };
-    img.src = '/api/river_preview.png?t=' + Date.now();
+    const rootQ = (typeof MAP !== 'undefined' && MAP && MAP.root) ? ('&root=' + encodeURIComponent(MAP.root)) : '';
+    img.src = '/api/river_preview.png?t=' + Date.now() + rootQ;
   }
 
   let localLast = null;
@@ -3542,9 +3618,16 @@ function makePannable(svg, body){
     const cv = document.getElementById('mapRiverCanvas');
     if(!cv) return;
     const c = cv.getContext('2d');
+    const k = kind();
+    if(!erasing && CTRL_KINDS[k]){
+      c.fillStyle = KIND_COLOR[k];
+      c.fillRect(Math.round(x) - 1, Math.round(y) - 1, 3, 3);
+      localLast = null;
+      return;
+    }
     const r = Math.max(1, brush());
-    c.strokeStyle = erasing ? 'rgba(255,90,90,.5)' : (KIND_COLOR[kind()] || KIND_COLOR.main);
-    c.lineWidth = r * 2;
+    c.strokeStyle = erasing ? 'rgba(255,90,90,.5)' : (KIND_COLOR[k] || KIND_COLOR.main);
+    c.lineWidth = r === 1 ? 1.5 : (r * 2 - 1);
     c.lineCap = 'round';
     c.lineJoin = 'round';
     c.beginPath();
@@ -3584,11 +3667,13 @@ function makePannable(svg, body){
                   erase: erasing, new_stroke: strokeNew};
     strokeNew = false;
     try{
-      const r = await (await fetch('/api/river_paint', {method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(body)})).json();
-      if(r.ok) msg(r.msg);
-      else msg(r.msg || '写入失败', true);
+      const r = await window._mapWriteWithAdopt('/api/river_paint', body);
+      if(r.ok){
+        msg(r.msg);
+      } else {
+        if(r.need_adopt){ drawing = false; localLast = null; pending = []; }
+        msg(r.msg || '写入失败', true);
+      }
     }catch(e){ msg('请求失败：' + e.message, true); }
     sending = false;
     if(pending.length) flush();
@@ -3623,28 +3708,57 @@ function makePannable(svg, body){
     drawing = false;
     localLast = null;
     flush();
-    // 抬手后从 rivers.bmp 重新生成预览：本地画笔只是「随手画」，以文件为准
+    // 抬手后从 rivers.bmp 重新生成预览：本地画笔只是即时反馈，以文件为准
     setTimeout(reloadPreview, 260);
+  }
+
+  function setRiverBrush(on){
+    if(on && typeof MAP !== 'undefined' && MAP.mode !== 'view' && typeof mapSetMode === 'function'){
+      mapSetMode('view');
+    }
+    const wasOn = ON;
+    ON = !!on;
+    window.__riverBrushActive = ON;
+    if(ON && window.mapDeactivateBrushes) window.mapDeactivateBrushes('river');
+    ensureCanvas();
+    const t = document.getElementById('rvToggle');
+    if(t){
+      t.textContent = ON ? '停止画' : '开始画';
+      t.style.background = ON ? 'var(--accent)' : '';
+    }
+    if(ON){
+      reloadPreview();
+      if(typeof mapApplyLayers === 'function') mapApplyLayers();
+    } else if(wasOn){
+      drawing = false;
+      localLast = null;
+      fetch('/api/map_build', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({force:true, only:'rivers', root: (typeof MAP !== 'undefined' && MAP.root) || ''})
+      }).then(x=>x.json()).then(br=>{
+        if(br && br.ok && window.mapReloadLayers) window.mapReloadLayers('rivers');
+        if(typeof mapApplyLayers === 'function') mapApplyLayers();
+      }).catch(()=>{
+        if(typeof mapApplyLayers === 'function') mapApplyLayers();
+      });
+    }
   }
 
   function bind(){
     const wrap = document.getElementById('mapStageWrap');
     if(!wrap || wrap.dataset.rvBound) return;
     wrap.dataset.rvBound = '1';
-    wrap.addEventListener('mousedown', onDown, true);
-    wrap.addEventListener('mousemove', onMove, true);
-    window.addEventListener('mouseup', onUp, true);
+    wrap.addEventListener('pointerdown', onDown, true);
+    wrap.addEventListener('pointermove', onMove, true);
+    window.addEventListener('pointerup', onUp, true);
     wrap.addEventListener('contextmenu', function(e){ if(ON) e.preventDefault(); }, true);
     const t = document.getElementById('rvToggle');
     if(t && !t.dataset.bound){
       t.dataset.bound = '1';
+      if(window.mapRegisterBrush) window.mapRegisterBrush('river', function(){ if(ON) setRiverBrush(false); });
       t.onclick = function(){
-        ON = !ON;
-        ensureCanvas();
-        t.textContent = ON ? '停止画' : '开始画';
-        t.style.background = ON ? 'var(--accent)' : '';
-        msg(ON ? '左键画、右键擦（底图请先开「地形」或「省色块」）' : '已停止');
-        if(ON) reloadPreview();
+        setRiverBrush(!ON);
+        msg(ON ? '左键画、右键擦（建议 1px 单线；先标源头 0 或连到海）' : '已停止');
       };
     }
     const u = document.getElementById('rvUndo');
@@ -3690,7 +3804,7 @@ MAP.lastState = null;
 
 
 function mapSetMode(mode){
-  if(mode === 'pick'){ status('吸管还在开发中'); return; }
+  if(window.mapDeactivateBrushes) window.mapDeactivateBrushes(null);
   if(mode === 'paint'){
     MAP.mode = 'paint';
     document.querySelectorAll('#mapRail .map-tool').forEach(b=>{
@@ -3715,14 +3829,20 @@ function mapSetMode(mode){
   if(el) el.textContent = MAP_MODE_TEXT[mode] || mode;
   const hint = document.getElementById('msHint');
   if(hint){
-    hint.textContent = mode === 'state'
-      ? '单击省份后在右侧改归属'
-      : '滚轮缩放 · 拖动平移 · 单击选省';
+    hint.textContent = mode === 'pick'
+      ? '单击地图任意省份取其省号（自动填入涂色目标）'
+      : (mode === 'state'
+        ? '单击省份后在右侧改归属'
+        : '滚轮缩放 · 拖动平移 · 单击选省');
   }
   const pb = document.getElementById('paintBox');
   if(pb) pb.style.display = 'none';
   const sb2 = document.getElementById('selBox');
   if(sb2) sb2.style.display = '';
+  if(mode === 'pick'){
+    if(window.mapSideTab) window.mapSideTab('edit');
+    status('吸管就绪：点击地图上的省份吸取省号');
+  }
   // 浏览模式下，未选省时属性面板保持收起
   if(mode === 'view' && !MAP.lastPid){
     const side = document.getElementById('mapSide');
@@ -3893,9 +4013,21 @@ async function mapLoadMeta(root){
 }
 
 
-// 图层文件重建后强制重载（src 相同浏览器会用缓存，必须先清空）
-window.mapReloadLayers = function(){
-  ['mapBase','mapPolit','mapRegion','mapTerrain','mapContinent','mapProv','mapUnits','mapState','mapEdges'].forEach(function(id){
+// 图层文件重建后强制重载（src 相同浏览器会用缓存，必须先自增版本号并清空）
+window.mapReloadLayers = function(only){
+  MAP.ver = (MAP.ver || 0) + 1;
+  if(only === 'terrain'){
+    const el = document.getElementById('mapTerrain');
+    if(el){ el.setAttribute('src', ''); el.setAttribute('src', mapAssetUrl('terrain.png')); }
+    return;
+  }
+  if(only === 'rivers'){
+    const el = document.getElementById('mapRivers');
+    if(el){ el.setAttribute('src', ''); }
+    if(typeof mapApplyLayers === 'function') mapApplyLayers();
+    return;
+  }
+  ['mapBase','mapPolit','mapRegion','mapTerrain','mapContinent','mapProv','mapUnits','mapState','mapEdges','mapRivers'].forEach(function(id){
     const el = document.getElementById(id);
     if(el) el.setAttribute('src', '');
   });
@@ -3954,7 +4086,7 @@ function mapApplyLayers(){
   const rv = document.getElementById('mapLRivers');
   const rvImg = document.getElementById('mapRivers');
   if(rvImg){
-    const on = rv && rv.checked;
+    const on = rv && rv.checked && !window.__riverBrushActive;
     rvImg.style.display = on ? 'block' : 'none';
     if(on){
       rvImg.style.width = MAP.w + 'px';
@@ -3963,6 +4095,22 @@ function mapApplyLayers(){
       if(rvImg.getAttribute('src') !== url) rvImg.setAttribute('src', url);
       const op = document.querySelector('.lt-op[data-op="rivers"]');
       rvImg.style.opacity = op ? (Number(op.value) / 100) : 1;
+    }
+  }
+  const hl = document.getElementById('mapLHeight');
+  const hlImg = document.getElementById('mapHeight');
+  if(hlImg){
+    const onH = hl && hl.checked;
+    hlImg.style.display = onH ? 'block' : 'none';
+    if(onH && MAP.w && MAP.h){
+      hlImg.style.width = MAP.w + 'px';
+      hlImg.style.height = MAP.h + 'px';
+      const ts = window.__heightPreviewTs || 0;
+      const rootQ = MAP.root ? ('&root=' + encodeURIComponent(MAP.root)) : '';
+      const hUrl = '/api/height_preview.png?t=' + ts + rootQ;
+      if(hlImg.getAttribute('src') !== hUrl) hlImg.setAttribute('src', hUrl);
+      const hop = document.querySelector('.lt-op[data-op="height"]');
+      hlImg.style.opacity = hop ? (Number(hop.value) / 100) : 0.75;
     }
   }
   const onPolit = document.getElementById('mapLPolit').checked;
@@ -4254,6 +4402,16 @@ function mapBindEvents(){
     const p = mapScreenToImage(e.clientX, e.clientY);
     const pid = mapProvAt(p.x, p.y);
     if(!pid) return;
+    if(MAP.mode === 'pick'){
+      const inp = document.getElementById('paintTarget');
+      if(inp) inp.value = String(pid);
+      const tp = document.getElementById('paintPid');
+      if(tp) tp.textContent = String(pid);
+      mapShowOps(pid, ((MAP.idx && MAP.idx[String(pid)]) || {}).state || 0);
+      mapSetMode('paint');
+      status('已吸取省 ' + pid + '，已填入涂色目标');
+      return;
+    }
     const rec = (MAP.idx && MAP.idx[String(pid)]) || {};
     mapShowOps(pid, rec.state || 0);
     if(rec.state){

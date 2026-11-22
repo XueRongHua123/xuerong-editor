@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
 
 from xuerong import state
@@ -1321,3 +1322,58 @@ def analyze_layer_chain(layers=None, query="", kind="interacted", dir_filter="",
         "blocked_count": cnt_blocked,
         "top_dirs": idx["top_dirs"][:40],
     }
+
+
+def ensure_writable_file(root, sub, basename):
+    """确保某子目录下的目标文件落入可写顶层（不存在时从叠加链自动单文件接管）。"""
+    if not root and callable(_ROOT_PICKER):
+        root = _ROOT_PICKER()
+    sub = (sub or "").replace("\\", "/").strip("/")
+    basename = os.path.basename(basename or "")
+    if not sub or not basename:
+        return None, "参数不完整"
+
+    top = None
+    for r in (state.roots() or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_readonly_mod(cand):
+            top = cand
+    if not top and root:
+        cand = _top_mod(root)
+        if cand and not is_readonly_mod(cand):
+            top = cand
+    if not top:
+        return None, "找不到可写的 mod 目录"
+
+    owner = _replace_owner(root, sub)
+    if owner and os.path.abspath(owner) != os.path.abspath(top):
+        chain = [os.path.abspath(x) for x in (mod_layers(root) or []) if x]
+        ab_top = os.path.abspath(top)
+        ab_own = os.path.abspath(owner)
+        if ab_own in chain and ab_top in chain and chain.index(ab_own) > chain.index(ab_top):
+            nm = os.path.basename(owner.rstrip("\\/")) or owner
+            return None, ("%s 被 %s 的 replace_path 独占，需要先在「诊断 → 目录写入目标」里"
+                          "接管该目录（独占后只读那一层，单文件复制不生效）" % (sub, nm))
+
+    rel = os.path.join(sub.replace("/", os.sep), basename)
+    dst = os.path.join(top, rel)
+    if os.path.exists(dst):
+        return dst, "已存在"
+
+    src = None
+    for _b, d in (_layer_dirs(sub, root) or []):
+        cand = os.path.join(d, basename)
+        if os.path.isfile(cand):
+            src = cand
+            break
+    if not src:
+        return None, "叠加链里找不到 %s/%s" % (sub, basename)
+
+    os.makedirs(os.path.dirname(dst) or top, exist_ok=True)
+    try:
+        shutil.copyfile(src, dst)
+        invalidate_chain_cache()
+    except Exception as e:
+        return None, "复制失败：%s" % e
+    return dst, "已从 %s 复制单个文件" % (os.path.basename(os.path.dirname(src)) or "父层")

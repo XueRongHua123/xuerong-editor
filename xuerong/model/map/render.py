@@ -12,8 +12,9 @@ from xuerong.core import paths
 from xuerong.core.paths import _layers_find, mod_layers, qa_dir as _qa_dir
 from xuerong.core.text import _first, brace_match, strip_comments
 from xuerong.model.map._inj import load_units
-from xuerong.model.map.io import (_map_dir, _map_files_strict, _map_pick,
-                                 _prov_type_map, map_sources)
+from xuerong.model.map.io import (_map_dir, _map_files_strict,
+                                  _map_pair_compatible, _map_pick,
+                                  _prov_type_map, map_sources)
 from xuerong.model.map.river import _build_rivers_png
 from xuerong.model.map.terrain import _terrain_tex_map
 
@@ -81,8 +82,37 @@ def _tick(stage, sub="", pct=0):
             pass
 
 
-def map_build(force=False, root=None):
-    """生成地图图层（首次约 13 秒），返回 meta。可按 root 指定来源。"""
+def _refresh_layer_only(root, dirp, meta_path, only):
+    """仅局部刷新 terrain.png 或 rivers.png（复用已有 meta 尺寸，避免全量省图重建）。"""
+    if not os.path.exists(meta_path):
+        return None
+    try:
+        meta = json.loads(io.open(meta_path, encoding="utf-8").read())
+        w, h = int(meta.get("w") or 0), int(meta.get("h") or 0)
+    except Exception:
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    t0 = time.time()
+    if only == "terrain":
+        img = _render_terrain(root, w, h, None)
+        if img is None:
+            return None
+        img.save(os.path.join(dirp, "terrain.png"))
+    elif only == "rivers":
+        _build_rivers_png(root, w, h, dirp)
+    else:
+        return None
+    meta["ms"] = int((time.time() - t0) * 1000)
+    meta["built"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    meta["assets"] = {a: os.path.getsize(os.path.join(dirp, a)) for a in state.map_var("MAP_ASSETS")
+                      if os.path.exists(os.path.join(dirp, a))}
+    io.open(meta_path, "w", encoding="utf-8", newline="").write(json.dumps(meta, ensure_ascii=False))
+    return {"ok": True, "cached": False, "only": only, "meta": meta}
+
+
+def map_build(force=False, root=None, only=None):
+    """生成地图图层（首次约 13 秒），返回 meta。可按 root 指定来源，only='terrain'/'rivers' 可局部秒级刷新。"""
     root = _map_pick(root)
     if not root:
         return {"ok": False, "msg": "还没有加载任何 mod"}
@@ -102,6 +132,10 @@ def map_build(force=False, root=None):
                         "built": time.strftime("%Y-%m-%d %H:%M:%S")}, ensure_ascii=False))
     except Exception:
         pass
+    if only in ("terrain", "rivers"):
+        fast = _refresh_layer_only(root, dirp, meta_path, only)
+        if fast is not None:
+            return fast
     if not force and os.path.exists(meta_path):
         try:
             return {"ok": True, "cached": True,
@@ -736,14 +770,12 @@ def _apply_terrain_texture(img, root, w, h, tmap, ids):
         return img
 
 def _terrain_index_trusted(root, layers):
-    """terrain.bmp 是否与 provinces.bmp 同源。
+    """terrain.bmp 是否与 provinces.bmp 兼容（同源或上层单文件接管且尺寸一致）。
     不同源说明 mod 换了地图却没换地形索引图，用它着色会得到与地图无关的分布。"""
     try:
-        _t, tbase = _layers_find("map/terrain.bmp", layers)
-        _p, pbase = _layers_find("map/provinces.bmp", layers)
-        if not _t or not _p:
-            return False
-        return os.path.abspath(tbase or "") == os.path.abspath(pbase or "")
+        t, tbase = _layers_find("map/terrain.bmp", layers)
+        p, pbase = _layers_find("map/provinces.bmp", layers)
+        return _map_pair_compatible(t, tbase, p, pbase, layers)
     except Exception:
         return False
 

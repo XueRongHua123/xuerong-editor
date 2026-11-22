@@ -14,12 +14,13 @@ from urllib.parse import parse_qs, urlparse
 from xuerong.api.router import get, post, prefix
 from xuerong.core import facade_bridge as LG
 from xuerong import state
-from xuerong.core.paths import is_under_game, mod_layers
+from xuerong.core.paths import (ensure_writable_file, is_readonly_mod,
+                                is_under_game, mod_layers)
 from xuerong.model.map import (
-    _ensure_prov_rgb, _map_pick, height_paint, height_sample, map_analysis,
-    map_asset, map_build, map_cache_clear, map_edit_begin, map_edit_commit,
-    map_edit_dab, map_edit_redo, map_edit_state, map_edit_undo, map_generate,
-    map_integrity, map_merge_apply, map_merge_preview, map_meta,
+    _ensure_prov_rgb, _map_pick, height_paint, height_preview, height_sample,
+    map_analysis, map_asset, map_build, map_cache_clear, map_edit_begin,
+    map_edit_commit, map_edit_dab, map_edit_redo, map_edit_state, map_edit_undo,
+    map_generate, map_integrity, map_merge_apply, map_merge_preview, map_meta,
     map_prov_neighbors, map_repair_cross, map_repair_ghost, map_repair_preview,
     prov_terrain_batch, prov_terrain_by_type, prov_terrain_set, river_paint,
     river_preview, river_stats, river_undo, terrain_paint, terrain_types)
@@ -35,14 +36,22 @@ def r_api_map_paint(h, body):
             _layers = mod_layers(_root)
             _top = _layers[-1] if _layers else ""
             _bp = os.path.join(_top, "map", "provinces.bmp")
-            # 写操作只落链顶；链顶没 bmp 就不能涂（避免写到父 mod）
             if not os.path.exists(_bp):
-                h._send({"ok": False,
-                            "msg": "链顶 mod 没有自己的 provinces.bmp（地图来自父 mod），"
-                                   "不能直接涂色；请对提供地图的那个 mod 操作"})
-                return
-        if is_under_game(_bp):
-            h._send({"ok": False, "msg": "原版目录只读，不能涂色"})
+                if bool(body.get("adopt")):
+                    _dst, _amsg = ensure_writable_file(_root, "map", "provinces.bmp")
+                    if not _dst:
+                        h._send({"ok": False, "msg": _amsg})
+                        return
+                    _bp = _dst
+                else:
+                    h._send({"ok": False,
+                                "need_adopt": True,
+                                "rel": "map/provinces.bmp",
+                                "msg": "链顶 mod 没有自己的 provinces.bmp（地图来自父 mod），"
+                                       "需先单文件复制到当前 mod 再涂色"})
+                    return
+        if is_readonly_mod(_bp):
+            h._send({"ok": False, "msg": "原版或工坊只读目录，不能直接涂色"})
             return
         r = {"ok": map_edit_begin(_bp), "bmp": _bp}
     elif act == "dab":
@@ -94,7 +103,9 @@ def r_api_map_cache_clear(h, body):
 
 @post("/api/map_build")
 def r_api_map_build(h, body):
-    h._send(map_build(bool(body.get("force")), (body.get("root") or None)))
+    h._send(map_build(bool(body.get("force")),
+                      (body.get("root") or None),
+                      (body.get("only") or None)))
 
 
 @post("/api/river_paint")
@@ -104,7 +115,8 @@ def r_api_river_paint(h, body):
                            body.get("brush") or 1,
                            bool(body.get("erase")),
                            bool(body.get("new_stroke")),
-                           body.get("root") or None))
+                           body.get("root") or None,
+                           bool(body.get("adopt"))))
 
 
 @post("/api/river_undo")
@@ -183,20 +195,20 @@ def r_api_sr_delete(h, body):
 @post("/api/terrain_batch")
 def r_api_terrain_batch(h, body):
     h._send(prov_terrain_batch(body.get("pids"), body.get("terrain"),
-                                  body.get("root")))
+                               body.get("root"), bool(body.get("adopt"))))
 
 
 @post("/api/terrain_by_type")
 def r_api_terrain_by_type(h, body):
     h._send(prov_terrain_by_type(body.get("from"), body.get("to"),
-                                    body.get("root")))
+                                 body.get("root"), bool(body.get("adopt"))))
 
 
 @post("/api/height_paint")
 def r_api_height_paint(h, body):
     h._send(height_paint(body.get("points") or [], body.get("height"),
-                            body.get("brush", 8), body.get("feather", True),
-                            body.get("root") or None))
+                         body.get("brush", 8), body.get("feather", True),
+                         body.get("root") or None, bool(body.get("adopt"))))
 
 
 @post("/api/height_sample")
@@ -208,13 +220,14 @@ def r_api_height_sample(h, body):
 @post("/api/terrain_paint")
 def r_api_terrain_paint(h, body):
     h._send(terrain_paint(body.get("points"), body.get("terrain"),
-                             body.get("brush"), body.get("root")))
+                          body.get("brush"), body.get("root"),
+                          bool(body.get("adopt"))))
 
 
 @post("/api/terrain_set")
 def r_api_terrain_set(h, body):
     h._send(prov_terrain_set(body.get("pid"), body.get("terrain"),
-                                body.get("root")))
+                             body.get("root"), bool(body.get("adopt"))))
 
 
 @post("/api/railway_edit")
@@ -250,6 +263,16 @@ def r_api_river_preview_png(h, path_only):
         h._send({"ok": False, "msg": "生成河流预览失败"}, 404)
     else:
         h._send(io.open(_rp, "rb").read(), 200, "image/png")
+
+
+@get("/api/height_preview.png")
+def r_api_height_preview_png(h, path_only):
+    qs = parse_qs(urlparse(h.path).query)
+    _hp = height_preview(qs.get("root", [""])[0] or None)
+    if not _hp:
+        h._send({"ok": False, "msg": "生成高程预览失败"}, 404)
+    else:
+        h._send(io.open(_hp, "rb").read(), 200, "image/png")
 
 
 @get("/api/map_meta")

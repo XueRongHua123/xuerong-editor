@@ -14,7 +14,8 @@ import struct
 
 from xuerong import state
 from xuerong.core.paths import (_dir_mtime, _layers_find, _mod_descriptor, _out_path,
-                                _out_read_path, is_under_game, mod_layers)
+                                _out_read_path, ensure_writable_file,
+                                is_readonly_mod, is_under_game, mod_layers)
 
 
 def _map_files(root):
@@ -419,3 +420,72 @@ def map_asset(name, root=None):
         return None
     p = os.path.join(dirp, name)
     return p if os.path.exists(p) else None
+
+
+def _writable_map_top(root, layers=None):
+    """返回叠加链上最顶层可写（非原版且非创意工坊只读目录）的 mod 目录。"""
+    for cand in reversed(layers or (mod_layers(root) if root else [])):
+        if cand and not is_readonly_mod(cand):
+            return cand
+    for r in reversed(state.roots() or []):
+        if r and not is_readonly_mod(r):
+            return r
+    return None
+
+
+def _map_pair_compatible(path_a, base_a, path_b, base_b, layers):
+    """判定两张地图 BMP（如 rivers/terrain/heightmap 与 provinces.bmp）是否同坐标系可用。
+
+    允许子层（或同层）单文件接管覆盖父层，但不允许下层旧图配子层新省图，也不允许尺寸不同。
+    """
+    if not path_a or not path_b:
+        return False
+    ia, ib = bmp_info(path_a), bmp_info(path_b)
+    if not ia or not ib or (ia["w"], ia["h"]) != (ib["w"], ib["h"]):
+        return False
+    ab_a = os.path.abspath(base_a or "")
+    ab_b = os.path.abspath(base_b or "")
+    if ab_a == ab_b:
+        return True
+    chain = [os.path.abspath(x) for x in (layers or []) if x]
+    if ab_a in chain and ab_b in chain:
+        return chain.index(ab_a) >= chain.index(ab_b)
+    return False
+
+
+def _ensure_map_writable(rel_name, root=None, adopt=False):
+    """检查地图单文件可写性；来自只读层或下层父 mod 时支持确认后单文件接管到可写顶层。
+
+    返回 (目标文件路径, 所在层根目录, 错误字典或 None)。
+    """
+    root = _map_pick(root)
+    layers = mod_layers(root) if root else []
+    src, src_base = _layers_find("map/" + rel_name, layers)
+    if not src:
+        return None, None, {"ok": False, "msg": "找不到 map/" + rel_name}
+    top = _writable_map_top(root, layers)
+    ab_src = os.path.abspath(src_base or "")
+    ab_top = os.path.abspath(top or "") if top else ""
+    if not is_readonly_mod(src_base) and ab_top and ab_src == ab_top:
+        return src, src_base, None
+    if not is_readonly_mod(src_base) and not ab_top:
+        return src, src_base, None
+    if not top:
+        return None, None, {
+            "ok": False, "readonly": True,
+            "msg": "map/%s 来自只读目录（%s），不能直接改；请先新建或加载可写 submod"
+                   % (rel_name, os.path.basename(ab_src) or "原版"),
+        }
+    if not adopt:
+        src_name = os.path.basename(ab_src) or "父层"
+        top_name = os.path.basename(ab_top) or "当前 mod"
+        return None, None, {
+            "ok": False, "need_adopt": True,
+            "rel": "map/" + rel_name, "from": src_name, "to": top_name,
+            "msg": "map/%s 来自%s（只读或下层），需先单文件复制到 %s 再编辑"
+                   % (rel_name, src_name, top_name),
+        }
+    dst, msg = ensure_writable_file(root, "map", rel_name)
+    if not dst:
+        return None, None, {"ok": False, "msg": msg}
+    return dst, top, {"adopted": True, "adopt_msg": msg}

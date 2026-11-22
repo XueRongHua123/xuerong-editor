@@ -1,8 +1,8 @@
 {
  "schema": 2,
- "recorded_at": "2026-11-22 14:12:21",
+ "recorded_at": "2026-11-22 15:25:40",
  "counts": {
-  "OK": 225,
+  "OK": 226,
   "INTERNAL": 0,
   "HTTP500": 0,
   "DEAD": 0,
@@ -1159,6 +1159,12 @@
    "method": "GET",
    "state": "OK",
    "status": 200,
+   "msg": ""
+  },
+  "GET /api/height_preview.png": {
+   "method": "GET",
+   "state": "OK",
+   "status": 404,
    "msg": ""
   },
   "GET /api/icon": {

@@ -4,13 +4,43 @@ import io
 import os
 
 from xuerong import state
-from xuerong.core.paths import _layers_find, is_under_game, mod_layers
-from xuerong.model.history import snapshot
-from xuerong.model.map.io import _map_pick, bmp_info
+from xuerong.core.paths import _layers_find, mod_layers
+from xuerong.model.map.io import (_ensure_map_writable, _map_pair_compatible,
+                                  _map_pick, bmp_info)
+
+_CTRL_IDXS = (0, 1, 2)
+_RIVER_CHANNEL_IDXS = tuple(range(3, 12))
+_RIVER_ALL_IDXS = tuple(range(0, 12))
+
+# HOI4 rivers.bmp 标准可视色表（0=绿源头 1=红汇入 2=黄分流 3..11=由浅入深蓝）
+_RIVER_RGBA_MAP = {
+    0: (0, 255, 0, 255),
+    1: (255, 0, 0, 255),
+    2: (255, 252, 0, 255),
+    3: (0, 225, 255, 235),
+    4: (0, 200, 255, 230),
+    5: (0, 150, 255, 230),
+    6: (40, 120, 255, 235),
+    7: (0, 60, 255, 235),
+    8: (0, 0, 225, 235),
+    9: (0, 0, 200, 235),
+    10: (0, 0, 150, 240),
+    11: (0, 70, 200, 245),
+}
+
+
+def _invalidate_river_preview_cache():
+    """写盘或撤销后使河流叠加预览缓存失效。"""
+    stamp = os.path.join(state.map_var("MAP_CACHE_DIR"), "river_preview.stamp")
+    try:
+        if os.path.exists(stamp):
+            os.remove(stamp)
+    except Exception:
+        pass
 
 
 def _def_rgb_kind():
-    """definition.csv 的 RGB → land/sea。擦除时用它决定还原成 255 还是 254。"""
+    """definition.csv 的 RGB → land/sea。擦除或统计时区分陆地与海域。"""
     root = _map_pick(None)
     layers = mod_layers(root) if root else []
     csvp, _base = (_layers_find("map/definition.csv", layers) if layers else (None, None))
@@ -30,7 +60,7 @@ def _def_rgb_kind():
             p = ln.strip().split(";")
             if len(p) >= 5:
                 try:
-                    m[(int(p[1]), int(p[2]), int(p[3]))] = p[4]
+                    m[(int(p[1]), int(p[2]), int(p[3]))] = p[4].strip().lower()
                 except Exception:
                     pass
     except Exception:
@@ -38,6 +68,7 @@ def _def_rgb_kind():
     state.map_var("_DEF_RGB_CACHE")["key"] = key
     state.map_var("_DEF_RGB_CACHE")["map"] = m
     return m
+
 
 def _line_pts(p0, p1):
     """Bresenham：两点之间补齐像素，避免鼠标移动快了变成虚线"""
@@ -60,14 +91,16 @@ def _line_pts(p0, p1):
             y0 += sy
     return pts
 
-def river_paint(points, kind="main", brush=1, erase=False, new_stroke=False, root=None):
+
+def river_paint(points, kind="main", brush=1, erase=False, new_stroke=False, root=None, adopt=False):
     """在地图上画河流（直接写 rivers.bmp 的索引）。
 
     points: [[x,y], ...] 地图像素坐标（和 /api/map_asset 的图同一坐标系）
-    kind:   main / tributary / stream / deep
-    brush:  笔刷半径 1-5
+    kind:   main / stream / tributary / deep / source / flow_in / split
+    brush:  笔刷半径 1-5（控制点 source/flow_in/split 强制单点）
     erase:  True = 擦回陆地/海洋
     new_stroke: 一次拖拽的第一帧，用来把整笔合成一个撤销单元
+    adopt:  True = 若 rivers.bmp 在只读/父层，先单文件接管到可写顶层再写
     """
     if not points:
         return {"ok": False, "msg": "没有落点"}
@@ -76,29 +109,32 @@ def river_paint(points, kind="main", brush=1, erase=False, new_stroke=False, roo
     except Exception:
         brush = 1
     kind = (kind or "main").strip()
-    if not erase and kind not in state.map_var("RIVER_KIND_IDX"):
+    kind_idx = state.map_var("RIVER_KIND_IDX") or {}
+    if not erase and kind not in kind_idx:
         return {"ok": False, "msg": "河型只能是 " + " / ".join(k for k, _l, _i in state.map_var("RIVER_KINDS"))}
+
     root = _map_pick(root)
     layers = mod_layers(root)
-    rbmp, rbase = _layers_find("map/rivers.bmp", layers)
     pbmp, pbase = _layers_find("map/provinces.bmp", layers)
-    if not rbmp:
-        return {"ok": False, "msg": "找不到 map/rivers.bmp"}
     if not pbmp:
         return {"ok": False, "msg": "找不到 map/provinces.bmp"}
-    if os.path.abspath(rbase or "") != os.path.abspath(pbase or ""):
-        return {"ok": False, "msg": "rivers.bmp 与 provinces.bmp 不同源，画上去会错位"}
-    if is_under_game(rbmp):
-        return {"ok": False, "msg": "这张河流图来自原版目录（只读），不能直接改"}
+    rbmp, rbase, werr = _ensure_map_writable("rivers.bmp", root=root, adopt=adopt)
+    if not rbmp:
+        return werr
+    layers = mod_layers(root)
+    if not _map_pair_compatible(rbmp, rbase, pbmp, pbase, layers):
+        return {"ok": False, "msg": "rivers.bmp 与 provinces.bmp 尺寸或层级不匹配，画上去会错位"}
+
     info = bmp_info(rbmp)
     if not info or info.get("bpp") != 8:
         return {"ok": False, "msg": "rivers.bmp 不是 8 位索引图，无法按像素画"}
     W, H = info["w"], info["h"]
     off0, rowb = info["offset"], info["row"]
     top_down = bool(info.get("top_down"))
-    new_idx = state.map_var("RIVER_KIND_IDX").get(kind, 3)
+    new_idx = kind_idx.get(kind, 3)
+    is_ctrl = (not erase) and (new_idx in _CTRL_IDXS)
+    eff_brush = 1 if is_ctrl else brush
 
-    # 把这一批点连成线，并接上同一笔的上一个末点（跨请求不断线）
     seq = []
     for pt in points:
         try:
@@ -107,20 +143,24 @@ def river_paint(points, kind="main", brush=1, erase=False, new_stroke=False, roo
             continue
     if not seq:
         return {"ok": False, "msg": "坐标不合法"}
-    pts = []
-    if state.map_var("_RIVER_LAST").get("path") == rbmp and state.map_var("_RIVER_LAST").get("pt") and not new_stroke:
-        pts.extend(_line_pts(state.map_var("_RIVER_LAST")["pt"], seq[0])[1:])
-    pts.append(seq[0])
-    for a, b in zip(seq, seq[1:]):
-        pts.extend(_line_pts(a, b)[1:])
-    state.map_var("_RIVER_LAST")["path"] = rbmp
-    state.map_var("_RIVER_LAST")["pt"] = seq[-1]
+
+    if is_ctrl:
+        pts = [seq[-1]]
+    else:
+        pts = []
+        if state.map_var("_RIVER_LAST").get("path") == rbmp and state.map_var("_RIVER_LAST").get("pt") and not new_stroke:
+            pts.extend(_line_pts(state.map_var("_RIVER_LAST")["pt"], seq[0])[1:])
+        pts.append(seq[0])
+        for a, b in zip(seq, seq[1:]):
+            pts.extend(_line_pts(a, b)[1:])
+        state.map_var("_RIVER_LAST")["path"] = rbmp
+        state.map_var("_RIVER_LAST")["pt"] = seq[-1]
 
     hit = set()
     for (cx, cy) in pts:
-        for dy in range(-brush + 1, brush):
-            for dx in range(-brush + 1, brush):
-                if brush > 1 and dx * dx + dy * dy > (brush - 1) * (brush - 1) + 1:
+        for dy in range(-eff_brush + 1, eff_brush):
+            for dx in range(-eff_brush + 1, eff_brush):
+                if eff_brush > 1 and dx * dx + dy * dy > (eff_brush - 1) * (eff_brush - 1) + 1:
                     continue
                 x, y = cx + dx, cy + dy
                 if 0 <= x < W and 0 <= y < H:
@@ -132,8 +172,6 @@ def river_paint(points, kind="main", brush=1, erase=False, new_stroke=False, roo
         state.map_var("_RIVER_UNDO").append({"path": rbmp, "px": {}})
         if len(state.map_var("_RIVER_UNDO")) > 30:
             state.map_var("_RIVER_UNDO").pop(0)
-        # 备份一笔一次就够：每次 mousemove 都 snapshot 会把整个 bmp 复制几十份
-        snapshot(rbmp)
     undo = state.map_var("_RIVER_UNDO")[-1]
 
     rgb2kind = _def_rgb_kind() if erase else {}
@@ -148,7 +186,6 @@ def river_paint(points, kind="main", brush=1, erase=False, new_stroke=False, roo
                 old_b = f.read(1)
                 old = old_b[0] if old_b else 0
                 if erase:
-                    # 还原成「原本的底色」：看 provinces.bmp 这个像素属于陆还是海
                     new = state.map_var("RIVER_LAND")
                     if rgb2kind and pb and pinfo:
                         pfy = y if pinfo.get("top_down") else (pinfo["h"] - 1 - y)
@@ -160,15 +197,26 @@ def river_paint(points, kind="main", brush=1, erase=False, new_stroke=False, roo
                     new = new_idx
                 if old == new:
                     continue
-                undo["px"][(x, y)] = old
+                if (x, y) not in undo["px"]:
+                    undo["px"][(x, y)] = old
                 f.seek(off0 + fy * rowb + x)
                 f.write(bytes((new,)))
                 n += 1
     finally:
         if pb:
             pb.close()
-    return {"ok": True, "painted": n, "to": ("擦除" if erase else kind),
-            "msg": ("擦掉 %d 个像素" % n) if erase else ("画了 %d 个像素（%s）" % (n, dict((k, l) for k, l, _i in state.map_var("RIVER_KINDS")).get(kind, kind)))}
+
+    if n:
+        _invalidate_river_preview_cache()
+    label = dict((k, l) for k, l, _i in state.map_var("RIVER_KINDS")).get(kind, kind)
+    msg = ("擦掉 %d 个像素" % n) if erase else ("画了 %d 个像素（%s）" % (n, label))
+    if werr and werr.get("adopted"):
+        msg = (werr.get("adopt_msg") or "已单文件接管 map/rivers.bmp") + "；" + msg
+    out = {"ok": True, "painted": n, "to": ("擦除" if erase else kind), "msg": msg}
+    if werr and werr.get("adopted"):
+        out["adopted"] = True
+    return out
+
 
 def river_undo(root=None):
     """撤销上一笔（一笔 = 一次按下到松开）"""
@@ -190,11 +238,38 @@ def river_undo(root=None):
             f.seek(off0 + fy * rowb + x)
             f.write(bytes((old,)))
     state.map_var("_RIVER_LAST")["pt"] = None
+    _invalidate_river_preview_cache()
     return {"ok": True, "restored": len(item["px"]),
             "msg": "撤销了上一笔（%d 个像素）" % len(item["px"])}
 
+
+def _build_land_mask(pbmp, W, H, rgb2kind):
+    """返回长度为 W*H 的陆地掩码（1=陆地, 0=海洋/湖泊/未知）。"""
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    with Image.open(pbmp) as im2:
+        raw = im2.convert("RGB").tobytes()
+    try:
+        import numpy as np
+        arr = np.frombuffer(raw, dtype=np.uint8).reshape((H * W, 3))
+        codes = (arr[:, 0].astype(np.uint32) << 16) | (arr[:, 1].astype(np.uint32) << 8) | arr[:, 2].astype(np.uint32)
+        land_codes = np.array(
+            [(r << 16) | (g << 8) | b for (r, g, b), k in rgb2kind.items() if k == "land"],
+            dtype=np.uint32,
+        )
+        if land_codes.size == 0:
+            return bytearray(W * H)
+        return np.isin(codes, land_codes).astype(np.uint8).tobytes()
+    except Exception:
+        land = bytearray(W * H)
+        for i in range(0, min(len(raw), W * H * 3), 3):
+            if rgb2kind.get((raw[i], raw[i + 1], raw[i + 2])) == "land":
+                land[i // 3] = 1
+        return land
+
+
 def river_stats(root=None):
-    """读 rivers.bmp + provinces.bmp，算索引分布 / 落海的河 / 连通块"""
+    """读 rivers.bmp + provinces.bmp，统计河道、源头/汇流控制点、2×2 粗块、落海与断头河。"""
     root = _map_pick(root)
     layers = mod_layers(root)
     rbmp, _rb = _layers_find("map/rivers.bmp", layers)
@@ -205,36 +280,63 @@ def river_stats(root=None):
         from PIL import Image
         Image.MAX_IMAGE_PIXELS = None
         with Image.open(rbmp) as im:
-            # 必须是索引值本身。convert("L") 会把索引按调色板折成灰度，
-            # 254（RGB 122,122,122）就变成 122 —— 统计出来的「河」全是假的。
             if im.mode not in ("P", "L"):
                 im = im.convert("P")
             W, H = im.size
             riv = im.tobytes()
-        land = None
-        if pbmp:
-            with Image.open(pbmp) as im2:
-                raw = im2.convert("RGB").tobytes()
-            rgb2kind = _def_rgb_kind()
-            land = bytearray(W * H)
-            for i in range(0, len(raw), 3):
-                k = rgb2kind.get((raw[i], raw[i + 1], raw[i + 2]))
-                land[i // 3] = 1 if k == "land" else 0
+        land = _build_land_mask(pbmp, W, H, _def_rgb_kind()) if pbmp else None
     except Exception as e:
         return {"ok": False, "msg": "读图失败：%s" % str(e)[:80]}
     if len(riv) < W * H:
         return {"ok": False, "msg": "rivers.bmp 数据长度不足"}
-    river_val = set(state.map_var("RIVER_KIND_IDX").values())
+
+    river_val = set(_RIVER_ALL_IDXS) | set((state.map_var("RIVER_KIND_IDX") or {}).values())
+    ctrl_val = set(_CTRL_IDXS)
     dist = {}
     river_px = []
-    for i, v in enumerate(riv[:W * H]):
-        dist[v] = dist.get(v, 0) + 1
-        if v in river_val:
-            river_px.append(i)
-    in_sea = 0
-    if land is not None:
-        in_sea = sum(1 for i in river_px if not land[i])
-    # 连通块：只走河道像素，4 邻接
+    sources = flow_ins = splits = 0
+    thick_2x2 = 0
+
+    try:
+        import numpy as np
+        arr = np.frombuffer(riv, dtype=np.uint8, count=W * H).reshape((H, W))
+        uniq, cnts = np.unique(arr, return_counts=True)
+        dist = {int(u): int(c) for u, c in zip(uniq, cnts)}
+        sources = dist.get(0, 0)
+        flow_ins = dist.get(1, 0)
+        splits = dist.get(2, 0)
+        rmask = arr <= 11
+        extra_vals = [v for v in river_val if v > 11]
+        if extra_vals:
+            rmask = rmask | np.isin(arr, extra_vals)
+        flat_r = rmask.ravel()
+        river_px = np.flatnonzero(flat_r).tolist()
+        if W > 1 and H > 1:
+            thick_2x2 = int(np.count_nonzero(rmask[:-1, :-1] & rmask[1:, :-1] & rmask[:-1, 1:] & rmask[1:, 1:]))
+        in_sea = 0
+        if land is not None and river_px:
+            larr = np.frombuffer(land, dtype=np.uint8, count=W * H)
+            in_sea = int(np.count_nonzero(flat_r & (larr == 0)))
+    except Exception:
+        for i, v in enumerate(riv[:W * H]):
+            dist[v] = dist.get(v, 0) + 1
+            if v in river_val:
+                river_px.append(i)
+                if v == 0:
+                    sources += 1
+                elif v == 1:
+                    flow_ins += 1
+                elif v == 2:
+                    splits += 1
+        in_sea = sum(1 for i in river_px if not land[i]) if land is not None else 0
+        rs_tmp = set(river_px)
+        for i in river_px:
+            x, y = i % W, i // W
+            if x + 1 < W and y + 1 < H:
+                if (i + 1) in rs_tmp and (i + W) in rs_tmp and (i + W + 1) in rs_tmp:
+                    thick_2x2 += 1
+
+    # 连通块：走所有河流像素（含控制索引 0/1/2），4 邻接
     seen = bytearray(W * H)
     blocks = []
     rs = set(river_px)
@@ -244,11 +346,14 @@ def river_stats(root=None):
         stack = [i]
         seen[i] = 1
         cnt = 0
+        has_ctrl = False
         touches_sea = False
         touches_edge = False
         while stack:
             j = stack.pop()
             cnt += 1
+            if riv[j] in ctrl_val:
+                has_ctrl = True
             x, y = j % W, j // W
             if x == 0 or y == 0 or x == W - 1 or y == H - 1:
                 touches_edge = True
@@ -261,28 +366,69 @@ def river_stats(root=None):
                     stack.append(k)
                 elif land is not None and land[k] == 0:
                     touches_sea = True
-        blocks.append({"pixels": cnt, "sea": touches_sea, "edge": touches_edge})
+        blocks.append({"pixels": cnt, "sea": touches_sea, "edge": touches_edge, "has_ctrl": has_ctrl})
+
     blocks.sort(key=lambda b: -b["pixels"])
     dead = [b for b in blocks if not b["sea"] and not b["edge"]]
-    msgs = []
-    msgs.append("河道像素 %d 个，分成 %d 段" % (len(river_px), len(blocks)))
+    no_src = [b for b in blocks if not b["has_ctrl"]]
+    msgs = ["河道像素 %d 个，分成 %d 段（源头 %d / 汇入 %d / 分流 %d）"
+            % (len(river_px), len(blocks), sources, flow_ins, splits)]
     if in_sea:
         msgs.append("有 %d 个河道像素落在海里（河画到海上了）" % in_sea)
     if dead:
         msgs.append("%d 段河没有连到海也没有连到地图边缘（会变成断头河）" % len(dead))
-    if not in_sea and not dead and river_px:
-        msgs.append("没有落海、没有断头，看起来是通的")
+    if no_src:
+        msgs.append("%d 段河缺少源头(绿 0)或汇入/分流(红 1/黄 2)起止像素" % len(no_src))
+    if thick_2x2:
+        msgs.append("存在 %d 处 2×2 粗块（HOI4 要求 1px 单像素河线）" % thick_2x2)
+    if not in_sea and not dead and not no_src and not thick_2x2 and river_px:
+        msgs.append("起止控制点与入海连通正常，符合 1px 单线规则")
     if not river_px:
         msgs.append("整张图还没有河")
     return {"ok": True, "width": W, "height": H,
-            "dist": {str(k): v for k, v in sorted(dist.items(), key=lambda x: -x[1])[:8]},
+            "dist": {str(k): v for k, v in sorted(dist.items(), key=lambda x: -x[1])[:12]},
             "river_pixels": len(river_px), "in_sea": in_sea,
             "blocks": len(blocks), "dead": len(dead),
+            "no_source_blocks": len(no_src), "thick_2x2": thick_2x2,
+            "sources": sources, "flow_ins": flow_ins, "splits": splits,
             "largest": blocks[0]["pixels"] if blocks else 0,
             "msg": "；".join(msgs), "lines": msgs}
 
+
+def _indices_to_rgba_image(idx_bytes, W, H, cmap, bg_idxs=None, pal=None):
+    """把 8 位索引字节转为透明底 RGBA Image，优先用 numpy 向量化查表。"""
+    from PIL import Image
+    try:
+        import numpy as np
+        lut = np.zeros((256, 4), dtype=np.uint8)
+        for v in range(256):
+            if bg_idxs is not None and v in bg_idxs:
+                continue
+            if v in cmap:
+                lut[v] = cmap[v]
+            elif pal and len(pal) > v * 3 + 2 and bg_idxs is not None:
+                lut[v] = (pal[v * 3], pal[v * 3 + 1], pal[v * 3 + 2], 225)
+        arr = np.frombuffer(idx_bytes, dtype=np.uint8, count=W * H)
+        rgba = lut[arr].reshape((H, W, 4))
+        return Image.fromarray(rgba, mode="RGBA")
+    except Exception:
+        out = bytearray(W * H * 4)
+        for i, v in enumerate(idx_bytes[:W * H]):
+            if bg_idxs is not None and v in bg_idxs:
+                continue
+            c = cmap.get(v)
+            if c is None:
+                if pal and len(pal) > v * 3 + 2 and bg_idxs is not None:
+                    c = (pal[v * 3], pal[v * 3 + 1], pal[v * 3 + 2], 225)
+                else:
+                    continue
+            o = i * 4
+            out[o], out[o + 1], out[o + 2], out[o + 3] = c
+        return Image.frombytes("RGBA", (W, H), bytes(out))
+
+
 def river_preview(root=None):
-    """生成一张叠加用的 PNG：河道上色，其余透明。返回路径。"""
+    """生成一张叠加用的 PNG：河道与控制点(0/1/2)上色，其余透明。返回路径。"""
     root = _map_pick(root)
     layers = mod_layers(root)
     rbmp, _rb = _layers_find("map/rivers.bmp", layers)
@@ -291,12 +437,14 @@ def river_preview(root=None):
     outc = os.path.join(state.map_var("MAP_CACHE_DIR"), "river_preview.png")
     try:
         mt = int(os.path.getmtime(rbmp))
+        sz = int(os.path.getsize(rbmp))
     except Exception:
-        mt = 0
+        mt, sz = 0, 0
     stamp = os.path.join(state.map_var("MAP_CACHE_DIR"), "river_preview.stamp")
+    sig = "%s|%s|%s" % (rbmp, mt, sz)
     try:
         if os.path.exists(outc) and os.path.exists(stamp):
-            if io.open(stamp, encoding="utf-8").read().strip() == "%s|%s" % (rbmp, mt):
+            if io.open(stamp, encoding="utf-8").read().strip() == sig:
                 return outc
     except Exception:
         pass
@@ -306,31 +454,19 @@ def river_preview(root=None):
         with Image.open(rbmp) as im:
             idx = im.convert("P") if im.mode != "P" else im.copy()
             idx.load()
-        pal = idx.getpalette() or []
         W, H = idx.size
-        data = idx.tobytes()
-        out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        px = out.load()
-        cmap = {3: (0, 210, 255, 230), 6: (40, 120, 255, 230),
-                4: (130, 220, 255, 220), 11: (0, 70, 200, 240)}
-        for y in range(H):
-            base = y * W
-            for x in range(W):
-                v = data[base + x]
-                c = cmap.get(v)
-                if c:
-                    px[x, y] = c
+        out = _indices_to_rgba_image(idx.tobytes(), W, H, _RIVER_RGBA_MAP)
         os.makedirs(state.map_var("MAP_CACHE_DIR"), exist_ok=True)
         out.save(outc)
-        io.open(stamp, "w", encoding="utf-8", newline="\n").write("%s|%s" % (rbmp, mt))
+        io.open(stamp, "w", encoding="utf-8", newline="\n").write(sig)
         return outc
     except Exception:
         return None
 
-def _build_rivers_png(root, w, h, dirp):
-    """把 rivers.bmp 转成 RGBA 叠层：背景索引透明，河流保留原色。
 
-    rivers.bmp 是调色板图，背景用 254/255，其余索引才是河。"""
+def _build_rivers_png(root, w, h, dirp):
+    """把 rivers.bmp 转成 RGBA 叠层：背景索引透明，河流保留标准色。"""
+    from collections import Counter
     from PIL import Image
     Image.MAX_IMAGE_PIXELS = None
     rp, _ = _layers_find("map/rivers.bmp", mod_layers(root))
@@ -341,27 +477,13 @@ def _build_rivers_png(root, w, h, dirp):
             if im.size != (w, h):
                 return 0
             pal = im.getpalette() or []
-            src = im.convert("P")
+            src = im.convert("P") if im.mode != "P" else im
             raw = src.tobytes()
-            # 找出背景索引（出现最多的两个，通常是 254/255）
-            from collections import Counter
             cnt = Counter(raw)
-            bg = set([idx for idx, _c in cnt.most_common(2)])
-            out = bytearray(w * h * 4)
-            for i, v in enumerate(raw):
-                o = i * 4
-                if v in bg:
-                    continue
-                r = pal[v * 3] if len(pal) > v * 3 else 80
-                g = pal[v * 3 + 1] if len(pal) > v * 3 + 1 else 120
-                b = pal[v * 3 + 2] if len(pal) > v * 3 + 2 else 200
-                out[o] = r
-                out[o + 1] = g
-                out[o + 2] = b
-                out[o + 3] = 220
-            img = Image.frombytes("RGBA", (w, h), bytes(out))
+            bg = set(idx for idx, _c in cnt.most_common(2) if idx in (254, 255)) or {254, 255}
+            img = _indices_to_rgba_image(raw, w, h, _RIVER_RGBA_MAP, bg_idxs=bg, pal=pal)
             img.save(os.path.join(dirp, "rivers.png"))
-            return len(cnt) - len(bg)
+            return len([k for k in cnt if k not in bg])
     except Exception as e:
         print("  河流图层失败:", e)
         return 0

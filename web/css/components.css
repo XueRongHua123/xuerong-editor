@@ -597,6 +597,7 @@
     border-color:var(--accent);color:var(--accent);font-weight:600}
   /* ---------- v1.14.0 河流层 ---------- */
   #mapRivers{position:absolute;left:0;top:0;pointer-events:none;z-index:3;display:none}
+  #mapHeight{position:absolute;left:0;top:0;pointer-events:none;z-index:2;display:none}
   /* ---------- v1.18.2 空态卡片（避免撑满侧栏） ---------- */
   .mp-empty-card{padding:10px 12px;border:1px solid var(--line);border-radius:8px;
     background:var(--panel2);max-width:100%;box-sizing:border-box;word-break:break-word}

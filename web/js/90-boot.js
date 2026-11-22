@@ -1129,7 +1129,7 @@ document.getElementById('mckClose').onclick = ()=>{ document.getElementById('map
 
 document.getElementById('mapSearch').addEventListener('keydown', e=>{ if(e.key === 'Enter') mapSearchGo(); });
 
-['mapLProv','mapLState','mapLEdges','mapLBase','mapLPolit','mapLRegion','mapLTerrain','mapLContinent'].forEach(id=>{  const el = document.getElementById(id); if(el) el.addEventListener('change', mapApplyLayers); });
+['mapLProv','mapLState','mapLEdges','mapLBase','mapLPolit','mapLRegion','mapLTerrain','mapLContinent','mapLRivers','mapLHeight'].forEach(id=>{  const el = document.getElementById(id); if(el) el.addEventListener('change', mapApplyLayers); });
 
  if(mapOpEl) mapOpEl.addEventListener('input', mapApplyLayers);
 

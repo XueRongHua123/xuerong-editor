@@ -41,6 +41,7 @@ from xuerong.core.paths import (_layer_dirs, _chain_layers, _start_date_for, pdx
                                 _enabled_mod_order, _find_mod_by_name, _mod_display_name, _mod_descriptor,
                                 _mod_dep_chain, mod_layers, _layers_find, _replace_owner,
                                 _top_mod, write_base, is_under_game, is_readonly_mod,
+                                ensure_writable_file,
                                 detect_game_version, discover_mods,
                                 analyze_layer_chain, invalidate_chain_cache,
                                 _load_options, _layer_files, effective_layer_files,
@@ -239,69 +240,8 @@ _state.bind_facade()
 OPTIONS = _state.OPTIONS          # 容器，门面与 state 指向同一个 dict
 
 def ensure_file_writable(root, sub, basename):
-    """确保 mod 里某个文件可写，返回 (目标路径, 说明) 或 (None, 错误)。
-
-    两种情形：
-
-    1. 目录已经被某一层 replace_path 独占（比如 muvluvCN 占了 history/states）
-       → 那一层才是游戏真正读的地方，必须整目录接管，单文件复制没用。
-       返回第一个元素仍是想写的路径，第二个元素说明需要先接管。
-
-    2. 目录没有被独占（原版环境都是这种）
-       → 只把要改的那一个文件复制到自己的 mod，同名覆盖。
-       这样原版其余文件照常生效，不会因为 replace_path 把整个目录清空。
-    """
-    root = _map_pick(root)
-    sub = (sub or "").replace("\\", "/").strip("/")
-    basename = os.path.basename(basename or "")
-    if not sub or not basename:
-        return None, "参数不完整"
-
-    top = None
-    for r in (ROOTS or []):
-        lay = mod_layers(r) or [r]
-        cand = lay[-1] if lay else r
-        if cand and not is_under_game(cand):
-            top = cand
-    if not top and root:
-        cand = _top_mod(root)
-        if cand and not is_under_game(cand):
-            top = cand
-    if not top:
-        return None, "找不到可写的 mod 目录"
-
-    owner = _replace_owner(root, sub)
-    if owner and os.path.abspath(owner) != os.path.abspath(top):
-        chain = [os.path.abspath(x) for x in (mod_layers(root) or []) if x]
-        ab_top = os.path.abspath(top)
-        ab_own = os.path.abspath(owner)
-        if ab_own in chain and ab_top in chain and chain.index(ab_own) > chain.index(ab_top):
-            nm = os.path.basename(owner.rstrip("\\/")) or owner
-            return None, ("%s 被 %s 的 replace_path 独占，需要先在「诊断 → 目录写入目标」里"
-                          "接管该目录（独占后只读那一层，单文件复制不生效）" % (sub, nm))
-
-    rel = os.path.join(sub.replace("/", os.sep), basename)
-    dst = os.path.join(top, rel)
-    if os.path.exists(dst):
-        return dst, "已存在"
-
-    # 找源文件：沿 _layer_dirs（已按 replace_path 截断）从子到父找第一个存在它的层
-    src = None
-    for _b, d in (_layer_dirs(sub, root) or []):
-        cand = os.path.join(d, basename)
-        if os.path.isfile(cand):
-            src = cand
-            break
-    if not src:
-        return None, "叠加链里找不到 %s/%s" % (sub, basename)
-
-    os.makedirs(os.path.dirname(dst) or top, exist_ok=True)
-    try:
-        import shutil as _sh
-        _sh.copyfile(src, dst)
-    except Exception as e:
-        return None, "复制失败：%s" % e
-    return dst, "已从 %s 复制单个文件" % (os.path.basename(os.path.dirname(src)) or "父层")
+    """确保 mod 里某个文件可写（复用 core.paths.ensure_writable_file）。"""
+    return ensure_writable_file(_map_pick(root), sub, basename)
 
 
 
@@ -5758,14 +5698,17 @@ def supply_areas(root=None):
 
 
 
-# ---------- v1.23.48 河流绘制 ----------
-# rivers.bmp 是 8 位索引图：255=陆地 254=海洋，河道用 3/6/4/11 这几档索引。
-# 方向是拿省份类型做面积统计反解出来的（原版 97.7% / ES 98.7%），不是猜的。
+# ---------- v1.23.48 / v1.26.2 河流绘制 ----------
+# rivers.bmp 是 8 位索引图：255=陆地 254=海洋；0=源头(绿) 1=汇入(红) 2=分流(黄)；
+# 河道主体用 3..11（常用 3/4/6/11）。
 _state.set_map_var("RIVER_KINDS", (
-    ("main",      "河流（主干）",   3),
-    ("tributary", "支流",           6),
-    ("stream",    "小溪",           4),
-    ("deep",      "深河（可通航）",  11),
+    ("main",      "河流（主干 3）",   3),
+    ("stream",    "小溪（细 4）",     4),
+    ("tributary", "支流（中 6）",     6),
+    ("deep",      "深河（通航 11）",  11),
+    ("source",    "源头起点（绿 0）", 0),
+    ("flow_in",   "汇入主干（红 1）", 1),
+    ("split",     "分流岔口（黄 2）", 2),
 ))
 _state.set_map_var("RIVER_KIND_IDX", {k: i for k, _l, i in _state.map_var("RIVER_KINDS")})
 _state.set_map_var("RIVER_LAND", 255)

@@ -223,7 +223,7 @@ const MAP = {x: 0, y: 0, k: 0.24, w: 5632, h: 2048, meta: null, ready: false, id
 let LOC_MISS = null;
 
 
-const MAP_MODE_TEXT = {view: '浏览', state: '改州归属', paint: '涂色（开发中）', pick: '吸管（开发中）'};
+const MAP_MODE_TEXT = {view: '浏览', state: '改州归属', paint: '涂色改省界', pick: '吸管取省'};
 
 
 let MAP_LAST_PID = null, MAP_LAST_STATE = null;

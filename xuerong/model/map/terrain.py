@@ -8,7 +8,8 @@ from xuerong import state
 from xuerong.core.paths import _layers_find, mod_layers
 from xuerong.core.text import _atomic_write, brace_match, strip_comments
 from xuerong.model.history import snapshot
-from xuerong.model.map.io import (_map_pick, _refine_load_ids, bmp_info,
+from xuerong.model.map.io import (_ensure_map_writable, _map_pair_compatible,
+                                  _map_pick, _refine_load_ids, bmp_info,
                                   bmp_write_rect_8)
 
 
@@ -73,7 +74,7 @@ def terrain_types(root=None):
     return {"ok": True, "items": items, "count": len(items),
             "msg": "共 %d 种地形类型" % len(items)}
 
-def prov_terrain_set(pid, terrain, root=None):
+def prov_terrain_set(pid, terrain, root=None, adopt=False):
     """把某个省的地形改成指定类型。
 
     同时做两件事：
@@ -87,17 +88,17 @@ def prov_terrain_set(pid, terrain, root=None):
         return {"ok": False, "msg": "参数不完整"}
     root = _map_pick(root)
     layers = mod_layers(root)
-    csvp, csvbase = _layers_find("map/definition.csv", layers)
-    tbmp, tbase = _layers_find("map/terrain.bmp", layers)
-    if not csvp:
-        return {"ok": False, "msg": "找不到 definition.csv"}
-    if not tbmp:
-        return {"ok": False, "msg": "找不到 terrain.bmp"}
-    # terrain.bmp 与 provinces.bmp 必须同源，否则改 bmp 没有意义（会画出错误的地形）
     pbmp, pbase = _layers_find("map/provinces.bmp", layers)
-    if os.path.abspath(tbase or "") != os.path.abspath(pbase or ""):
+    csvp, _cbase, cerr = _ensure_map_writable("definition.csv", root=root, adopt=adopt)
+    if not csvp:
+        return cerr
+    tbmp, tbase, terr = _ensure_map_writable("terrain.bmp", root=root, adopt=adopt)
+    if not tbmp:
+        return terr
+    layers = mod_layers(root)
+    if pbmp and not _map_pair_compatible(tbmp, tbase, pbmp, pbase, layers):
         return {"ok": False,
-                "msg": "terrain.bmp 与 provinces.bmp 不同源（mod 换了地图没换地形图），改地形会错位"}
+                "msg": "terrain.bmp 与 provinces.bmp 尺寸或层级不匹配（mod 换了地图没换地形图），改地形会错位"}
 
     t2i, idx2type = _terrain_type_to_index(root)
     if terrain not in t2i:
@@ -166,20 +167,21 @@ def prov_terrain_set(pid, terrain, root=None):
             "msg": "省 %d 地形 %s → %s（%d 像素，索引 %d），需重建图层" % (
                 pid, old_type, terrain, len(px), new_idx)}
 
-def _terrain_common(root, terrain):
-    """批量改地形的公共准备：找文件、查索引、验同源。
-    返回 (csvp, tbmp, new_idx, ids, w, h, err)"""
+def _terrain_common(root, terrain, adopt=False):
+    """批量改地形的公共准备：找文件、校验可写、查索引、验兼容。
+    返回 (csvp, tbmp, new_idx, ids, w, h, err_dict_or_str)"""
     root = _map_pick(root)
     layers = mod_layers(root)
-    csvp, csvbase = _layers_find("map/definition.csv", layers)
-    tbmp, tbase = _layers_find("map/terrain.bmp", layers)
     pbmp, pbase = _layers_find("map/provinces.bmp", layers)
+    csvp, _cbase, cerr = _ensure_map_writable("definition.csv", root=root, adopt=adopt)
     if not csvp:
-        return None, None, None, None, 0, 0, "找不到 definition.csv"
+        return None, None, None, None, 0, 0, cerr
+    tbmp, tbase, terr = _ensure_map_writable("terrain.bmp", root=root, adopt=adopt)
     if not tbmp:
-        return None, None, None, None, 0, 0, "找不到 terrain.bmp"
-    if os.path.abspath(tbase or "") != os.path.abspath(pbase or ""):
-        return None, None, None, None, 0, 0, "terrain.bmp 与 provinces.bmp 不同源，改地形会错位"
+        return None, None, None, None, 0, 0, terr
+    layers = mod_layers(root)
+    if pbmp and not _map_pair_compatible(tbmp, tbase, pbmp, pbase, layers):
+        return None, None, None, None, 0, 0, "terrain.bmp 与 provinces.bmp 尺寸或层级不匹配，改地形会错位"
     t2i, _idx2type = _terrain_type_to_index(root)
     if terrain not in t2i:
         return None, None, None, None, 0, 0, "terrain.txt 里没有类型 %s" % terrain
@@ -243,7 +245,7 @@ def _terrain_apply(csvp, tbmp, ids, w, h, pid_set, new_idx, renumber_from=None):
         pass
     return len(changed_pids), len(pxmap), old_types
 
-def prov_terrain_batch(pids, terrain, root=None):
+def prov_terrain_batch(pids, terrain, root=None, adopt=False):
     """批量改多个省的地形（一次读写）"""
     terrain = (terrain or "").strip()
     if not pids or not terrain:
@@ -255,9 +257,9 @@ def prov_terrain_batch(pids, terrain, root=None):
     if not want:
         return {"ok": False, "msg": "没有有效的省号"}
 
-    csvp, tbmp, new_idx, ids, w, h, err = _terrain_common(root, terrain)
+    csvp, tbmp, new_idx, ids, w, h, err = _terrain_common(root, terrain, adopt=adopt)
     if err:
-        return {"ok": False, "msg": err}
+        return err if isinstance(err, dict) else {"ok": False, "msg": err}
 
     # 找出真正要改的（已经是指定类型的跳过）
     raw = io.open(csvp, encoding="utf-8", errors="replace").read()
@@ -279,7 +281,7 @@ def prov_terrain_batch(pids, terrain, root=None):
             "msg": "%d 个省改成 %s（%d 像素），%d 个已是该类型跳过 · 需重建图层" % (
                 n_pid, terrain, n_px, len(want) - n_pid)}
 
-def prov_terrain_by_type(from_type, to_type, root=None):
+def prov_terrain_by_type(from_type, to_type, root=None, adopt=False):
     """把某一地形的所有省改成另一种（先从 csv 查，再批量改）"""
     from_type = (from_type or "").strip()
     to_type = (to_type or "").strip()
@@ -297,13 +299,22 @@ def prov_terrain_by_type(from_type, to_type, root=None):
             pids.append(int(p[0]))
     if not pids:
         return {"ok": False, "msg": "没有地形为 %s 的省" % from_type}
-    r = prov_terrain_batch(pids, to_type, root)
+    r = prov_terrain_batch(pids, to_type, root, adopt=adopt)
     if r.get("ok"):
         r["msg"] = "把 %d 个 %s 改成了 %s · 需重建图层" % (
             r.get("changed", 0), from_type, to_type)
     return r
 
-def height_paint(points, height, brush=8, feather=True, root=None):
+def _invalidate_height_preview_cache():
+    stamp = os.path.join(state.map_var("MAP_CACHE_DIR"), "height_preview.stamp")
+    try:
+        if os.path.exists(stamp):
+            os.remove(stamp)
+    except Exception:
+        pass
+
+
+def height_paint(points, height, brush=8, feather=True, root=None, adopt=False):
     """画笔式刷高程：直接改 heightmap.bmp 的灰度。
 
     HOI4 的 heightmap.bmp 是 8 位灰度，0 = 海平面，值越大越高。
@@ -326,12 +337,13 @@ def height_paint(points, height, brush=8, feather=True, root=None):
         return {"ok": False, "msg": "没有落点"}
     root = _map_pick(root)
     layers = mod_layers(root)
-    hbmp, hbase = _layers_find("map/heightmap.bmp", layers)
     pbmp, pbase = _layers_find("map/provinces.bmp", layers)
+    hbmp, hbase, herr = _ensure_map_writable("heightmap.bmp", root=root, adopt=adopt)
     if not hbmp:
-        return {"ok": False, "msg": "找不到 heightmap.bmp"}
-    if os.path.abspath(hbase or "") != os.path.abspath(pbase or ""):
-        return {"ok": False, "msg": "heightmap.bmp 与 provinces.bmp 不同源，刷高程会错位"}
+        return herr
+    layers = mod_layers(root)
+    if pbmp and not _map_pair_compatible(hbmp, hbase, pbmp, pbase, layers):
+        return {"ok": False, "msg": "heightmap.bmp 与 provinces.bmp 尺寸或层级不匹配，刷高程会错位"}
 
     info = bmp_info(hbmp)
     if not info or info.get("bpp") != 8:
@@ -386,8 +398,70 @@ def height_paint(points, height, brush=8, feather=True, root=None):
         state.map_var("_REFINE_IDS_CACHE").pop("cur", None)
     except Exception:
         pass
-    return {"ok": True, "painted": n, "to": hv,
-            "msg": "刷了 %d 个像素，高度 %d%s" % (n, hv, "（羽化）" if feather else "")}
+    _invalidate_height_preview_cache()
+    msg = "刷了 %d 个像素，高度 %d%s" % (n, hv, "（羽化）" if feather else "")
+    if herr and herr.get("adopted"):
+        msg = (herr.get("adopt_msg") or "已单文件接管 map/heightmap.bmp") + "；" + msg
+    out = {"ok": True, "painted": n, "to": hv, "msg": msg}
+    if herr and herr.get("adopted"):
+        out["adopted"] = True
+    return out
+
+
+def height_preview(root=None):
+    """把 heightmap.bmp 转为高程伪彩色叠加 PNG，返回缓存路径。"""
+    root = _map_pick(root)
+    layers = mod_layers(root)
+    hbmp, _ = _layers_find("map/heightmap.bmp", layers)
+    if not hbmp:
+        return None
+    outc = os.path.join(state.map_var("MAP_CACHE_DIR"), "height_preview.png")
+    try:
+        mt = int(os.path.getmtime(hbmp))
+        sz = int(os.path.getsize(hbmp))
+    except Exception:
+        mt, sz = 0, 0
+    stamp = os.path.join(state.map_var("MAP_CACHE_DIR"), "height_preview.stamp")
+    sig = "%s|%s|%s" % (hbmp, mt, sz)
+    try:
+        if os.path.exists(outc) and os.path.exists(stamp):
+            if io.open(stamp, encoding="utf-8").read().strip() == sig:
+                return outc
+    except Exception:
+        pass
+    try:
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None
+        with Image.open(hbmp) as im:
+            g = im.convert("L") if im.mode != "L" else im.copy()
+            W, H = g.size
+            raw = g.tobytes()
+        try:
+            import numpy as np
+            lut = np.zeros((256, 4), dtype=np.uint8)
+            for v in range(256):
+                if v < 95:
+                    # 海域：半透深蓝，突出海岸线
+                    lut[v] = (20, 50, 120, 140)
+                elif v < 130:
+                    t = (v - 95) / 35.0
+                    lut[v] = (int(50 + 120 * t), int(160 + 55 * t), int(70 - 20 * t), 195)
+                elif v < 190:
+                    t = (v - 130) / 60.0
+                    lut[v] = (int(170 + 40 * t), int(215 - 95 * t), int(50 + 20 * t), 210)
+                else:
+                    t = (v - 190) / 65.0
+                    lut[v] = (int(210 + 45 * t), int(120 + 130 * t), int(70 + 180 * t), 225)
+            arr = np.frombuffer(raw, dtype=np.uint8, count=W * H)
+            out = Image.fromarray(lut[arr].reshape((H, W, 4)), mode="RGBA")
+        except Exception:
+            out = g.convert("RGBA")
+        os.makedirs(state.map_var("MAP_CACHE_DIR"), exist_ok=True)
+        out.save(outc)
+        io.open(stamp, "w", encoding="utf-8", newline="\n").write(sig)
+        return outc
+    except Exception:
+        return None
 
 def height_sample(points, radius=1, root=None):
     """读某几个点附近的高程，返回平均值（用来画等高线或显示）。"""
@@ -426,7 +500,7 @@ def height_sample(points, radius=1, root=None):
             out.append(int(sum(vals) / len(vals)) if vals else None)
     return {"ok": True, "values": out}
 
-def terrain_paint(points, terrain, brush=3, root=None):
+def terrain_paint(points, terrain, brush=3, root=None, adopt=False):
     """画笔式刷地形：直接改 terrain.bmp 的像素索引，不动 definition.csv。
 
     points: [[x, y], ...]（地图坐标），brush: 笔刷半径（像素）
@@ -440,12 +514,13 @@ def terrain_paint(points, terrain, brush=3, root=None):
         return {"ok": False, "msg": "参数不完整"}
     root = _map_pick(root)
     layers = mod_layers(root)
-    tbmp, tbase = _layers_find("map/terrain.bmp", layers)
     pbmp, pbase = _layers_find("map/provinces.bmp", layers)
+    tbmp, tbase, terr = _ensure_map_writable("terrain.bmp", root=root, adopt=adopt)
     if not tbmp:
-        return {"ok": False, "msg": "找不到 terrain.bmp"}
-    if os.path.abspath(tbase or "") != os.path.abspath(pbase or ""):
-        return {"ok": False, "msg": "terrain.bmp 与 provinces.bmp 不同源，刷地形会错位"}
+        return terr
+    layers = mod_layers(root)
+    if pbmp and not _map_pair_compatible(tbmp, tbase, pbmp, pbase, layers):
+        return {"ok": False, "msg": "terrain.bmp 与 provinces.bmp 尺寸或层级不匹配，刷地形会错位"}
     t2i, _ = _terrain_type_to_index(root)
     if terrain not in t2i:
         return {"ok": False, "msg": "terrain.txt 里没有类型 %s" % terrain}
@@ -487,5 +562,10 @@ def terrain_paint(points, terrain, brush=3, root=None):
         state.map_var("_REFINE_IDS_CACHE").pop("cur", None)
     except Exception:
         pass
-    return {"ok": True, "painted": n, "to": terrain,
-            "msg": "刷了 %d 个像素为 %s · 需重建图层" % (n, terrain)}
+    msg = "刷了 %d 个像素为 %s" % (n, terrain)
+    if terr and terr.get("adopted"):
+        msg = (terr.get("adopt_msg") or "已单文件接管 map/terrain.bmp") + "；" + msg
+    out = {"ok": True, "painted": n, "to": terrain, "msg": msg}
+    if terr and terr.get("adopted"):
+        out["adopted"] = True
+    return out

@@ -114,6 +114,7 @@ from xuerong.model.map.terrain import (
     prov_terrain_batch,
     prov_terrain_by_type,
     height_paint,
+    height_preview,
     height_sample,
     terrain_paint,
 )
@@ -152,6 +153,7 @@ __all__ = [
     "prov_terrain_batch",
     "prov_terrain_by_type",
     "height_paint",
+    "height_preview",
     "height_sample",
     "terrain_paint",
     # river

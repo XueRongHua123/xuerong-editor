@@ -647,7 +647,7 @@ window.onerror = function(m, s, l, c){
           <button class="map-tool on" data-mode="view" title="浏览（V）">🖐</button>
           <button class="map-tool" data-mode="state" title="改州归属（S）">🏷</button>
           <button class="map-tool" data-mode="paint" title="涂色改省界（P）">🖌</button>
-          <button class="map-tool" data-mode="pick" title="吸管（I）— 开发中" disabled>💧</button>
+          <button class="map-tool" data-mode="pick" title="吸管取省（I）">💧</button>
           <button class="map-tool" id="mapCheckBtn" title="地图检查（连通性/州/铁路/十字）">🔍</button>
         </div>
         <div id="mapStageWrap">
@@ -656,6 +656,7 @@ window.onerror = function(m, s, l, c){
             <img id="mapProv" alt="">
             <img id="mapPolit" alt="">
             <img id="mapTerrain" alt="">
+            <img id="mapHeight" alt="">
       <img id="mapContinent" alt="">
       <img id="mapRegion" alt="">
             <img id="mapState" alt="">
@@ -704,6 +705,7 @@ window.onerror = function(m, s, l, c){
               <label><input type="checkbox" id="mapLEdges">省界<input type="range" class="lt-op" data-op="edges" min="0" max="100" value="80" title="省界 不透明度"></label>
               <label><input type="checkbox" id="mapLBase" checked>底图<input type="range" class="lt-op" data-op="base" min="0" max="100" value="100" title="底图 不透明度"></label>
               <label><input type="checkbox" id="mapLRivers">河流<input type="range" class="lt-op" data-op="rivers" min="0" max="100" value="100" title="河流 不透明度"></label>
+              <label><input type="checkbox" id="mapLHeight">高程热力<input type="range" class="lt-op" data-op="height" min="0" max="100" value="75" title="高程热力 不透明度"></label>
               <label>透明度<input type="range" id="mapOpacity" min="20" max="100" value="85"></label>
               <label title="只显示国家表里真实存在的 tag；孤儿 tag 不着色"><input type="checkbox" id="mapLUnits">开局部队　<input type="checkbox" id="mapLStrict">政治严格模式</label>
             </div>
@@ -1135,21 +1137,24 @@ window.onerror = function(m, s, l, c){
           <h4>河流笔刷</h4>
           <div class="mp-acts">
             <select id="rvKind" class="btn" style="height:26px;flex:1">
-              <option value="main">河流（主干）</option>
-              <option value="tributary">支流</option>
-              <option value="stream">小溪</option>
-              <option value="deep">深河（可通航）</option>
+              <option value="main">河流（主干 3）</option>
+              <option value="stream">小溪（细 4）</option>
+              <option value="tributary">支流（中 6）</option>
+              <option value="deep">深河（通航 11）</option>
+              <option value="source">源头起点（绿 0）</option>
+              <option value="flow_in">汇入主干（红 1）</option>
+              <option value="split">分流岔口（黄 2）</option>
             </select>
-            <input type="range" id="rvBrush" min="1" max="5" value="2" style="flex:1;min-width:0"
+            <input type="range" id="rvBrush" min="1" max="5" value="1" style="flex:1;min-width:0"
                    oninput="document.getElementById('rvBrushV').textContent=this.value">
-            <span class="mp-k" id="rvBrushV" style="width:14px">2</span>
+            <span class="mp-k" id="rvBrushV" style="width:14px">1</span>
           </div>
           <div class="mp-acts">
             <button class="btn" id="rvToggle">开始画</button>
             <button class="btn" id="rvUndo">撤销</button>
             <button class="btn" id="rvCheck">检查</button>
           </div>
-          <div class="mp-k" id="rvMsg" style="min-height:16px;line-height:1.5">左键画、右键擦；画完点「检查」</div>
+          <div class="mp-k" id="rvMsg" style="min-height:16px;line-height:1.5">左键画、右键擦（建议 1px 单线，含源头 0 / 汇入 1）；画完点「检查」</div>
           <h4>操作</h4>
           <div class="mp-acts">
             <input id="msTarget" placeholder="目标州号" style="height:28px">
