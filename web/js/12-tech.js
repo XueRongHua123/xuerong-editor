@@ -13,7 +13,7 @@ async function addTech(){
   status('正在新建科技…');
   try{
     const r = await fetch('/api/tech_add', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({root, id: tid, folder})});
+      body: JSON.stringify({root, id: tid, folder, as_root: true})});
     const j = await r.json();
     status(j.msg || '', !j.ok);
     if(j.ok){
@@ -28,6 +28,12 @@ async function addTech(){
       }
       renderTechList('');
       if(hit) await selectTech(hit);
+      if(typeof window.techStudioLoad === 'function'){
+        const mod = document.getElementById('techModal');
+        if(mod && mod.style.display !== 'none'){
+          await window.techStudioLoad({folder: folder || ttFolder, silent: true, fit: false});
+        }
+      }
     }
   } finally {
     if(btn) btn.disabled = false;
@@ -58,10 +64,23 @@ async function deleteTechSel(){
         techSel = null;
         ['techTitle', 'techSrc'].forEach(id=>{ const el = document.getElementById(id); if(el) el.textContent = ''; });
         ['techNameZ', 'techDescZ', 'techNameJa', 'techDescJa', 'techNameEn', 'techDescEn',
-         'techYear', 'techCost', 'techPath', 'techPrereq', 'techEnable', 'techSub', 'techRaw'].forEach(id=>{
+         'techYear', 'techCost', 'techPath', 'techXorRaw', 'techPrereq', 'techEnable', 'techSub', 'techRaw'].forEach(id=>{
           const el = document.getElementById(id); if(el) el.value = '';
         });
+        ['techCatChips', 'techXorChips', 'techLinkChips'].forEach(id=>{
+          const el = document.getElementById(id); if(el) el.innerHTML = '';
+        });
+        const gi = document.getElementById('techGridInfo');
+        if(gi) gi.textContent = '所属根树：-';
+        const im = document.getElementById('techIconImg');
+        if(im) im.removeAttribute('src');
         renderTechList(q);
+      }
+      if(typeof window.techStudioLoad === 'function'){
+        const mod = document.getElementById('techModal');
+        if(mod && mod.style.display !== 'none'){
+          await window.techStudioLoad({silent: true, fit: false});
+        }
       }
     }
   } finally {
@@ -74,7 +93,7 @@ function openTech(){
   renderTechList('');
   const first = ((DATA && DATA.techs) || [])[0];
   if(first) selectTech(first);
-  switchTechTab('edit');
+  switchTechTab('tree');
 }
 
 function switchTechTab(mode){
@@ -83,13 +102,19 @@ function switchTechTab(mode){
   document.getElementById('techTabEdit').classList.toggle('on', mode === 'edit');
   document.getElementById('techTabTree').classList.toggle('on', mode === 'tree');
   if(mode === 'tree'){
-    const folders = techFolderNames();
-    if(!ttFolder || !folders.includes(ttFolder)) ttFolder = folders.includes('infantry_folder') ? 'infantry_folder' : (folders[0] || '');
-    renderTechFolderTabs(folders);
-    drawTechTree(ttFolder);
-    ttView = {x:0, y:0, k:1};
-    applyTT();
-    fitTT();
+    if(typeof window.techStudioLoad === 'function'){
+      window.techStudioLoad({fit: true});
+    } else {
+      const folders = techFolderNames();
+      if(!ttFolder || !folders.includes(ttFolder)) ttFolder = folders.includes('infantry_folder') ? 'infantry_folder' : (folders[0] || '');
+      renderTechFolderTabs(folders);
+      drawTechTree(ttFolder);
+      ttView = {x:0, y:0, k:1};
+      applyTT();
+      fitTT();
+    }
+  } else if(typeof window.techStudioSyncEditPane === 'function'){
+    window.techStudioSyncEditPane();
   }
 }
 
@@ -177,6 +202,23 @@ function extractBlock(text, key){
   return '';
 }
 
+function _extractBlockInner(text, key){
+  const blk = extractBlock(text, key);
+  if(!blk) return '';
+  const b = blk.indexOf('{');
+  const e = blk.lastIndexOf('}');
+  if(b < 0 || e <= b) return '';
+  return blk.slice(b + 1, e).trim();
+}
+
+function _unwrapScriptBlock(val, key){
+  const s = (val || '').trim();
+  if(!s) return '';
+  const re = new RegExp('^' + key + '\\s*=\\s*\\{([\\s\\S]*)\\}$');
+  const m = re.exec(s);
+  return m ? m[1].trim() : s;
+}
+
 let _techSelSeq = 0;
 async function selectTech(t){
   if(!t) return;
@@ -193,9 +235,12 @@ async function selectTech(t){
   document.getElementById('techYear').value = t.year || '';
   document.getElementById('techCost').value = t.cost || '';
   document.getElementById('techPath').value = t.path || '';
+  const xorEl = document.getElementById('techXorRaw');
+  if(xorEl) xorEl.value = (t.xor || []).join('\n');
+  if(typeof window.techStudioOnSelectTech === 'function') window.techStudioOnSelectTech(t, null);
   const snap = _snapFieldValues([
     'techNameZ', 'techDescZ', 'techNameJa', 'techDescJa',
-    'techNameEn', 'techDescEn', 'techPrereq', 'techEnable', 'techSub', 'techRaw'
+    'techNameEn', 'techDescEn', 'techXorRaw', 'techPrereq', 'techEnable', 'techSub', 'techRaw'
   ]);
   const detail = await fetchRawDetail('tech', t.id);
   if(seq !== _techSelSeq || techSel !== t) return;
@@ -208,11 +253,13 @@ async function selectTech(t){
     ['techDescJa', (loc && loc.desc_ja) || ''],
     ['techNameEn', (loc && loc.name_en) || ''],
     ['techDescEn', (loc && loc.desc_en) || ''],
+    ['techXorRaw', _extractBlockInner(raw, 'xor')],
     ['techPrereq', extractBlock(raw, 'prerequisite')],
     ['techEnable', extractBlock(raw, 'enable_equipments')],
     ['techSub', extractBlock(raw, 'sub_technologies')],
     ['techRaw', raw]
   ]);
+  if(typeof window.techStudioOnSelectTech === 'function') window.techStudioOnSelectTech(t, detail);
 }
 
 async function saveTech(){
@@ -222,17 +269,26 @@ async function saveTech(){
   btns.forEach(b=>{ b.disabled = true; });
   status('正在保存科技…');
   try{
+    const rawVal = document.getElementById('techRaw').value;
+    const yearVal = document.getElementById('techYear').value.trim();
     const props = {
-      year: document.getElementById('techYear').value.trim(),
       research_cost: document.getElementById('techCost').value.trim(),
       path: document.getElementById('techPath').value.trim(),
-      prereq_raw: document.getElementById('techPrereq').value.trim(),
-      enable_equipments_raw: document.getElementById('techEnable').value.trim(),
-      sub_technologies_raw: document.getElementById('techSub').value.trim()
+      prereq_raw: _unwrapScriptBlock(document.getElementById('techPrereq').value, 'prerequisite'),
+      enable_equipments_raw: _unwrapScriptBlock(document.getElementById('techEnable').value, 'enable_equipments'),
+      sub_technologies_raw: _unwrapScriptBlock(document.getElementById('techSub').value, 'sub_technologies')
     };
+    if(/^\s*start_year\s*=/m.test(rawVal)) props.start_year = yearVal;
+    else props.year = yearVal;
+    const xorEl = document.getElementById('techXorRaw');
+    if(xorEl) props.xor_raw = _unwrapScriptBlock(xorEl.value, 'xor');
+    if(typeof window.techStudioGetCategoriesRaw === 'function'){
+      const catsRaw = window.techStudioGetCategoriesRaw();
+      if(catsRaw !== null && catsRaw !== undefined) props.categories_raw = catsRaw;
+    }
     const r = await fetch('/api/tech_save', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({root: rootByName(techSel.source), file: techSel.file, id: techSel.id,
-        raw: document.getElementById('techRaw').value, props,
+        raw: rawVal, props,
         name: document.getElementById('techNameZ').value,
         desc: document.getElementById('techDescZ').value,
         name_ja: document.getElementById('techNameJa').value,
@@ -253,6 +309,12 @@ async function saveTech(){
         const hit = (DATA.techs||[]).find(x=>x.id===curId);
         if(hit) await selectTech(hit);
       }
+      if(typeof window.techStudioLoad === 'function'){
+        const mod = document.getElementById('techModal');
+        if(mod && mod.style.display !== 'none'){
+          await window.techStudioLoad({silent: true, fit: false});
+        }
+      }
     }
   } finally {
     btns.forEach(b=>{ b.disabled = false; });
@@ -261,6 +323,10 @@ async function saveTech(){
 
 
 function ttUpdateHint(){
+  if(typeof window.techStudioUpdateHint === 'function'){
+    window.techStudioUpdateHint();
+    return;
+  }
   const btn = document.getElementById('ttSavePos');
   const hint = document.getElementById('ttPosHint');
   if(!btn || !hint) return;
@@ -288,7 +354,11 @@ function ttToggleEdit(){
 function updateTechTreeShell(){
   const svg = document.getElementById('techSvg');
   if(svg) svg.style.cursor = ttEdit ? 'default' : '';
-  if(ttFolder) drawTechTree(ttFolder);
+  if(typeof window.techStudioRender === 'function'){
+    window.techStudioRender();
+  } else if(ttFolder){
+    drawTechTree(ttFolder);
+  }
   ttUpdateHint();
 }
 
@@ -342,6 +412,9 @@ function ttEndDrag(){
 
 
 async function ttSavePositions(){
+  if(typeof window.techStudioSavePositions === 'function'){
+    return await window.techStudioSavePositions();
+  }
   if(!ttDirty.size){ status('没有改过位置'); return; }
   const items = [...ttDirty.values()];
   let ok = 0, fail = [];

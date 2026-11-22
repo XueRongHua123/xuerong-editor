@@ -27,8 +27,12 @@ from xuerong.model.idea import add_idea, delete_idea, idea_view, save_idea
 from xuerong.model.loc import loc_browse, save_loc
 from xuerong.model.map import _map_pick
 from xuerong.model.tech import (
-    add_tech, delete_tech, save_tech, tech_link, tech_move, tech_tree_graph,
-    tech_view)
+    add_tech, delete_tech, save_tech, tech_batch_move, tech_link, tech_move,
+    tech_tree_graph, tech_unlink, tech_view)
+from xuerong.model.tech_gui import (
+    tech_category_add, tech_folder_save, tech_folders_reorder,
+    tech_gridbox_save, tech_item_style_save, tech_studio_payload,
+    tech_subtitle_save, tech_year_save)
 from xuerong.model.world import loc_generate, loc_missing
 
 
@@ -238,7 +242,17 @@ def r_api_tech_save(h, body):
 @post("/api/tech_link")
 def r_api_tech_link(h, body):
     ok, msg = tech_link(body.get("root"), body.get("file"),
-                        body.get("source"), body.get("target"))
+                        body.get("source"), body.get("target"),
+                        mode=body.get("mode") or "path",
+                        coeff=body.get("coeff", 1))
+    h._send({"ok": ok, "msg": msg})
+
+
+@post("/api/tech_unlink")
+def r_api_tech_unlink(h, body):
+    ok, msg = tech_unlink(body.get("root"), body.get("file"),
+                          body.get("source"), body.get("target"),
+                          mode=body.get("mode") or "path")
     h._send({"ok": ok, "msg": msg})
 
 
@@ -246,11 +260,85 @@ def r_api_tech_link(h, body):
 def r_api_tech_add(h, body):
     tid = body.get("id")
     ok, msg = add_tech(body.get("root"), tid,
-                       body.get("folder") or "", body.get("year") or "1936")
+                       body.get("folder") or "", body.get("year") or "1936",
+                       x=body.get("x", 0), y=body.get("y", 0),
+                       parent_tech=body.get("parent_tech"),
+                       as_root=bool(body.get("as_root")),
+                       name_zh=body.get("name_zh") or "",
+                       desc_zh=body.get("desc_zh") or "")
     res = {"ok": ok, "msg": msg}
     if ok:
         res["item"] = tech_view(tid)
     h._send(res)
+
+
+@post("/api/tech_studio")
+def r_api_tech_studio(h, body):
+    h._send(tech_studio_payload(body.get("root") or None,
+                                body.get("folder") or None,
+                                body.get("tag") or None))
+
+
+@post("/api/tech_folder_save")
+def r_api_tech_folder_save(h, body):
+    fields = body.get("fields") if isinstance(body.get("fields"), dict) else body
+    h._send(tech_folder_save(body.get("root") or None,
+                             body.get("id") or body.get("fid") or "",
+                             fields))
+
+
+@post("/api/tech_folders_reorder")
+def r_api_tech_folders_reorder(h, body):
+    h._send(tech_folders_reorder(body.get("root") or None,
+                                 body.get("order") or []))
+
+
+@post("/api/tech_year_save")
+def r_api_tech_year_save(h, body):
+    data = body.get("data") if isinstance(body.get("data"), dict) else body
+    h._send(tech_year_save(body.get("root") or None,
+                           body.get("folder") or "",
+                           body.get("op") or "update",
+                           data))
+
+
+@post("/api/tech_subtitle_save")
+def r_api_tech_subtitle_save(h, body):
+    data = body.get("data") if isinstance(body.get("data"), dict) else body
+    h._send(tech_subtitle_save(body.get("root") or None,
+                               body.get("folder") or "",
+                               body.get("op") or "update",
+                               data))
+
+
+@post("/api/tech_gridbox_save")
+def r_api_tech_gridbox_save(h, body):
+    data = body.get("data") if isinstance(body.get("data"), dict) else body
+    h._send(tech_gridbox_save(body.get("root") or None,
+                              body.get("folder") or "",
+                              body.get("op") or "update",
+                              data))
+
+
+@post("/api/tech_item_style_save")
+def r_api_tech_item_style_save(h, body):
+    fields = body.get("fields") if isinstance(body.get("fields"), dict) else body
+    h._send(tech_item_style_save(body.get("root") or None,
+                                 body.get("folder") or "",
+                                 fields))
+
+
+@post("/api/tech_batch_move")
+def r_api_tech_batch_move(h, body):
+    h._send(tech_batch_move(body.get("root") or None,
+                            body.get("moves") or []))
+
+
+@post("/api/tech_category_add")
+def r_api_tech_category_add(h, body):
+    h._send(tech_category_add(body.get("root") or None,
+                              body.get("id") or body.get("cat_id") or "",
+                              body.get("name_zh") or ""))
 
 
 @post("/api/tech_delete")

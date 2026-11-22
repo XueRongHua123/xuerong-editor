@@ -15,12 +15,13 @@ import os
 import re
 
 from xuerong import state
-from xuerong.core import paths
-from xuerong.core.paths import (_layer_dirs, _read_bom_text, _write_bom_text,
-                                effective_layer_files, is_under_game,
+from xuerong.core import gfx, paths
+from xuerong.core.paths import (_layer_dirs, _layers_find, _read_bom_text, _write_bom_text,
+                                effective_layer_files, is_readonly_mod, is_under_game,
                                 mod_layers, unique_editor_filename)
-from xuerong.core.text import (_atomic_write, _bom_for, _strip_keep_len, brace_match,
-                               braces_balanced, find_blocks, set_raw_block, set_scalar,
+from xuerong.core.text import (_atomic_write, _bom_for, _strip_keep_len, append_into_block,
+                               brace_match, braces_balanced, collect_top_blocks, find_blocks,
+                               insert_before_date_or_end, set_raw_block, set_scalar,
                                strip_comments, top_items)
 from xuerong.model.country import _country_hist_file, _country_hist_write_base
 from xuerong.model.history import snapshot
@@ -44,6 +45,23 @@ def _looks_tech(body):
             "enable_equipments", "research_cost", "categories"}
     return any(k in keys for k, v, b in top_items(body))
 
+
+
+def _extract_id_list(clean, key):
+    """提取科技块内 key = { a b c } 的顶层标识符列表（跳过 limit = { ... }，去重保序）。"""
+    out = []
+    seen = set()
+    for m in re.finditer(r'(?m)^\s*%s\s*=\s*\{' % re.escape(key), clean):
+        b = clean.find('{', m.start())
+        e = brace_match(clean, b)
+        inner = clean[b + 1:e - 1]
+        # 去掉 limit = { ... } 等嵌套条件块，避免把 has_dlc / tag 当成科技或编制 ID
+        inner = re.sub(r'[A-Za-z0-9_]+\s*=\s*\{[^{}]*\}', ' ', inner)
+        for tok in re.findall(r'[A-Za-z][A-Za-z0-9_]*', inner):
+            if tok not in seen:
+                seen.add(tok)
+                out.append(tok)
+    return out
 
 
 def _build_tech_entry(tid, tv, rel, src, macros=None):
@@ -79,12 +97,46 @@ def _build_tech_entry(tid, tv, rel, src, macros=None):
             if py:
                 fpy = _num(py.group(1))
     cost = re.search(r'(?m)^\s*research_cost\s*=\s*([0-9.]+)', clean)
-    leads = re.findall(r'leads_to_tech\s*=\s*"?([A-Za-z0-9_]+)"?', clean)
+
+    paths_list = []
+    leads = []
+    for pm in re.finditer(r'(?m)^\s*path\s*=\s*\{', clean):
+        pb = clean.find('{', pm.start())
+        pe = brace_match(clean, pb)
+        pinner = clean[pb + 1:pe - 1]
+        cm = re.search(r'research_cost_coeff\s*=\s*([0-9.]+)', pinner)
+        coeff = 1
+        if cm:
+            try:
+                f_c = float(cm.group(1))
+                coeff = int(f_c) if f_c.is_integer() else f_c
+            except Exception:
+                coeff = 1
+        for lm in re.finditer(r'leads_to_tech\s*=\s*"?([A-Za-z0-9_]+)"?', pinner):
+            tgt = lm.group(1)
+            leads.append(tgt)
+            paths_list.append({"target": tgt, "coeff": coeff})
+    if not paths_list:
+        for tgt in re.findall(r'leads_to_tech\s*=\s*"?([A-Za-z0-9_]+)"?', clean):
+            leads.append(tgt)
+            paths_list.append({"target": tgt, "coeff": 1})
+
     pre = []
     for pm in re.finditer(r'prerequisite\s*=\s*\{', clean):
         pb = clean.find('{', pm.start())
         pe = brace_match(clean, pb)
         pre += re.findall(r'[A-Za-z][A-Za-z0-9_]*', clean[pb + 1:pe - 1])
+
+    xor_list = _extract_id_list(clean, "xor")
+    categories = _extract_id_list(clean, "categories")
+    enable_equipments = _extract_id_list(clean, "enable_equipments")
+    enable_subunits = _extract_id_list(clean, "enable_subunits")
+    sub_technologies = _extract_id_list(clean, "sub_technologies")
+
+    sprites = state.sprite_map() or gfx.SPRITE_MAP
+    cand_icon = "GFX_%s_medium" % tid
+    icon = cand_icon if cand_icon in sprites else ""
+
     return {
         "id": tid, "file": rel, "source": src,
         "name": state.loc().get(tid, tid),
@@ -94,6 +146,13 @@ def _build_tech_entry(tid, tv, rel, src, macros=None):
         "fy": fpy,
         "cost": cost.group(1) if cost else "",
         "prereq": pre, "leads": leads,
+        "paths": paths_list,
+        "xor": xor_list,
+        "categories": categories,
+        "enable_equipments": enable_equipments,
+        "enable_subunits": enable_subunits,
+        "sub_technologies": sub_technologies,
+        "icon": icon,
         "raw": "%s = {\n%s\n}" % (tid, (tv or "").strip()),
     }
 
@@ -130,14 +189,21 @@ def load_techs(root):
                     state.techs()[tid] = _build_tech_entry(tid, tv, rel, src, macros=macros)
                     n += 1
     for t in state.techs().values():
-        t["leads"] = [x for x in t.get("leads", []) if x in state.techs() and x != t["id"]]
-        t["prereq"] = [p for p in t.get("prereq", []) if p in state.techs() and p != t["id"]]
+        tid_c = t["id"]
+        t["leads"] = [x for x in t.get("leads", []) if x in state.techs() and x != tid_c]
+        t["paths"] = [po for po in t.get("paths", []) if po.get("target") in state.techs() and po.get("target") != tid_c]
+        t["prereq"] = [p for p in t.get("prereq", []) if p in state.techs() and p != tid_c]
+        t["xor"] = [x for x in t.get("xor", []) if x in state.techs() and x != tid_c]
     for tid, t in state.techs().items():
         pre = set(t["prereq"])
         for other in state.techs().values():
             if tid in other.get("leads", []):
                 pre.add(other["id"])
         t["prereq"] = sorted(pre)
+        for xid in list(t.get("xor") or []):
+            other = state.techs().get(xid)
+            if other is not None and tid not in (other.get("xor") or []):
+                other["xor"] = sorted(set(other.get("xor") or []) | {tid})
     return n
 
 
@@ -174,38 +240,132 @@ def _tech_coord_token(tok, value, macros):
 
 
 
-def tech_move(root, rel, tid, x, y):
-    """把科技在树上的位置写回 folder.position 的 x/y（游戏读的就是这两个数）。
+def _writable_tech_top(root=None):
+    """找非原版、非工坊的可写链顶 mod 目录。"""
+    picked = paths._pick(root)
+    if picked:
+        lay = mod_layers(picked) or [picked]
+        for cand in reversed(lay):
+            if cand and not is_under_game(cand) and not is_readonly_mod(cand):
+                return cand
+    for r in reversed(state.roots() or []):
+        lay = mod_layers(r) or [r]
+        for cand in reversed(lay):
+            if cand and not is_under_game(cand) and not is_readonly_mod(cand):
+                return cand
+    return None
 
-    原来写的是 @宏（如 y = @1936）且宏值仍然等于新值时，保留宏名，不会把宏拍平成数字。
-    """
-    if not root or not rel or not tid:
-        return {"ok": False, "msg": "参数不完整"}
-    if is_under_game(root):
-        return {"ok": False, "msg": "原版目录只读：请先复制到自己的模组再修改"}
-    p = os.path.join(root, rel)
-    if not os.path.exists(p):
-        return {"ok": False, "msg": "找不到文件：" + rel}
-    try:
-        x = int(round(float(x)))
-        y = int(round(float(y)))
-    except Exception:
-        return {"ok": False, "msg": "坐标必须是整数"}
 
-    text, has_bom = _read_bom_text(p)
+def _ensure_tech_file_writable(root, rel, tid=None):
+    """单文件接管：若 rel 在只读层或顶层尚不存在，从叠加链复制单文件到可写链顶。"""
+    if not rel and tid:
+        rel = (state.techs().get(tid) or {}).get("file") or ""
+    if not rel:
+        return None, None, "", "缺少文件路径"
+    rel_n = rel.replace("\\", "/").lstrip("/")
+    top = _writable_tech_top(root)
+    if not top:
+        return None, None, rel_n, "找不到可写的 mod 目录（原版与工坊目录只读）"
+    dst = os.path.join(top, rel_n.replace("/", os.sep))
+    if not os.path.isfile(dst):
+        layers = mod_layers(top) or [top]
+        src, _sr = _layers_find(rel_n, layers)
+        if not src or not os.path.isfile(src):
+            return top, None, rel_n, "找不到文件：" + rel_n
+        os.makedirs(os.path.dirname(dst) or top, exist_ok=True)
+        txt = io.open(src, encoding="utf-8-sig", errors="replace").read()
+        _atomic_write(dst, txt.encode("utf-8"))
+    return top, dst, rel_n, ""
+
+
+def _sync_tech_relations(tid, old_entry, new_entry):
+    """增量重建 state.techs() 中 tid 与其他科技的双向 prereq / leads / xor。"""
+    techs = state.techs()
+    old_leads = set((old_entry or {}).get("leads") or [])
+    new_leads = [x for x in (new_entry.get("leads") or []) if x in techs and x != tid]
+    new_entry["leads"] = new_leads
+    new_entry["paths"] = [
+        po for po in (new_entry.get("paths") or [])
+        if po.get("target") in techs and po.get("target") != tid
+    ]
+
+    # 更新被删除 leads 的目标 prereq
+    for lost in old_leads - set(new_leads):
+        other = techs.get(lost)
+        if other is not None:
+            # 只有当 other 自身 raw 的 prerequisite 没有声明 tid 时才移除
+            oclean = strip_comments(other.get("raw") or "")
+            has_own_pre = False
+            for pm in re.finditer(r'prerequisite\s*=\s*\{', oclean):
+                pb = oclean.find('{', pm.start())
+                pe = brace_match(oclean, pb)
+                if tid in re.findall(r'[A-Za-z][A-Za-z0-9_]*', oclean[pb + 1:pe - 1]):
+                    has_own_pre = True
+                    break
+            if not has_own_pre:
+                other["prereq"] = [p for p in (other.get("prereq") or []) if p != tid]
+
+    # 更新新增 leads 的目标 prereq
+    for added in new_leads:
+        other = techs.get(added)
+        if other is not None:
+            other["prereq"] = sorted(set(other.get("prereq") or []) | {tid})
+
+    # 更新自身 prereq
+    pre = {p for p in (new_entry.get("prereq") or []) if p in techs and p != tid}
+    for other_id, other in techs.items():
+        if other_id != tid and tid in (other.get("leads") or []):
+            pre.add(other_id)
+    new_entry["prereq"] = sorted(pre)
+
+    # 更新双向 xor
+    old_xor = set((old_entry or {}).get("xor") or [])
+    new_xor = sorted({x for x in (new_entry.get("xor") or []) if x in techs and x != tid})
+    new_entry["xor"] = new_xor
+    for lost in old_xor - set(new_xor):
+        other = techs.get(lost)
+        if other is not None:
+            other["xor"] = [x for x in (other.get("xor") or []) if x != tid]
+    for added in new_xor:
+        other = techs.get(added)
+        if other is not None:
+            other["xor"] = sorted(set(other.get("xor") or []) | {tid})
+
+    techs[tid] = new_entry
+
+
+def _refresh_tech_in_state(top, path, rel, tid, full_text=None):
+    """从磁盘文本重新解析 tid 并增量刷新 state.techs()。"""
+    if full_text is None:
+        full_text = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    clean = strip_comments(full_text)
+    loc = _tech_block_range(clean, tid)
+    if not loc:
+        return None
+    b, e = loc
+    tv = clean[b + 1:e - 1]
     macros = {}
-    for mm in re.finditer(r'(?m)^[ \t]*@([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', text):
+    for mm in re.finditer(r'(?m)^\s*@([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', clean):
         macros[mm.group(1)] = mm.group(2)
+    src = os.path.basename((top or "").rstrip("\\/")) or (top or "")
+    rel_os = rel.replace("/", os.sep)
+    old_entry = state.techs().get(tid)
+    entry = _build_tech_entry(tid, tv, rel_os, src, macros=macros)
+    _sync_tech_relations(tid, old_entry, entry)
+    return entry
 
+
+def _update_tech_pos_in_text(text, tid, x, y, macros, year=None):
+    """在文件文本中原地更新某科技块的 folder.position（保留 @宏）及可选 start_year。"""
     loc = _tech_block_range(text, tid)
     if not loc:
-        return {"ok": False, "msg": "找不到科技块：" + tid}
+        return text, False, "找不到科技块：" + tid
     b, e = loc
     block = text[b + 1:e - 1]
 
     fm = re.search(r'(?m)^[ \t]*folder\s*=\s*\{', block)
     if not fm:
-        return {"ok": False, "msg": "这个科技没有 folder 块，先在文件里给它加 folder = { name = ... } 再拖"}
+        return text, False, "这个科技没有 folder 块：" + tid
     fb = block.find('{', fm.end() - 1)
     fe = brace_match(block, fb)
     finner = block[fb + 1:fe - 1]
@@ -241,15 +401,115 @@ def tech_move(root, rel, tid, x, y):
             finner2 = finner.rstrip() + "\n" + indent + line + "\n\t\t"
 
     block2 = block[:fb + 1] + finner2 + block[fe - 1:]
-    new_text = text[:b + 1] + block2 + text[e - 1:]
+    if year is not None and str(year).strip():
+        ys = str(year).strip()
+        ym = re.search(r'(?m)^([ \t]*)(start_year|year)[ \t]*=[ \t]*\d+', block2)
+        if ym:
+            block2 = block2[:ym.start()] + "%s%s = %s" % (ym.group(1), ym.group(2), ys) + block2[ym.end():]
+    return text[:b + 1] + block2 + text[e - 1:], True, ""
+
+
+def tech_move(root, rel, tid, x, y):
+    """把科技在树上的位置写回 folder.position 的 x/y（支持单文件接管与 @宏 保留）。"""
+    if not rel or not tid:
+        return {"ok": False, "msg": "参数不完整"}
+    if root and is_under_game(root) and not _writable_tech_top(None):
+        return {"ok": False, "msg": "原版目录只读：请先复制到自己的模组再修改"}
+    top, p, rel_n, err = _ensure_tech_file_writable(root, rel, tid=tid)
+    if not p:
+        return {"ok": False, "msg": err}
+    try:
+        x = int(round(float(x)))
+        y = int(round(float(y)))
+    except Exception:
+        return {"ok": False, "msg": "坐标必须是整数"}
+
+    text = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    macros = {}
+    for mm in re.finditer(r'(?m)^[ \t]*@([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', text):
+        macros[mm.group(1)] = mm.group(2)
+
+    new_text, ok_u, msg_u = _update_tech_pos_in_text(text, tid, x, y, macros)
+    if not ok_u:
+        return {"ok": False, "msg": msg_u}
     if new_text == text:
         return {"ok": True, "msg": "坐标没变"}
     snapshot(p)
-    _write_bom_text(p, new_text, has_bom)
+    _atomic_write(p, new_text.encode("utf-8"))
     if tid in state.techs():
         state.techs()[tid]["fx"] = x
         state.techs()[tid]["fy"] = y
+        state.techs()[tid]["file"] = rel_n.replace("/", os.sep)
+        state.techs()[tid]["source"] = os.path.basename((top or "").rstrip("\\/")) or (top or "")
     return {"ok": True, "msg": "%s → x=%d y=%d" % (tid, x, y), "x": x, "y": y}
+
+
+def tech_batch_move(root, moves):
+    """批量更新多个科技坐标（[{tid, rel?, x, y, year?}]），自动按文件单文件接管并增量刷新。"""
+    if not isinstance(moves, (list, tuple)) or not moves:
+        return {"ok": False, "msg": "moves 不能为空"}
+
+    by_rel = {}
+    for mv in moves:
+        if not isinstance(mv, dict):
+            continue
+        tid = (mv.get("tid") or mv.get("id") or "").strip()
+        if not tid:
+            continue
+        rel = (mv.get("rel") or mv.get("file") or (state.techs().get(tid) or {}).get("file") or "").strip()
+        if not rel:
+            continue
+        by_rel.setdefault(rel.replace("\\", "/"), []).append(mv)
+
+    if not by_rel:
+        return {"ok": False, "msg": "没有可移动的有效科技条目"}
+
+    moved = 0
+    results = []
+    for rel_n, items in by_rel.items():
+        top, p, _rn, err = _ensure_tech_file_writable(root, rel_n)
+        if not p:
+            results.append({"rel": rel_n, "ok": False, "msg": err})
+            continue
+        text = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        macros = {}
+        for mm in re.finditer(r'(?m)^[ \t]*@([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', text):
+            macros[mm.group(1)] = mm.group(2)
+
+        cur_text = text
+        changed_tids = []
+        for mv in items:
+            tid = (mv.get("tid") or mv.get("id") or "").strip()
+            try:
+                nx = int(round(float(mv.get("x", 0))))
+                ny = int(round(float(mv.get("y", 0))))
+            except Exception:
+                results.append({"tid": tid, "ok": False, "msg": "坐标必须是整数"})
+                continue
+            yr = mv.get("year")
+            nxt, ok_u, msg_u = _update_tech_pos_in_text(cur_text, tid, nx, ny, macros, year=yr)
+            if not ok_u:
+                results.append({"tid": tid, "ok": False, "msg": msg_u})
+                continue
+            cur_text = nxt
+            changed_tids.append((tid, nx, ny, yr))
+
+        if cur_text != text and braces_balanced(cur_text):
+            snapshot(p)
+            _atomic_write(p, cur_text.encode("utf-8"))
+            state.changed()[p] = rel_n
+        for tid, nx, ny, yr in changed_tids:
+            if tid in state.techs():
+                state.techs()[tid]["fx"] = nx
+                state.techs()[tid]["fy"] = ny
+                if yr is not None and str(yr).strip():
+                    state.techs()[tid]["year"] = str(yr).strip()
+                state.techs()[tid]["file"] = rel_n.replace("/", os.sep)
+                state.techs()[tid]["source"] = os.path.basename((top or "").rstrip("\\/")) or (top or "")
+            moved += 1
+            results.append({"tid": tid, "ok": True, "x": nx, "y": ny})
+
+    return {"ok": True, "moved": moved, "results": results, "msg": "已批量移动 %d 个科技" % moved}
 
 
 
@@ -267,9 +527,9 @@ def load_country_techs(root=None, tag=""):
     except Exception as e:
         return {"ok": False, "msg": "读取失败：%s" % e, "unlocked": []}
     text = _strip_keep_len(raw)
-    unlocked, blocks = [], 0
-    for a, b, body in find_blocks(text, "set_technology"):
-        blocks += 1
+    block_list, _dspans = collect_top_blocks(text, "set_technology", include_date=False)
+    unlocked, blocks = [], len(block_list)
+    for _depth, _a, _b, body in block_list:
         for ln in body.splitlines():
             ln = ln.strip()
             if not ln or ln.startswith("#"):
@@ -314,7 +574,8 @@ def country_tech_toggle(root, tag, tech, on=True):
 
     raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
     text = _strip_keep_len(raw)
-    blocks = list(find_blocks(text, "set_technology"))
+    non_date_blocks, dspans = collect_top_blocks(text, "set_technology", include_date=False)
+    top_blocks = [blk for blk in non_date_blocks if blk[0] == 0]
     cur = load_country_techs(root, tag)["unlocked"]
     has = tech in cur
 
@@ -323,38 +584,33 @@ def country_tech_toggle(root, tag, tech, on=True):
     if (not on) and (not has):
         return {"ok": True, "msg": "本来就没有 %s" % tech}
 
-    if not blocks:
-        if not on:
-            return {"ok": True, "msg": "本来就没有 %s" % tech}
-        ins = "\n\tset_technology = {\n\t\t%s = 1\n\t}\n" % tech
-        body_i = text.find("history = {")
-        if body_i >= 0:
-            br = text.find("{", body_i)
-            pos = br + 1
-            new_text = raw[:pos] + ins + raw[pos:]
+    if on:
+        if top_blocks:
+            _depth, _a, b, _body = top_blocks[0]
+            new_text = append_into_block(raw, b, "\t%s = 1" % tech)
+            msg = "已加 %s" % tech
         else:
-            new_text = raw.rstrip() + "\nhistory = {" + ins + "}\n"
+            ins = "\nset_technology = {\n\t%s = 1\n}\n" % tech
+            new_text = insert_before_date_or_end(raw, dspans, ins)
+            msg = "已加 %s（新建 set_technology 块）" % tech
         snapshot(dst)
         _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
-        return {"ok": True, "msg": "已加 %s（新建 set_technology 块）" % tech}
+        return {"ok": True, "msg": msg}
 
-    a, b, body = blocks[0]
-    if on:
-        # 在块末尾插入
-        ins = "\n\t\t%s = 1" % tech
-        new_text = raw[:b - 1] + ins + raw[b - 1:]
-    else:
-        # 删掉那一行
-        pat = re.compile(r'(?m)^[ \t]*' + re.escape(tech) + r'[ \t]*=[ \t]*1[ \t]*\r?\n?')
+    pat = re.compile(r'(?m)^[ \t]*' + re.escape(tech) + r'[ \t]*=[ \t]*1[ \t]*\r?\n?')
+    new_text = None
+    for _depth, a, b, _body in non_date_blocks:
         seg = raw[a:b]
         seg2 = pat.sub('', seg)
-        if seg2 == seg:
-            return {"ok": False, "msg": "没定位到 %s 那一行" % tech}
-        new_text = raw[:a] + seg2 + raw[b:]
+        if seg2 != seg:
+            new_text = raw[:a] + seg2 + raw[b:]
+            break
+    if new_text is None:
+        return {"ok": False, "msg": "没定位到 %s 那一行" % tech}
 
     snapshot(dst)
     _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
-    return {"ok": True, "msg": "%s %s" % ("已加" if on else "已删", tech)}
+    return {"ok": True, "msg": "已删 %s" % tech}
 
 
 
@@ -463,8 +719,10 @@ def validate_tech_script(raw, tid):
 
 def save_tech(root, rel, tid, raw, name="", desc="", name_ja="", desc_ja="", props=None,
               name_en="", desc_en=""):
-    path = os.path.join(root, rel)
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read()
+    top, path, rel_n, err = _ensure_tech_file_writable(root, rel, tid=tid)
+    if not path:
+        return False, err
+    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read()
     m = re.search(r'(?m)^[ \t]*%s\s*=\s*\{' % re.escape(tid), text)
     if not m:
         return False, "未找到科技 " + tid
@@ -474,18 +732,22 @@ def save_tech(root, rel, tid, raw, name="", desc="", name_ja="", desc_ja="", pro
         for k in ("year", "start_year", "research_cost", "path"):
             if props.get(k) not in (None, ""):
                 raw = set_scalar(raw, k, props.get(k))
-        if props.get("prereq_raw"):
+        if "prereq_raw" in props and props.get("prereq_raw") is not None:
             raw = set_raw_block(raw, "prerequisite", props.get("prereq_raw"))
         for key, bname in (("enable_equipments_raw", "enable_equipments"),
-                           ("sub_technologies_raw", "sub_technologies")):
-            if props.get(key):
+                           ("sub_technologies_raw", "sub_technologies"),
+                           ("xor_raw", "xor"),
+                           ("categories_raw", "categories"),
+                           ("enable_subunits_raw", "enable_subunits")):
+            if key in props and props.get(key) is not None:
                 raw = set_raw_block(raw, bname, props.get(key))
     okv, msgv = validate_tech_script(raw, tid)
     if not okv:
         return False, msgv + "，未保存"
+    new_text = text[:m.start()] + raw.strip() + "\n" + text[e:]
     snapshot(path)
-    _atomic_write(path, _bom_for(path) + (text[:m.start()] + raw.strip() + "\n" + text[e:]).encode("utf-8"))
-    state.changed()[path] = rel
+    _atomic_write(path, new_text.encode("utf-8"))
+    state.changed()[path] = rel_n
     ents = {}
     if name: ents.setdefault("simp_chinese", {})[tid] = name
     if desc: ents.setdefault("simp_chinese", {})[tid + "_desc"] = desc
@@ -494,40 +756,45 @@ def save_tech(root, rel, tid, raw, name="", desc="", name_ja="", desc_ja="", pro
     if name_en: ents.setdefault("english", {})[tid] = name_en
     if desc_en: ents.setdefault("english", {})[tid + "_desc"] = desc_en
     if ents:
-        save_loc(root, ents)
+        save_loc(top, ents)
     macros = {}
-    for mm in re.finditer(r'(?m)^\s*@([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', strip_comments(text)):
+    for mm in re.finditer(r'(?m)^\s*@([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', strip_comments(new_text)):
         macros[mm.group(1)] = mm.group(2)
     rb = raw.find("{")
     re_idx = raw.rfind("}")
     tv = raw[rb + 1:re_idx] if (rb >= 0 and re_idx > rb) else raw
-    src = os.path.basename((root or "").rstrip("\\/")) or root
-    entry = _build_tech_entry(tid, tv, rel, src, macros=macros)
-    techs = state.techs()
-    entry["leads"] = [x for x in entry.get("leads", []) if x in techs and x != tid]
-    pre = {p for p in entry.get("prereq", []) if p in techs and p != tid}
-    for other_id, other in techs.items():
-        if other_id != tid and tid in (other.get("leads") or []):
-            pre.add(other_id)
-    entry["prereq"] = sorted(pre)
-    techs[tid] = entry
+    src = os.path.basename((top or "").rstrip("\\/")) or (top or "")
+    rel_os = rel_n.replace("/", os.sep)
+    old_entry = state.techs().get(tid)
+    entry = _build_tech_entry(tid, tv, rel_os, src, macros=macros)
+    _sync_tech_relations(tid, old_entry, entry)
     return True, "科技已保存"
 
 
 
-def add_tech(root, tid, folder, year="1936"):
+def add_tech(root, tid, folder, year="1936", x=0, y=0, parent_tech=None, as_root=False,
+             name_zh="", desc_zh=""):
     if not re.match(r'^[A-Za-z0-9_]+$', tid or ""):
         return False, "科技 id 只能字母数字下划线"
+    top = _writable_tech_top(root)
+    if not top:
+        return False, "找不到可写的 mod 目录"
+    try:
+        ix = int(round(float(x or 0)))
+        iy = int(round(float(y or 0)))
+    except Exception:
+        ix, iy = 0, 0
     folder = folder or "custom_folder"
-    d = os.path.join(root, "common", "technologies")
+    d = os.path.join(top, "common", "technologies")
     os.makedirs(d, exist_ok=True)
-    fn = unique_editor_filename(root, "common/technologies", "zz_focus_editor_technologies.txt")
+    fn = unique_editor_filename(top, "common/technologies", "zz_focus_editor_technologies.txt")
     path = os.path.join(d, fn)
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read() if os.path.exists(path) else "technologies = {\n}\n"
+    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read() if os.path.exists(path) else "technologies = {\n}\n"
     if re.search(r'(?m)^\s*%s\s*=\s*\{' % re.escape(tid), text):
         return False, "科技已存在"
     block = ("\t%s = {\n\t\tresearch_cost = 1\n\t\tstart_year = %s\n"
-             "\t\tfolder = {\n\t\t\tname = %s\n\t\t\tposition = { x = 0 y = 0 }\n\t\t}\n\t}\n" % (tid, year, folder))
+             "\t\tfolder = {\n\t\t\tname = %s\n\t\t\tposition = { x = %d y = %d }\n\t\t}\n\t}\n"
+             % (tid, year, folder, ix, iy))
     tm = re.search(r'(?m)^\s*technologies\s*=\s*\{', text)
     if not tm:
         return False, "缺少 technologies = { ... } 根块"
@@ -535,22 +802,33 @@ def add_tech(root, tid, folder, year="1936"):
     te = brace_match(text, tb)
     text = text[:te - 1] + block + text[te - 1:]
     snapshot(path)
-    _atomic_write(path, _bom_for(path) + text.encode("utf-8"))
+    _atomic_write(path, text.encode("utf-8"))
     rel = os.path.join("common", "technologies", fn)
     state.changed()[path] = rel
+
+    ents = {}
+    if name_zh:
+        ents.setdefault("simp_chinese", {})[tid] = str(name_zh)
+    if desc_zh:
+        ents.setdefault("simp_chinese", {})[tid + "_desc"] = str(desc_zh)
+    if ents:
+        save_loc(top, ents)
+
     ib = block.find("{")
     ie = block.rfind("}")
     tv = block[ib + 1:ie]
-    src = os.path.basename((root or "").rstrip("\\/")) or root
+    src = os.path.basename((top or "").rstrip("\\/")) or (top or "")
     entry = _build_tech_entry(tid, tv, rel, src)
-    techs = state.techs()
-    entry["leads"] = [x for x in entry.get("leads", []) if x in techs and x != tid]
-    pre = {p for p in entry.get("prereq", []) if p in techs and p != tid}
-    for other_id, other in techs.items():
-        if other_id != tid and tid in (other.get("leads") or []):
-            pre.add(other_id)
-    entry["prereq"] = sorted(pre)
-    techs[tid] = entry
+    _sync_tech_relations(tid, None, entry)
+
+    if parent_tech:
+        p_entry = state.techs().get(parent_tech)
+        p_rel = (p_entry or {}).get("file") or rel
+        tech_link(top, p_rel, parent_tech, tid, mode="path")
+    elif as_root:
+        from xuerong.model.tech_gui import tech_gridbox_register
+        tech_gridbox_register(top, folder, tid)
+
     return True, "已新建科技 " + tid
 
 
@@ -631,17 +909,97 @@ def delete_tech(root, rel, tid):
 
 
 
-def tech_link(root, rel, src, dst):
-    path = os.path.join(root, rel)
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read()
-    m = re.search(r'(?m)^[ \t]*%s\s*=\s*\{' % re.escape(src), text)
-    if not m:
-        return False, "未找到源科技 " + src
-    b = text.find('{', m.start())
-    e = brace_match(text, b)
+def _fmt_coeff(coeff):
+    try:
+        fc = float(coeff)
+        return str(int(fc)) if fc.is_integer() else str(fc)
+    except Exception:
+        return "1"
+
+
+def _edit_xor_in_file(root, rel, tid, peer_id, add=True):
+    """在 tid 所在文件内添加或删除 xor 中的 peer_id（单文件接管 + 无 BOM）。"""
+    top, path, rel_n, err = _ensure_tech_file_writable(root, rel, tid=tid)
+    if not path:
+        return False, None, None, "", err
+    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read()
+    loc = _tech_block_range(text, tid)
+    if not loc:
+        return False, None, None, "", "未找到科技 " + tid
+    b, e = loc
     block = text[b + 1:e - 1]
-    if re.search(r'leads_to_tech\s*=\s*"?%s"?' % re.escape(dst), block):
+    clean_blk = _strip_keep_len(block)
+    xm = re.search(r'(?m)^[ \t]*xor\s*=\s*\{', clean_blk)
+    if add:
+        if xm:
+            xb = block.find('{', xm.start())
+            xe = brace_match(clean_blk, xb)
+            xinner = block[xb + 1:xe - 1]
+            existing = re.findall(r'[A-Za-z][A-Za-z0-9_]*', strip_comments(xinner))
+            if peer_id in existing:
+                return True, top, path, rel_n, ""
+            nb = block[:xe - 1].rstrip() + "\n\t\t\t%s\n\t\t" % peer_id + block[xe - 1:]
+        else:
+            nb = block.rstrip() + "\n\t\txor = {\n\t\t\t%s\n\t\t}\n\t" % peer_id
+    else:
+        if not xm:
+            return True, top, path, rel_n, ""
+        xb = block.find('{', xm.start())
+        xe = brace_match(clean_blk, xb)
+        xinner = block[xb + 1:xe - 1]
+        xinner2 = re.sub(r'(?m)^[ \t]*%s[ \t]*\r?\n?' % re.escape(peer_id), '', xinner)
+        if xinner2 == xinner:
+            xinner2 = re.sub(r'\b%s\b' % re.escape(peer_id), '', xinner)
+        rem = re.findall(r'[A-Za-z][A-Za-z0-9_]*', strip_comments(xinner2))
+        if not rem:
+            nb = block[:xm.start()].rstrip() + "\n\t" + block[xe:].lstrip("\r\n")
+        else:
+            nb = block[:xb + 1] + xinner2 + block[xe - 1:]
+
+    new_text = text[:b + 1] + nb + text[e - 1:]
+    if not braces_balanced(new_text):
+        return False, None, None, "", "xor 编辑后括号不平衡"
+    snapshot(path)
+    _atomic_write(path, new_text.encode("utf-8"))
+    state.changed()[path] = rel_n
+    _refresh_tech_in_state(top, path, rel_n, tid, full_text=new_text)
+    return True, top, path, rel_n, ""
+
+
+def tech_link(root, rel, src, dst, mode="path", coeff=1):
+    """连接两项科技：mode='path' 插入独立 path 块，mode='xor' 双向写 xor 互斥；增量刷新 state。"""
+    if not src or not dst:
+        return False, "参数不完整"
+    if src == dst:
+        return False, "不能连接自身"
+    mode = (mode or "path").strip().lower()
+    if mode not in ("path", "xor"):
+        return False, "不支持的连接模式：" + mode
+
+    if mode == "xor":
+        src_rel = rel or (state.techs().get(src) or {}).get("file") or ""
+        dst_rel = (state.techs().get(dst) or {}).get("file") or src_rel
+        ok1, top1, _p1, _r1, err1 = _edit_xor_in_file(root, src_rel, src, dst, add=True)
+        if not ok1:
+            return False, err1
+        ok2, _top2, _p2, _r2, err2 = _edit_xor_in_file(top1 or root, dst_rel, dst, src, add=True)
+        if not ok2:
+            return False, err2
+        return True, "已添加互斥：%s ↔ %s" % (src, dst)
+
+    top, path, rel_n, err = _ensure_tech_file_writable(root, rel, tid=src)
+    if not path:
+        return False, err
+    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read()
+    loc = _tech_block_range(text, src)
+    if not loc:
+        return False, "未找到源科技 " + src
+    b, e = loc
+    block = text[b + 1:e - 1]
+    clean_blk = strip_comments(block)
+    if re.search(r'leads_to_tech\s*=\s*"?%s"?' % re.escape(dst), clean_blk):
         return False, "这条前置已经存在"
+
     adj = {k: set(v.get("leads", [])) for k, v in state.techs().items()}
     stack, seen = [dst], set()
     while stack:
@@ -652,15 +1010,87 @@ def tech_link(root, rel, src, dst):
             continue
         seen.add(n)
         stack += list(adj.get(n, []))
-    pm = re.search(r'(?m)^[ \t]*path\s*=\s*\{', block)
-    if pm:
+
+    coeff_s = _fmt_coeff(coeff)
+    new_path_block = "\n\t\tpath = {\n\t\t\tleads_to_tech = %s\n\t\t\tresearch_cost_coeff = %s\n\t\t}" % (dst, coeff_s)
+    # 插入独立 path = { ... } 块：若有已有 path 块则放在最后一个之后，否则放在末尾
+    clean_keep = _strip_keep_len(block)
+    last_pe = None
+    for pm in re.finditer(r'(?m)^[ \t]*path\s*=\s*\{', clean_keep):
         pb = block.find('{', pm.start())
-        pe = brace_match(block, pb)
-        nb = block[:pe - 1] + "\n\t\t\tleads_to_tech = %s\n\t\t\tresearch_cost_coeff = 1\n\t\t" % dst + block[pe - 1:]
+        last_pe = brace_match(clean_keep, pb)
+    if last_pe is not None:
+        nb = block[:last_pe] + new_path_block + block[last_pe:]
     else:
-        nb = block.rstrip() + "\n\t\tpath = {\n\t\t\tleads_to_tech = %s\n\t\t\tresearch_cost_coeff = 1\n\t\t}\n\t" % dst
+        nb = block.rstrip() + new_path_block + "\n\t"
+
+    new_text = text[:b + 1] + nb + text[e - 1:]
+    if not braces_balanced(new_text):
+        return False, "添加前置后括号不平衡"
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(text[:b + 1] + nb + text[e - 1:])
-    state.changed()[path] = rel
-    _reload()
+    _atomic_write(path, new_text.encode("utf-8"))
+    state.changed()[path] = rel_n
+    _refresh_tech_in_state(top, path, rel_n, src, full_text=new_text)
     return True, "已添加前置：%s → %s" % (src, dst)
+
+
+def tech_unlink(root, rel, src, dst, mode="path"):
+    """断开两项科技连线：mode='path' 删除匹配 leads_to_tech 的 path 块，mode='xor' 双向移除互斥。"""
+    if not src or not dst:
+        return False, "参数不完整"
+    mode = (mode or "path").strip().lower()
+    if mode not in ("path", "xor"):
+        return False, "不支持的连接模式：" + mode
+
+    if mode == "xor":
+        src_rel = rel or (state.techs().get(src) or {}).get("file") or ""
+        dst_rel = (state.techs().get(dst) or {}).get("file") or src_rel
+        ok1, top1, _p1, _r1, err1 = _edit_xor_in_file(root, src_rel, src, dst, add=False)
+        if not ok1:
+            return False, err1
+        ok2, _top2, _p2, _r2, err2 = _edit_xor_in_file(top1 or root, dst_rel, dst, src, add=False)
+        if not ok2:
+            return False, err2
+        return True, "已移除互斥：%s ↔ %s" % (src, dst)
+
+    top, path, rel_n, err = _ensure_tech_file_writable(root, rel, tid=src)
+    if not path:
+        return False, err
+    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read()
+    loc = _tech_block_range(text, src)
+    if not loc:
+        return False, "未找到源科技 " + src
+    b, e = loc
+    block = text[b + 1:e - 1]
+    clean_keep = _strip_keep_len(block)
+
+    pat_dst = re.compile(r'leads_to_tech\s*=\s*"?%s"?\b' % re.escape(dst))
+    nb = None
+    for pm in re.finditer(r'(?m)^[ \t]*path\s*=\s*\{', clean_keep):
+        pb = block.find('{', pm.start())
+        pe = brace_match(clean_keep, pb)
+        p_clean = clean_keep[pb + 1:pe - 1]
+        if pat_dst.search(p_clean):
+            all_leads = re.findall(r'leads_to_tech\s*=\s*"?([A-Za-z0-9_]+)"?', p_clean)
+            if len(all_leads) <= 1:
+                tail = block[pe:].lstrip("\r\n")
+                if tail.strip():
+                    nb = block[:pm.start()].rstrip() + "\n" + tail
+                else:
+                    nb = block[:pm.start()].rstrip() + "\n\t"
+            else:
+                p_raw = block[pb + 1:pe - 1]
+                p_raw2 = re.sub(r'(?m)^[ \t]*leads_to_tech\s*=\s*"?%s"?[ \t]*\r?\n?' % re.escape(dst), '', p_raw)
+                nb = block[:pb + 1] + p_raw2 + block[pe - 1:]
+            break
+
+    if nb is None:
+        return False, "未找到前置连接：%s → %s" % (src, dst)
+    new_text = text[:b + 1] + nb + text[e - 1:]
+    if not braces_balanced(new_text):
+        return False, "移除前置后括号不平衡"
+    snapshot(path)
+    _atomic_write(path, new_text.encode("utf-8"))
+    state.changed()[path] = rel_n
+    _refresh_tech_in_state(top, path, rel_n, src, full_text=new_text)
+    return True, "已移除前置：%s → %s" % (src, dst)

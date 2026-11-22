@@ -294,3 +294,63 @@ def apply_modifier_props(raw, props):
     if last_rb != -1:
         return raw[:last_rb].rstrip() + "\n" + block_txt + "\n" + raw[last_rb:]
     return raw.rstrip() + "\n" + block_txt + "\n"
+
+
+def brace_depth_at(text, pos):
+    """计算无注释文本在 pos 处的花括号嵌套深度（忽略引号内字符）。"""
+    d = 0
+    instr = False
+    for ch in text[:pos]:
+        if ch == '"':
+            instr = not instr
+        elif not instr:
+            if ch == '{':
+                d += 1
+            elif ch == '}':
+                d -= 1
+    return d
+
+
+def date_block_spans(text):
+    """返回顶层日期块 YYYY.MM.DD = { ... } 的起止区间列表。"""
+    spans = []
+    for m in re.finditer(r'(?m)^[ \t]*\d{3,4}\.\d+\.\d+[ \t]*=\s*\{', text):
+        if brace_depth_at(text, m.start()) != 0:
+            continue
+        ob = text.find('{', m.end() - 1)
+        if ob < 0:
+            continue
+        ce = brace_match(text, ob)
+        if ce > ob:
+            spans.append((m.start(), ce))
+    return spans
+
+
+def collect_top_blocks(text, key, include_date=False):
+    """收集 key = { ... } 块，按 (depth == 0, 位置) 排序，可过滤日期块内部。"""
+    dspans = date_block_spans(text)
+    out = []
+    for a, b, body in find_blocks(text, key):
+        if not include_date and any(ds < a < de for ds, de in dspans):
+            continue
+        hdr = text.rfind(key, 0, a)
+        depth = brace_depth_at(text, hdr if hdr >= 0 else a)
+        out.append((depth, a, b, body))
+    out.sort(key=lambda x: (0 if x[0] == 0 else 1, x[1]))
+    return out, dspans
+
+
+def append_into_block(raw, block_end_idx, line_text):
+    """在块闭合 '}'（block_end_idx - 1）前追加一行，避免与 '}' 粘连。"""
+    before = raw[:block_end_idx - 1].rstrip(" \t")
+    nl = "" if (not before or before.endswith(("\n", "\r"))) else "\n"
+    line = (line_text or "").rstrip("\r\n")
+    return before + nl + line + "\n" + raw[block_end_idx - 1:]
+
+
+def insert_before_date_or_end(raw, dspans, ins):
+    """有顶层日期块时插在首个日期块之前，否则追加到文件末尾。"""
+    if dspans:
+        pos = dspans[0][0]
+        return raw[:pos].rstrip(" \t") + "\n" + ins + "\n" + raw[pos:]
+    return raw.rstrip() + "\n" + ins

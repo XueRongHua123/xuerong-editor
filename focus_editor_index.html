@@ -1570,21 +1570,105 @@ window.onerror = function(m, s, l, c){
     </div>
   </div>
 </div>
-<div id="techModal" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1020px,calc(100% - 70px));height:min(720px,calc(100% - 80px));background:#171b1d;border:1px solid #3a4346;border-radius:14px;z-index:60;padding:12px;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.55)">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="color:#c2ae82;font-size:14px">科技编辑器</b><div style="display:flex;gap:6px"><button class="btn" id="techRef">🔗 引用</button><button class="btn" id="techCopy">📋 复制</button><button class="btn" id="techAdd">＋ 新建</button><button class="btn" id="techDelete">🗑 删除</button><button class="btn primary" id="techSaveTop">保存科技</button><button class="btn" id="techClose">关闭</button></div></div>
-  <div style="display:flex;gap:6px;margin-bottom:6px">
-    <button class="btn on" id="techTabEdit">编辑</button>
-    <button class="btn" id="techTabTree">科技树</button>
-  </div>
-  <div id="techEditPane" style="display:flex;gap:10px;flex:1;min-height:0">
-    <div style="width:320px;display:flex;flex-direction:column;min-height:0">
-      <input id="techSearch" placeholder="搜索科技 id / 名称" style="margin:0 0 6px">
-      <div id="techList" style="overflow:auto;flex:1;background:#141719;border:1px solid #2f3a3c;border-radius:8px;padding:4px"></div>
+<div id="techModal" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1680px,calc(100% - 20px));height:min(960px,calc(100% - 20px));background:var(--panel);border:1px solid var(--line);border-radius:14px;z-index:60;padding:12px;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.55)">
+  <div class="tt-topbar">
+    <div class="tt-topbar-l">
+      <b>🔬 科技树工作台</b>
+      <div class="tt-view-switch">
+        <button class="btn on" id="techTabTree">🎨 可视工作台</button>
+        <button class="btn" id="techTabEdit">📝 表单与原文</button>
+      </div>
     </div>
-    <div style="flex:1;display:flex;flex-direction:column;min-height:0">
-      <div style="flex:1;min-height:0;overflow-y:auto;padding-right:4px">
-        <div id="techTitle" style="color:#ffd479;margin-bottom:4px"></div>
+    <div class="tt-topbar-r">
+      <button class="btn" id="techRef">🔗 引用</button>
+      <button class="btn" id="techCopy">📋 复制</button>
+      <button class="btn" id="ttStudioNewTech">✨ 向导新建</button>
+      <button class="btn" id="techAdd">＋ 新建</button>
+      <button class="btn" id="techDelete">🗑 删除</button>
+      <button class="btn primary" id="techSaveTop">保存科技</button>
+      <button class="btn" id="techClose">关闭</button>
+    </div>
+  </div>
+  <div class="tt-tabbar">
+    <div id="techFolderTabs" class="tt-tabs"></div>
+    <div class="tt-tabbar-acts">
+      <button class="btn" id="ttFolderNew">＋ 新建科技页</button>
+      <button class="btn" id="ttFolderReorder">⇄ 页签排序</button>
+    </div>
+    <div class="tt-layers">
+      <label class="tt-chk"><input type="checkbox" id="ttShowBg" checked> 背景与标题</label>
+      <label class="tt-chk"><input type="checkbox" id="ttShowYears" checked> 年代线</label>
+      <label class="tt-chk"><input type="checkbox" id="ttShowGridbox" checked> 根树框</label>
+      <label class="tt-chk"><input type="checkbox" id="ttSnapGrid" checked> 格网吸附</label>
+    </div>
+  </div>
+  <div class="tt-body">
+    <div class="tt-left">
+      <div class="tt-sec-head">
+        <span>本页根树（gridbox）</span>
+        <button class="btn tt-mini-btn" id="ttAddRootBox">＋ 根树</button>
+      </div>
+      <div id="ttRootList" class="tt-root-list"></div>
+      <input id="techSearch" placeholder="搜索科技 id / 名称" style="margin:0 0 6px">
+      <div id="techList" style="overflow:auto;flex:1;background:var(--input);border:1px solid var(--line);border-radius:8px;padding:4px"></div>
+    </div>
+    <div class="tt-center">
+      <div id="techTreePane" style="display:flex;flex-direction:column;flex:1;min-height:0;position:relative">
+        <div id="ttTools" class="tt-tools">
+          <div class="tt-mode-grp">
+            <button class="btn on" id="ttModeSelect" title="选择与拖动节点">🖱 选择</button>
+            <button class="btn" id="ttModeLink" title="依次点两个科技建立 path 前置">🔗 连前置</button>
+            <button class="btn" id="ttModeXor" title="依次点两个科技建立 xor 互斥">⚔️ 加互斥</button>
+            <button class="btn" id="ttModeUnlink" title="点击连线或依次点两个科技断开">✂️ 断线</button>
+          </div>
+          <button class="btn" id="ttEditToggle" title="打开后可以拖动科技节点改它在树上的位置">✏️ 拖动改位置</button>
+          <button class="btn" id="ttSavePos" title="把拖动后的 folder.position 写回文件">💾 保存位置</button>
+          <button class="btn" id="ttFit">适应</button>
+          <div class="tt-country-bar">
+            <select id="ttCountrySel" title="叠加显示国家开局已解锁科技"><option value="">国家叠加（无）</option></select>
+            <button class="btn" id="ttCountryBrush" title="开启后点击画布科技直接切换国家开局解锁">🖌️ 点选刷</button>
+          </div>
+          <span id="ttPosHint" class="tt-pos-hint"></span>
+        </div>
+        <svg id="techSvg"><g id="ttView"></g></svg>
+        <div id="techDetail" class="tt-detail"></div>
+      </div>
+      <div id="techEditPane" style="display:none;flex-direction:column;flex:1;min-height:0;gap:8px;overflow:auto;padding:4px">
+        <div class="tt-edit-head">
+          <span id="ttEditFileInfo" class="muted">未选择科技</span>
+          <button class="btn" id="ttEditCheckBtn">✓ 校验当前脚本</button>
+        </div>
+        <div class="tt-edit-grid">
+          <div class="tt-edit-card">
+            <div class="tt-sec-head"><span>常用脚本片段（点击追加到右侧脚本原文）</span></div>
+            <div id="ttEditSnippets" class="tt-snippet-row"></div>
+            <div class="tt-sec-head" style="margin-top:8px"><span>本页文件顶部 @macro 常量</span></div>
+            <div id="ttEditMacroList" class="tt-macro-list"></div>
+          </div>
+          <div class="tt-edit-card" style="flex:1;min-height:0;display:flex;flex-direction:column">
+            <div class="tt-sec-head"><span>本页科技坐标与属性总览（点击选中）</span></div>
+            <div id="ttEditPageTable" class="tt-page-table"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="tt-right">
+      <div class="tt-rtabs">
+        <button class="btn on" id="ttRTabTech">科技属性</button>
+        <button class="btn" id="ttRTabGui">页面与 GUI</button>
+        <button class="btn" id="ttRTabCountry">国家开局</button>
+      </div>
+      <div id="ttRPaneTech" class="tt-rpane">
+        <div id="techTitle" style="color:var(--accent);margin-bottom:4px;font-weight:600"></div>
         <div class="src-hint" id="techSrc"></div>
+        <div class="tt-icon-box">
+          <img id="techIconImg" alt="" src="">
+          <div class="tt-icon-acts">
+            <button class="btn" id="techIconPick">🖼 选图标</button>
+            <button class="btn" id="techIconUploadBtn">📥 导入PNG</button>
+            <input type="file" id="techIconFile" accept="image/*" style="display:none">
+          </div>
+        </div>
         <div class="k">中文名称 / 描述</div>
         <input type="text" id="techNameZ" placeholder="中文名称（游戏中显示的科技名称）"><textarea id="techDescZ" style="height:44px" placeholder="中文描述（游戏内悬停说明，不要把脚本效果填在这里）"></textarea>
         <details class="ed-lang-details">
@@ -1598,34 +1682,97 @@ window.onerror = function(m, s, l, c){
         </details>
         <div class="k">年份 / 科研花费 / 科技树路径</div>
         <div style="display:flex;gap:6px">
-          <input type="text" id="techYear" placeholder="year" style="width:90px">
-          <input type="text" id="techCost" placeholder="research_cost" style="width:120px">
-          <input type="text" id="techPath" placeholder="path / folder" style="flex:1">
+          <input type="text" id="techYear" placeholder="year" style="width:78px">
+          <input type="text" id="techCost" placeholder="cost" style="width:80px">
+          <input type="text" id="techPath" placeholder="folder" style="flex:1">
         </div>
-        <div class="k">前置（原始块，如 prerequisite = { ... }）</div>
-        <textarea id="techPrereq" style="height:70px"></textarea>
-        <div class="k">enable_equipments（原始块，可留空）</div>
-        <textarea id="techEnable" style="height:50px"></textarea>
-        <div class="k">sub_technologies（原始块，可留空）</div>
-        <textarea id="techSub" style="height:50px"></textarea>
+        <div id="techGridInfo" class="tt-grid-info">所属根树：-</div>
+        <div class="k" style="display:flex;justify-content:space-between;align-items:center">
+          <span>科技分类（categories）</span>
+          <button class="btn tt-mini-btn" id="techCatAddBtn">＋ 分类</button>
+        </div>
+        <div id="techCatChips" class="tt-chip-box"></div>
+        <div class="k">互斥科技（xor）</div>
+        <div id="techXorChips" class="tt-chip-box"></div>
+        <textarea id="techXorRaw" style="height:38px" placeholder="每行一个互斥科技 id"></textarea>
+        <div class="k">前置 / 后续连线</div>
+        <div id="techLinkChips" class="tt-chip-box"></div>
+        <details class="ed-lang-details" style="margin-top:6px">
+          <summary>前置 / 装备 / 子科技 原始块</summary>
+          <div class="ed-lang-body">
+            <div class="k">前置（prerequisite 原始块）</div>
+            <textarea id="techPrereq" style="height:56px"></textarea>
+            <div class="k">enable_equipments（原始块，可留空）</div>
+            <textarea id="techEnable" style="height:46px"></textarea>
+            <div class="k">sub_technologies（原始块，可留空）</div>
+            <textarea id="techSub" style="height:46px"></textarea>
+          </div>
+        </details>
         <div class="k">脚本原文（保存会重写该块）</div>
-        <textarea id="techRaw" style="height:140px;min-height:110px;flex-shrink:0;font-family:Consolas,monospace"></textarea>
+        <textarea id="techRaw" style="height:130px;min-height:96px;flex-shrink:0;font-family:Consolas,monospace"></textarea>
+        <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--line);flex-shrink:0"><button class="btn primary" id="techSave">保存科技</button></div>
       </div>
-      <div style="margin-top:6px;padding-top:6px;border-top:1px solid #2f3a3c;flex-shrink:0"><button class="btn primary" id="techSave">保存科技</button></div>
+      <div id="ttRPaneGui" class="tt-rpane" style="display:none">
+        <div class="k">页签配置（00_technology.txt）</div>
+        <div class="tt-form-row">
+          <label>分类 ledger<select id="ttGuiLedger"><option value="">（无）</option><option value="army">army</option><option value="navy">navy</option><option value="air">air</option><option value="civilian">civilian</option><option value="all">all</option><option value="hidden">hidden</option></select></label>
+          <label class="tt-chk" style="margin-top:14px"><input type="checkbox" id="ttGuiDoctrine"> doctrine = yes</label>
+        </div>
+        <div class="k">available 条件块</div>
+        <textarea id="ttGuiAvail" style="height:54px" placeholder="例如 always = yes"></textarea>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+          <button class="btn" id="ttGuiTabIconBtn">🖼 选页签图</button>
+          <button class="btn" id="ttGuiTabUploadBtn">📥 导入页签PNG</button>
+          <input type="file" id="ttGuiTabFile" accept="image/*" style="display:none">
+          <button class="btn primary" id="ttGuiSaveMeta">保存页签</button>
+        </div>
+        <div class="k">背景与画布尺寸（countrytechtreeview.gui）</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="text" id="ttGuiBgName" placeholder="GFX_..._bg" style="flex:1;margin:0">
+          <button class="btn" id="ttGuiBgPickBtn">选背景</button>
+          <button class="btn" id="ttGuiBgUploadBtn">导入PNG</button>
+          <input type="file" id="ttGuiBgFile" accept="image/*" style="display:none">
+        </div>
+        <div class="tt-form-row" style="margin-top:6px">
+          <label>画布宽 stripes_w<input type="text" id="ttGuiW" placeholder="1400"></label>
+          <label>画布高 stripes_h<input type="text" id="ttGuiH" placeholder="1275"></label>
+        </div>
+        <div style="margin-bottom:8px"><button class="btn primary" id="ttGuiSaveBg">保存背景与尺寸</button></div>
+        <div class="tt-sec-head"><span>年代标尺（years）</span><button class="btn tt-mini-btn" id="ttGuiAddYear">＋ 年代</button></div>
+        <div id="ttGuiYears" class="tt-gui-list"></div>
+        <div class="tt-sec-head" style="margin-top:8px"><span>分区标题（subtitles）</span><button class="btn tt-mini-btn" id="ttGuiAddSub">＋ 标题</button></div>
+        <div id="ttGuiSubtitles" class="tt-gui-list"></div>
+        <div class="k">节点皮肤与格距（item / slotsize）</div>
+        <div class="tt-form-row">
+          <label>item 宽<input type="text" id="ttGuiItemW" placeholder="183"></label>
+          <label>item 高<input type="text" id="ttGuiItemH" placeholder="84"></label>
+          <label>格宽 slot_w<input type="text" id="ttGuiSlotW" placeholder="70"></label>
+          <label>格高 slot_h<input type="text" id="ttGuiSlotH" placeholder="70"></label>
+        </div>
+        <button class="btn primary" id="ttGuiSaveStyle">保存皮肤与格距</button>
+      </div>
+      <div id="ttRPaneCountry" class="tt-rpane" style="display:none">
+        <div class="k">国家开局科技（history/countries）</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="text" id="ttCountryTagInput" placeholder="输入 TAG，如 GER" style="flex:1;margin:0">
+          <button class="btn primary" id="ttCountryLoadBtn">载入</button>
+        </div>
+        <div id="ttCountryStats" class="tt-country-stats">未载入国家</div>
+        <label class="tt-chk" style="margin:8px 0"><input type="checkbox" id="ttCountryBrush2"> 启用画布点选刷（点击节点切换开局解锁）</label>
+        <div class="muted" style="font-size:11.5px;line-height:1.6">
+          载入国家后，画布上已解锁科技会显示绿色边框。<br>
+          开启「点选刷」后，直接左键点击画布上的科技卡片，即可实时写入该国历史文件（<code>set_technology</code>）。
+        </div>
+      </div>
     </div>
   </div>
-  <div id="techTreePane" style="display:none;flex-direction:column;flex:1;min-height:0;position:relative">
-    <div id="techFolderTabs" class="tt-tabs"></div>
-    <div id="ttTools" style="display:flex;gap:6px;align-items:center;padding:0 0 6px">
-      <button class="btn" id="ttEditToggle" title="打开后可以拖动科技节点改它在树上的位置">✏️ 拖动改位置</button>
-      <button class="btn" id="ttSavePos" title="把拖动后的 folder.position 写回文件">💾 保存位置</button>
-      <span id="ttPosHint" style="font-size:11px;color:var(--muted)"></span>
-    </div>
-
-    <button class="btn" id="ttFit" style="position:absolute;right:12px;top:8px;z-index:3">适应</button>
-    <svg id="techSvg"><g id="ttView"></g></svg>
-    <div id="techDetail" class="tt-detail"></div>
+  <div id="techStudioFoot" class="tt-foot">
+    <span id="techDiagVis">游戏可见性：-</span>
+    <button class="btn tt-mini-btn" id="ttFixInvisibleBtn" style="display:none">🔧 一键修复隐身根科技</button>
+    <span id="techDiagOverlap">重叠：0</span>
+    <span id="techDiagMeta" class="muted"></span>
   </div>
+  <div id="ttStudioDlg" class="tt-dlg" style="display:none"></div>
 </div>
 <div id="eventModal" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1020px,calc(100% - 70px));height:min(720px,calc(100% - 80px));background:#171b1d;border:1px solid #3a4346;border-radius:14px;z-index:60;padding:12px;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.55)">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="color:#c2ae82;font-size:14px">事件编辑器</b><div style="display:flex;gap:6px"><button class="btn" id="eventRef">🔗 引用</button><button class="btn" id="eventCopy">📋 复制</button><button class="btn" id="eventAdd">＋ 新建</button><button class="btn" id="eventDelete">🗑 删除</button><button class="btn primary" id="eventSaveTop">保存事件</button><button class="btn" id="eventClose">关闭</button></div></div>
@@ -1925,6 +2072,7 @@ window.onerror = function(m, s, l, c){
 <script src="/web/js/10-focus.js"></script>
 <script src="/web/js/11-map.js"></script>
 <script src="/web/js/12-tech.js"></script>
+<script src="/web/js/12b-tech-studio.js"></script>
 <script src="/web/js/13-event.js"></script>
 <script src="/web/js/20-panels.js"></script>
 <script src="/web/js/21-tools.js"></script>

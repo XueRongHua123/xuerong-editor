@@ -34,7 +34,8 @@ from xuerong.core import paths as _paths
 from xuerong.core.text import (set_scalar, remove_block, braces_balanced, set_raw_block,
                                _first, _first_in, apply_modifier_props,
                                _strip_keep_len, strip_comments, brace_match, unq,
-                               top_items, find_blocks, _atomic_write, _bom_for, _read_text)
+                               top_items, find_blocks, _atomic_write, _bom_for, _read_text,
+                               date_block_spans, insert_before_date_or_end)
 from xuerong.core.paths import (_layer_dirs, _chain_layers, _start_date_for, pdx_user_dir,
                                 _resolve_mod_path, _steam_libraries, _mod_search_bases,
                                 _enabled_mod_order, _find_mod_by_name, _mod_display_name, _mod_descriptor,
@@ -1621,15 +1622,19 @@ def country_history_save(tag, fields):
 _DIPLO_INDEX = {"key": None, "idx": {}}
 
 
-def _diplo_autonomy_blocks(text):
-    """拆出文件里所有 set_autonomy = { target=... autonomous_state=... }"""
+def _diplo_autonomy_blocks(text, include_date=False):
+    """拆出文件里所有 set_autonomy = { target=... autonomous_state=... }（默认跳过日期块内）。"""
+    clean = _strip_keep_len(text)
+    dspans = [] if include_date else date_block_spans(clean)
     out = []
-    for m in re.finditer(r'(?m)^[ \t]*set_autonomy\s*=\s*\{', text):
-        b = text.find('{', m.end() - 1)
-        e = brace_match(text, b)
+    for m in re.finditer(r'(?m)^[ \t]*set_autonomy\s*=\s*\{', clean):
+        if not include_date and any(ds < m.start() < de for ds, de in dspans):
+            continue
+        b = clean.find('{', m.end() - 1)
+        e = brace_match(clean, b)
         if e <= b:
             continue
-        body = text[b + 1:e - 1]
+        body = clean[b + 1:e - 1]
         mt = re.search(r'target\s*=\s*([A-Z0-9_]{2,8})', body)
         ma = re.search(r'autonomous_state\s*=\s*(autonomy_[a-z_]+)', body)
         if mt:
@@ -1684,12 +1689,12 @@ def _diplo_block_text(target, autonomy):
 
 
 def _diplo_drop_blocks(text, targets=None):
-    """删掉 set_autonomy 块；targets=None 表示全删。
+    """删掉 1936 set_autonomy 块；targets=None 表示全删。
 
     同时清掉配套 else 里的对应 puppet = TAG，以及因此变成空壳的 else / if 块
     （用 brace_match 处理嵌套 limit = { OR = { ... } }）。
     """
-    blocks = [b for b in _diplo_autonomy_blocks(text)
+    blocks = [b for b in _diplo_autonomy_blocks(text, include_date=False)
               if targets is None or b["target"] in targets]
     gone = set()
     for blk in sorted(blocks, key=lambda x: -x["start"]):
@@ -1743,13 +1748,14 @@ def _diplo_drop_blocks(text, targets=None):
 
 
 def _diplo_set_lines(text, key, values):
-    """整块替换单行键（give_guarantee / give_military_access）"""
+    """整块替换单行键（give_guarantee / give_military_access），新增优先插在日期块前。"""
     pat = re.compile(r'(?m)^[ \t]*%s\s*=\s*[A-Z0-9_]{2,8}[ \t]*\r?\n?' % re.escape(key))
     text = pat.sub("", text)
     lines = "".join("\t%s = %s\n" % (key, v) for v in values)
     if not lines:
         return text
-    return text.rstrip() + "\n\n" + lines
+    dspans = date_block_spans(_strip_keep_len(text))
+    return insert_before_date_or_end(text, dspans, "\n" + lines)
 
 
 def _country_write_path(tag):
@@ -1967,8 +1973,10 @@ def diplomacy_save(tag, puppets=None, overlord=None, autonomy=None,
         if puppets is not None:
             old = [b["target"] for b in _diplo_autonomy_blocks(before)]
             text = _diplo_drop_blocks(text, None)
-            for it in items:
-                text = text.rstrip() + "\n" + _diplo_block_text(it["tag"], it["autonomy"])
+            if items:
+                dspans = date_block_spans(_strip_keep_len(text))
+                ins = "".join(_diplo_block_text(it["tag"], it["autonomy"]) for it in items)
+                text = insert_before_date_or_end(text, dspans, ins)
             diff.append({"key": "puppets", "label": "本国的附庸",
                          "old": ", ".join(old) or "无",
                          "new": ", ".join("%s(%s)" % (i["tag"], dict(AUTONOMY_STATES).get(i["autonomy"], i["autonomy"])) for i in items) or "无"})
@@ -2014,7 +2022,8 @@ def diplomacy_save(tag, puppets=None, overlord=None, autonomy=None,
                     return {"ok": False, "msg": "要写到宗主 %s 的文件里，但写不进去：%s" % (over, why)}
                 t2, b2 = _read_bom_text(q)
                 t2 = _diplo_drop_blocks(t2, {tag})
-                t2 = t2.rstrip() + "\n" + _diplo_block_text(tag, aut)
+                dspans2 = date_block_spans(_strip_keep_len(t2))
+                t2 = insert_before_date_or_end(t2, dspans2, _diplo_block_text(tag, aut))
                 snapshot(q)
                 _write_bom_text(q, t2, b2)
                 diff.append({"key": "overlord", "label": "%s 的文件里写入附庸" % over,

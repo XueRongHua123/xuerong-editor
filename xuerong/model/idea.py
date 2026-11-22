@@ -19,9 +19,10 @@ from xuerong.core import paths
 from xuerong.core.paths import (_layer_dirs, effective_layer_files,
                                 is_readonly_mod, is_under_game, mod_layers,
                                 unique_editor_filename)
-from xuerong.core.text import (_atomic_write, _bom_for, _strip_keep_len, apply_modifier_props,
-                               brace_match, braces_balanced, find_blocks, set_raw_block,
-                               set_scalar, strip_comments, top_items)
+from xuerong.core.text import (_atomic_write, _bom_for, _strip_keep_len, append_into_block,
+                               apply_modifier_props, brace_match, braces_balanced,
+                               collect_top_blocks, find_blocks, insert_before_date_or_end,
+                               set_raw_block, set_scalar, strip_comments, top_items)
 from xuerong.model.country import _country_hist_file, _country_hist_write_base
 from xuerong.model.history import backup, snapshot
 
@@ -106,50 +107,6 @@ def load_ideas(root):
 
 
 
-def _brace_depth_at(text, pos):
-    """计算无注释文本在 pos 处的花括号嵌套深度（忽略引号内字符）。"""
-    d = 0
-    instr = False
-    for ch in text[:pos]:
-        if ch == '"':
-            instr = not instr
-        elif not instr:
-            if ch == '{':
-                d += 1
-            elif ch == '}':
-                d -= 1
-    return d
-
-
-def _date_block_spans(text):
-    """返回顶层日期块 YYYY.MM.DD = { ... } 的起止区间列表。"""
-    spans = []
-    for m in re.finditer(r'(?m)^[ \t]*\d{3,4}\.\d+\.\d+[ \t]*=\s*\{', text):
-        if _brace_depth_at(text, m.start()) != 0:
-            continue
-        ob = text.find('{', m.end() - 1)
-        if ob < 0:
-            continue
-        ce = brace_match(text, ob)
-        if ce > ob:
-            spans.append((m.start(), ce))
-    return spans
-
-
-def _collect_add_ideas_blocks(text, include_date=False):
-    """收集 add_ideas = { ... } 块，按 (depth == 0, 位置) 排序，可过滤日期块内部。"""
-    dspans = _date_block_spans(text)
-    out = []
-    for a, b, body in find_blocks(text, "add_ideas"):
-        if not include_date and any(ds < a < de for ds, de in dspans):
-            continue
-        hdr = text.rfind("add_ideas", 0, a)
-        depth = _brace_depth_at(text, hdr if hdr >= 0 else a)
-        out.append((depth, a, b, body))
-    out.sort(key=lambda x: (0 if x[0] == 0 else 1, x[1]))
-    return out, dspans
-
-
 def _extract_ideas_from_blocks(blocks):
     out = []
     for _depth, _a, _b, body in blocks:
@@ -189,7 +146,7 @@ def load_country_ideas(root=None, tag=""):
     except Exception as e:
         return {"ok": False, "msg": "读取失败：%s" % e, "ideas": []}
     text = _strip_keep_len(raw)
-    blocks, _dspans = _collect_add_ideas_blocks(text, include_date=False)
+    blocks, _dspans = collect_top_blocks(text, "add_ideas", include_date=False)
     uniq = _extract_ideas_from_blocks(blocks)
     return {"ok": True, "tag": tag, "file": os.path.basename(p),
             "blocks": len(blocks), "ideas": uniq, "count": len(uniq),
@@ -221,7 +178,7 @@ def country_idea_toggle(root, tag, idea, on=True):
 
     raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
     text = _strip_keep_len(raw)
-    non_date_blocks, dspans = _collect_add_ideas_blocks(text, include_date=False)
+    non_date_blocks, dspans = collect_top_blocks(text, "add_ideas", include_date=False)
     top_blocks = [blk for blk in non_date_blocks if blk[0] == 0]
 
     if on:
@@ -229,22 +186,16 @@ def country_idea_toggle(root, tag, idea, on=True):
             return {"ok": True, "msg": "已经有 %s 了" % idea}
         if top_blocks:
             _depth, _a, b, _body = top_blocks[0]
-            before = raw[:b - 1].rstrip(" \t")
-            nl = "" if (not before or before.endswith(("\n", "\r"))) else "\n"
-            new_text = before + nl + "\t" + idea + "\n" + raw[b - 1:]
+            new_text = append_into_block(raw, b, "\t" + idea)
         else:
             ins = "\nadd_ideas = {\n\t%s\n}\n" % idea
-            if dspans:
-                pos = dspans[0][0]
-                new_text = raw[:pos].rstrip(" \t") + "\n" + ins + "\n" + raw[pos:]
-            else:
-                new_text = raw.rstrip() + "\n" + ins
+            new_text = insert_before_date_or_end(raw, dspans, ins)
         snapshot(dst)
         _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
         msg = "已加 %s" % idea if top_blocks else "已加 %s（新建顶层 add_ideas 块）" % idea
         return {"ok": True, "msg": msg}
 
-    all_blocks, _ = _collect_add_ideas_blocks(text, include_date=True)
+    all_blocks, _ = collect_top_blocks(text, "add_ideas", include_date=True)
     pat = re.compile(r'(?m)^[ \t]*' + re.escape(idea) + r'[ \t]*(?:\r?\n)?')
     new_text = None
     for _depth, a, b, _body in all_blocks:

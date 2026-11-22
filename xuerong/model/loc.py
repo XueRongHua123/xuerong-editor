@@ -20,6 +20,27 @@ from xuerong.core.text import _atomic_write
 from xuerong.model.history import snapshot
 
 
+_YML_LINE_RE = re.compile(r'^\s*([A-Za-z0-9_.\-]+):\d*\s+"(.*)"\s*$')
+
+
+def _read_yml_pairs(path, unescape=False):
+    """读取已有 .yml 文件的键/值映射，避免跨会话写入时丢失旧条目。"""
+    existing = {}
+    if not os.path.exists(path):
+        return existing
+    try:
+        for ln in io.open(path, encoding="utf-8-sig", errors="replace").read().splitlines():
+            m = _YML_LINE_RE.match(ln)
+            if m:
+                val = m.group(2)
+                if unescape:
+                    val = re.sub(r'\\(["\\])', lambda gm: gm.group(1), val)
+                existing[m.group(1)] = val
+    except Exception:
+        pass
+    return existing
+
+
 def _loc_write_pairs(root, pairs, lang="simp_chinese"):
     """把 {key: text} 写进 zz_xuerong_evtext_l_<lang>.yml（只覆盖这些键）"""
     if not pairs:
@@ -28,16 +49,7 @@ def _loc_write_pairs(root, pairs, lang="simp_chinese"):
     os.makedirs(d, exist_ok=True)
     base_fn = unique_editor_filename(root, "localisation/%s" % lang, "zz_xuerong_evtext_l_%s.yml" % lang)
     fn = os.path.join(d, base_fn)
-    existing = {}
-    if os.path.exists(fn):
-        try:
-            line_re = re.compile(r'^\s*([A-Za-z0-9_.\-]+):\d*\s+"(.*)"\s*$')
-            for ln in io.open(fn, encoding="utf-8-sig", errors="replace").read().splitlines():
-                m = line_re.match(ln)
-                if m:
-                    existing[m.group(1)] = m.group(2)
-        except Exception:
-            pass
+    existing = _read_yml_pairs(fn, unescape=False)
     for k, v in pairs.items():
         existing[k] = str(v).replace('"', "'").replace(chr(10), "\\n")
     lines = ["l_%s:" % lang]
@@ -55,12 +67,14 @@ def _write_loc(root, lang):
     path = os.path.join(d, fn)
     header = {"simp_chinese": "l_simp_chinese:", "english": "l_english:",
               "japanese": "l_japanese:"}.get(lang, "l_" + lang + ":")
+    merged = _read_yml_pairs(path, unescape=True)
+    merged.update(state.loc_edits().get(lang, {}))
     lines = [header]
-    for k, v in sorted(state.loc_edits().get(lang, {}).items()):
+    for k, v in sorted(merged.items()):
         v = (v or "").replace("\\", "\\\\").replace('"', '\\"')
         lines.append(' %s:0 "%s"' % (k, v))
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="\n").write("\ufeff" + "\n".join(lines) + "\n")
+    _atomic_write(path, b"\xef\xbb\xbf" + ("\n".join(lines) + "\n").encode("utf-8"))
     return path
 
 

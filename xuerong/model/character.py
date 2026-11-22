@@ -25,8 +25,9 @@ import re
 from xuerong import state
 from xuerong.core.paths import (_layer_files, _replace_owner, is_under_game,
                                 mod_layers, unique_editor_filename, write_base)
-from xuerong.core.text import (_atomic_write, _bom_for, _first, _strip_keep_len, brace_match,
-                               find_blocks)
+from xuerong.core.text import (_atomic_write, _bom_for, _first, _strip_keep_len, brace_depth_at,
+                               brace_match, date_block_spans, find_blocks,
+                               insert_before_date_or_end)
 from xuerong.model.history import snapshot
 from xuerong.model.map import _map_pick
 from xuerong.state import CHAR_TYPES, PORTRAIT_H, PORTRAIT_SMALL, PORTRAIT_W
@@ -418,15 +419,23 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
                 hp = _hp or hist
                 if hp and not is_under_game(hp):
                     hraw = io.open(hp, encoding="utf-8-sig", errors="replace").read()
-                    if not re.search(r'(?m)^\s*recruit_character\s*=\s*' + re.escape(cid) + r'\b', hraw):
-                        htext = _strip_keep_len(hraw)
-                        # 优先接在已有 recruit_character 后面，没有就接在末尾
-                        mrec = list(re.finditer(r'(?m)^[ \t]*recruit_character[ \t]*=[ \t]*[A-Za-z0-9_]+[ \t]*\r?\n', htext))
+                    htext = _strip_keep_len(hraw)
+                    if not re.search(r'(?m)^\s*recruit_character\s*=\s*' + re.escape(cid) + r'\b', htext):
+                        dspans = date_block_spans(htext)
+                        mrec = [
+                            m for m in re.finditer(
+                                r'(?m)^[ \t]*recruit_character[ \t]*=[ \t]*[A-Za-z0-9_\-\.]+[ \t]*(?:\r?\n|$)',
+                                htext,
+                            )
+                            if brace_depth_at(htext, m.start()) == 0
+                            and not any(ds <= m.start() < de for ds, de in dspans)
+                        ]
                         if mrec:
                             pos = mrec[-1].end()
-                            new_h = hraw[:pos] + "recruit_character = %s\n" % cid + hraw[pos:]
+                            nl = "" if (not hraw[:pos] or hraw[:pos].endswith(("\n", "\r"))) else "\n"
+                            new_h = hraw[:pos] + nl + "recruit_character = %s\n" % cid + hraw[pos:]
                         else:
-                            new_h = hraw.rstrip() + "\n\nrecruit_character = %s\n" % cid
+                            new_h = insert_before_date_or_end(hraw, dspans, "\nrecruit_character = %s\n" % cid)
                         snapshot(hp)
                         _atomic_write(hp, _bom_for(hp) + new_h.encode("utf-8"))
                         rec_note = "，并在 %s 里加了 recruit_character" % os.path.basename(hp)

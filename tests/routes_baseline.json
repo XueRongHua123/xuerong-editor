@@ -1,8 +1,8 @@
 {
  "schema": 2,
- "recorded_at": "2026-11-20 23:38:18",
+ "recorded_at": "2026-11-22 12:22:28",
  "counts": {
-  "OK": 214,
+  "OK": 224,
   "INTERNAL": 0,
   "HTTP500": 0,
   "DEAD": 0,
@@ -795,13 +795,49 @@
    "status": 200,
    "msg": ""
   },
+  "POST /api/tech_batch_move": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/tech_category_add": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
   "POST /api/tech_delete": {
    "method": "POST",
    "state": "OK",
    "status": 200,
    "msg": ""
   },
+  "POST /api/tech_folder_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/tech_folders_reorder": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
   "POST /api/tech_graph": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/tech_gridbox_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/tech_item_style_save": {
    "method": "POST",
    "state": "OK",
    "status": 200,
@@ -820,6 +856,30 @@
    "msg": ""
   },
   "POST /api/tech_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/tech_studio": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/tech_subtitle_save": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/tech_unlink": {
+   "method": "POST",
+   "state": "OK",
+   "status": 200,
+   "msg": ""
+  },
+  "POST /api/tech_year_save": {
    "method": "POST",
    "state": "OK",
    "status": 200,

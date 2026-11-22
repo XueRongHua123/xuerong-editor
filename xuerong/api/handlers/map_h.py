@@ -324,6 +324,19 @@ def r_api_icons(h, path_only):
     kind = qs.get("kind", ["focus"])[0]
     if kind == "tech":
         h._send({"list": sorted(state.tech_icons().keys()), "map": state.tech_icons()})
+    elif kind == "tech_bg":
+        lst = [
+            g for g, (tex, _fr) in sorted((state.sprite_map() or {}).items())
+            if "techtree_bg" in g.lower() or (
+                "_bg" in g.lower() and (
+                    "tech" in g.lower()
+                    or "wonderweapons" in g.lower()
+                    or "/techtree/" in tex.lower().replace("\\", "/")
+                    or "/technologies/" in tex.lower().replace("\\", "/")
+                )
+            )
+        ]
+        h._send({"list": lst, "map": {g: "/api/icon?gfx=" + g + "&full=1" for g in lst}})
     elif kind == "equip":
         h._send({"list": sorted(state.equip_icons().keys()), "map": state.equip_icons()})
     elif kind == "idea":

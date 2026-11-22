@@ -115,7 +115,8 @@ def r_api_raw(h, path_only):
 @get("/api/icon")
 def r_api_icon(h, path_only):
     qs = parse_qs(urlparse(h.path).query)
-    p = LG.icon_png(qs.get("gfx", [""])[0])
+    full = qs.get("full", [""])[0] in ("1", "true", "yes")
+    p = LG.icon_png(qs.get("gfx", [""])[0], full=full)
     if p:
         h._send(io.open(p, "rb").read(), ctype="image/png")
     else:

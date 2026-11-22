@@ -734,6 +734,7 @@ document.getElementById('ttSavePos').onclick = ttSavePositions;
 
 (function(){
   const svg = document.getElementById('techSvg');
+  if(!svg) return;
   svg.addEventListener('wheel', e=>{
     e.preventDefault();
     const k0 = ttView.k, k = Math.max(0.1, Math.min(3, k0 * (e.deltaY < 0 ? 1.15 : 0.87)));
@@ -743,7 +744,8 @@ document.getElementById('ttSavePos').onclick = ttSavePositions;
     ttView.k = k; applyTT();
   }, {passive:false});
   svg.addEventListener('mousedown', e=>{
-    if(e.target.closest('.tt-node')) return;
+    if(e.button !== 0) return;
+    if(e.target.closest('.tt-node,.tt-gb-handle,.tt-year-handle,.tt-sub-handle,.tt-edge-hit,.tt-link')) return;
     ttDrag = {x: e.clientX, y: e.clientY, vx: ttView.x, vy: ttView.y};
     svg.style.cursor = 'grabbing';
   });

@@ -18,6 +18,7 @@
 四个图标容器与 _GFX_CACHE / GFX_KINDS 都在本模块定义，门面 import 的是同一份对象
 （绝不能两边各写一份，否则表会分裂、图标全丢）。
 """
+import base64
 import hashlib
 import io
 import os
@@ -51,10 +52,12 @@ SPRITE_MAP = {}
 _GFX_CACHE = {}
 
 GFX_KINDS = {
-    "goal":  {"dir": "gfx/interface/goals",   "prefix": "GFX_goal_",   "label": "国策"},
-    "idea":  {"dir": "gfx/interface/ideas",   "prefix": "GFX_idea_",   "label": "想法"},
-    "tech":  {"dir": "gfx/interface/technologies", "prefix": "GFX_",    "label": "科技"},
-    "generic": {"dir": "gfx/interface",       "prefix": "GFX_",         "label": "通用"},
+    "goal":     {"dir": "gfx/interface/goals",        "prefix": "GFX_goal_", "label": "国策"},
+    "idea":     {"dir": "gfx/interface/ideas",        "prefix": "GFX_idea_", "label": "想法"},
+    "tech":     {"dir": "gfx/interface/technologies", "prefix": "GFX_",      "label": "科技"},
+    "tech_tab": {"dir": "gfx/interface/techtree",     "prefix": "GFX_",      "label": "科技页签"},
+    "tech_bg":  {"dir": "gfx/interface/techtree",     "prefix": "GFX_",      "label": "科技背景"},
+    "generic":  {"dir": "gfx/interface",              "prefix": "GFX_",      "label": "通用"},
 }
 
 
@@ -284,31 +287,51 @@ def gfx_registered(root=None, pattern=""):
             "msg": "已注册 %d 个 sprite（显示前 500）" % len(out)}
 
 
-def gfx_sprite_new(root, name, texturefile):
-    """往 interface 里写一条 spriteType 注册。"""
+def gfx_sprite_new(root, name, texturefile, no_of_frames=None):
+    """往 interface 里写一条 spriteType 注册，并原地同步图标索引。"""
     root = _pick(root)
     top = None
-    for r in (state.roots() or []):
-        lay = mod_layers(r) or [r]
-        cand = lay[-1] if lay else r
+    if root:
+        lay = mod_layers(root) or [root]
+        cand = lay[-1] if lay else root
         if cand and not is_under_game(cand):
             top = cand
+    if not top:
+        for r in (state.roots() or []):
+            lay = mod_layers(r) or [r]
+            cand = lay[-1] if lay else r
+            if cand and not is_under_game(cand):
+                top = cand
     if not top:
         return {"ok": False, "msg": "找不到可写的 mod 目录"}
     if not name or not texturefile:
         return {"ok": False, "msg": "name 和 texturefile 都要给"}
+    tex_norm = texturefile.replace("\\", "/")
+    nf = None
+    if no_of_frames is not None:
+        try:
+            nf_i = int(no_of_frames)
+            if nf_i > 1:
+                nf = nf_i
+        except Exception:
+            nf = None
     d = os.path.join(top, "interface")
     os.makedirs(d, exist_ok=True)
     p = os.path.join(d, "zz_editor_icons.gfx")
+    frames_line = ("\t\tnoOfFrames = %d\n" % nf) if nf else ""
     block = ('\nspriteTypes = {\n'
              '\tspriteType = {\n'
              '\t\tname = "%s"\n'
              '\t\ttexturefile = "%s"\n'
+             '%s'
              '\t}\n'
-             '}\n') % (name, texturefile.replace("\\", "/"))
+             '}\n') % (name, tex_norm, frames_line)
     if os.path.exists(p):
         raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
         if ('"%s"' % name) in raw:
+            SPRITE_MAP.setdefault(name, (tex_norm, nf or 1))
+            TECH_ICONS.setdefault(name, "/api/icon?gfx=" + name)
+            _GFX_CACHE.clear()
             return {"ok": True, "msg": "%s 已经注册过了" % name}
         new_text = raw.rstrip() + "\n" + block
     else:
@@ -316,46 +339,122 @@ def gfx_sprite_new(root, name, texturefile):
     if os.path.exists(p) and _SNAPSHOT:
         _SNAPSHOT(p)
     _atomic_write(p, _bom_for(p) + new_text.encode("utf-8"))
+    SPRITE_MAP[name] = (tex_norm, nf or 1)
+    TECH_ICONS[name] = "/api/icon?gfx=" + name
+    _GFX_CACHE.clear()
     return {"ok": True, "msg": "已注册 sprite %s → %s" % (name, texturefile),
             "file": "interface/zz_editor_icons.gfx"}
 
 
-def gfx_import(root, src_path, kind="goal", name=None, sprite_name=None,
-               size=None, overwrite=False):
-    """把一张图导入成 HOI4 图标：转 DDS + 放到对应目录 + 注册 sprite。
+def _decode_b64_image(data_b64):
+    """解码 base64 或 data URL 图片字节。"""
+    s = (data_b64 or "").strip()
+    if "," in s and s[:40].lower().startswith("data:"):
+        s = s.split(",", 1)[1]
+    raw = base64.b64decode(s)
+    return raw
 
-    src_path  可以是 png / jpg / dds / tga，统一转成 DDS 存进去
-    size      目标边长（正方形），不给就按 HOI4 惯例：goal 64、idea 64、tech 64
+
+def _parse_bg_size(size):
+    """解析科技背景目标尺寸：支持 'WxH' 字符串或最大边整数，默认最大边 1920。"""
+    if isinstance(size, str) and ("x" in size.lower() or "×" in size):
+        parts = re.split(r'[xX×]', size.strip(), maxsplit=1)
+        try:
+            w = max(64, min(3840, int(parts[0].strip())))
+            h = max(64, min(3840, int(parts[1].strip())))
+            return (w, h), True
+        except Exception:
+            pass
+    try:
+        side = int(size) if size else 1920
+    except Exception:
+        side = 1920
+    side = max(64, min(3840, side))
+    return (side, side), False
+
+
+def gfx_import(root, src_path, kind="goal", name=None, sprite_name=None,
+               size=None, overwrite=False, data_b64=None):
+    """把一张图导入成 HOI4 图标/页签/背景：转 DDS + 放到对应目录 + 注册 sprite。
+
+    src_path  可以是 png / jpg / dds / tga，与 data_b64 二选一
+    kind      goal / idea / tech / tech_tab / tech_bg / generic
     """
     root = _pick(root)
     k = GFX_KINDS.get(kind) or GFX_KINDS["goal"]
-    if not src_path or not os.path.isfile(src_path):
+    raw_bytes = None
+    if data_b64:
+        try:
+            raw_bytes = _decode_b64_image(data_b64)
+        except Exception as e:
+            return {"ok": False, "msg": "base64 解码失败：%s" % e}
+    elif not src_path or not os.path.isfile(src_path):
         return {"ok": False, "msg": "源文件不存在：%s" % src_path}
+
     top = None
-    for r in (state.roots() or []):
-        lay = mod_layers(r) or [r]
-        cand = lay[-1] if lay else r
+    if root:
+        lay = mod_layers(root) or [root]
+        cand = lay[-1] if lay else root
         if cand and not is_under_game(cand):
             top = cand
     if not top:
+        for r in (state.roots() or []):
+            lay = mod_layers(r) or [r]
+            cand = lay[-1] if lay else r
+            if cand and not is_under_game(cand):
+                top = cand
+    if not top:
         return {"ok": False, "msg": "找不到可写的 mod 目录"}
 
-    base = name or os.path.splitext(os.path.basename(src_path))[0]
+    if name:
+        base = name
+    elif src_path:
+        base = os.path.splitext(os.path.basename(src_path))[0]
+    elif raw_bytes:
+        base = "upload_" + hashlib.md5(raw_bytes).hexdigest()[:8]
+    else:
+        base = ""
     base = re.sub(r'[^A-Za-z0-9_\-]', '_', base)
     if not base:
         return {"ok": False, "msg": "文件名里没有可用的字符"}
 
-    side = int(size) if size else 64
-    side = max(16, min(512, side))
-
+    no_of_frames = None
     try:
-        from PIL import Image
+        from PIL import Image, ImageEnhance
         Image.MAX_IMAGE_PIXELS = None
-        im = Image.open(src_path).convert("RGBA")
-        # 保持比例缩放到正方形画布
-        im.thumbnail((side, side), Image.LANCZOS)
-        canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
-        canvas.paste(im, ((side - im.width) // 2, (side - im.height) // 2), im)
+        src_obj = io.BytesIO(raw_bytes) if raw_bytes is not None else src_path
+        im = Image.open(src_obj).convert("RGBA")
+
+        if kind == "tech_tab":
+            # HOI4 2 帧横向 strip：182x61，左帧正常、右帧亮度 x1.22（保留 alpha）
+            fw, fh = 91, 61
+            im.thumbnail((fw, fh), Image.LANCZOS)
+            left_frame = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+            left_frame.paste(im, ((fw - im.width) // 2, (fh - im.height) // 2), im)
+            rgb = left_frame.convert("RGB")
+            alpha = left_frame.getchannel("A")
+            right_rgb = ImageEnhance.Brightness(rgb).enhance(1.22)
+            right_frame = right_rgb.convert("RGBA")
+            right_frame.putalpha(alpha)
+            canvas = Image.new("RGBA", (fw * 2, fh), (0, 0, 0, 0))
+            canvas.paste(left_frame, (0, 0))
+            canvas.paste(right_frame, (fw, 0))
+            no_of_frames = 2
+            size_str = "%dx%d" % (fw * 2, fh)
+        elif kind == "tech_bg":
+            # 保持宽高比缩放，不裁剪正方形
+            box, explicit_wh = _parse_bg_size(size)
+            if explicit_wh or max(im.size) > box[0]:
+                im.thumbnail(box, Image.LANCZOS)
+            canvas = im
+            size_str = "%dx%d" % canvas.size
+        else:
+            side = int(size) if size else 64
+            side = max(16, min(512, side))
+            im.thumbnail((side, side), Image.LANCZOS)
+            canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+            canvas.paste(im, ((side - im.width) // 2, (side - im.height) // 2), im)
+            size_str = "%dx%d" % (side, side)
     except Exception as e:
         return {"ok": False, "msg": "读图失败：%s" % e}
 
@@ -373,14 +472,19 @@ def gfx_import(root, src_path, kind="goal", name=None, sprite_name=None,
         return {"ok": False, "msg": "写 DDS 失败：%s" % e}
 
     texture = "%s/%s.dds" % (k["dir"], base)
-    sprite = sprite_name or (k["prefix"] + base)
-    r2 = gfx_sprite_new(top, sprite, texture)
+    if sprite_name:
+        sprite = sprite_name
+    elif kind == "tech_tab":
+        sprite = "GFX_%s_tab" % base
+    else:
+        sprite = k["prefix"] + base
+    r2 = gfx_sprite_new(top, sprite, texture, no_of_frames=no_of_frames)
     if not r2.get("ok"):
         return {"ok": False, "msg": "图已转好但注册失败：%s" % r2.get("msg")}
 
     return {"ok": True, "sprite": sprite, "texture": texture,
-            "size": "%dx%d" % (side, side), "file": os.path.join(k["dir"], base + ".dds"),
-            "msg": "已导入 %s：%dx%d DDS + 注册 %s" % (base, side, side, sprite)}
+            "size": size_str, "file": os.path.join(k["dir"], base + ".dds"),
+            "msg": "已导入 %s：%s DDS + 注册 %s" % (base, size_str, sprite)}
 
 
 def all_goal_icons():
@@ -392,7 +496,7 @@ def all_goal_icons():
     return sorted(out)
 
 
-def icon_png(gfx):
+def icon_png(gfx, full=False):
     ent = SPRITE_MAP.get(gfx)
     if not ent:
         return None
@@ -423,8 +527,9 @@ def icon_png(gfx):
     src = next((c for c in cands if os.path.exists(c)), None)
     if not src:
         return None
+    suffix = "_full.png" if full else ".png"
     png_name = re.sub(r'[^A-Za-z0-9_.-]', '_', gfx) + "_" + \
-        hashlib.md5((os.path.abspath(src) + str(os.path.getmtime(src))).encode("utf-8")).hexdigest()[:8] + ".png"
+        hashlib.md5((os.path.abspath(src) + str(os.path.getmtime(src))).encode("utf-8")).hexdigest()[:8] + suffix
     png = os.path.join(state.path_var("ICON_DIR"), png_name)
     try:
         if not os.path.exists(png):
@@ -434,7 +539,11 @@ def icon_png(gfx):
                 w, h = im.size
                 im = im.crop((0, 0, w // frames, h))
             im = im.convert("RGBA")
-            im.thumbnail((64, 64))
+            if full:
+                if max(im.size) > 2560:
+                    im.thumbnail((2560, 2560), Image.LANCZOS)
+            else:
+                im.thumbnail((64, 64))
             im.save(png)
         return png
     except Exception:
@@ -514,8 +623,9 @@ def build_icons(roots, game):
         tl = tex.lower().replace("\\", "/")
         gl = gfx.lower()
         if ("/interface/technologies/" in tl or "/interface/tech/" in tl
+                or "/interface/techtree/" in tl
                 or gl.startswith("gfx_tech") or gl.endswith("_tab")
-                or "_technology_" in gl):
+                or "_technology_" in gl or "_techtree_bg" in gl):
             TECH_ICONS[gfx] = "/api/icon?gfx=" + gfx
     print("tech icons:", len(TECH_ICONS))
 

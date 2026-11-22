@@ -125,7 +125,8 @@ def r_api_gfx_import(h, body):
     h._send(LG.gfx_import(body.get("root") or None, body.get("src"),
                           body.get("kind") or "goal", body.get("name"),
                           body.get("sprite"), body.get("size"),
-                          bool(body.get("overwrite"))))
+                          bool(body.get("overwrite")),
+                          data_b64=body.get("data_b64")))
 
 
 @post("/api/gfx_sprites")
