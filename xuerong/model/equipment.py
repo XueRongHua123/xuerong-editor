@@ -15,7 +15,8 @@ import re
 
 from xuerong import state
 from xuerong.core import paths
-from xuerong.core.paths import _layer_dirs, mod_layers, unique_editor_filename
+from xuerong.core.paths import (_layer_dirs, effective_layer_files, mod_layers,
+                                unique_editor_filename)
 from xuerong.core.text import (_atomic_write, _bom_for, _strip_keep_len, brace_match,
                                braces_balanced, find_blocks, set_raw_block, set_scalar,
                                strip_comments, top_items)
@@ -92,19 +93,21 @@ def equip_view(eid):
 
 
 def load_equipment(root):
-    name = os.path.basename(root.rstrip("\\/")) or root
+    # 按 HOI4 实机规则读（respect replace_path 与同名文件整文件覆写，底层 → 顶层）。
     n = 0
-    for base, d in _layer_dirs("common/units/equipment", root):
-      name = os.path.basename(base.rstrip("\\/")) or base
-      for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
-          rel = os.path.join("common", "units", "equipment", fn)
-          text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
-          for s, e, body in find_blocks(text, "equipments"):
-              for k, v, b in top_items(body):
-                  if not b:
-                      continue
-                  state.equipments()[k] = _build_equip_entry(k, v, rel, name)
-                  n += 1
+    for base, d, fn in effective_layer_files("common/units/equipment", root):
+        name = os.path.basename(base.rstrip("\\/")) or base
+        rel = os.path.join("common", "units", "equipment", fn)
+        try:
+            text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace").read())
+        except Exception:
+            continue
+        for s, e, body in find_blocks(text, "equipments"):
+            for k, v, b in top_items(body):
+                if not b:
+                    continue
+                state.equipments()[k] = _build_equip_entry(k, v, rel, name)
+                n += 1
     return n
 
 
@@ -114,37 +117,30 @@ def _equip_locate(root, eid):
 
     装备都写在 equipments = { ... } 里，一个文件可以有多个 equipments 块。
     返回 (base, path, block_start, block_end, block_body)"""
-    for base in reversed(mod_layers(root) or []):
-        if not base:
+    for base, d, fn in reversed(effective_layer_files("common/units/equipment", root)):
+        p = os.path.join(d, fn)
+        try:
+            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        except Exception:
             continue
-        d = os.path.join(base, "common", "units", "equipment")
-        if not os.path.isdir(d):
-            continue
-        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
-            p = os.path.join(d, fn)
-            try:
-                raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
-            except Exception:
-                continue
-            # 必须用保长版本：下面算出的偏移要能直接切 raw
-            text = _strip_keep_len(raw)
-            for _s, _e, body in find_blocks(text, "equipments"):
-                # top_items 的第三项是「有没有 {} 块」的布尔值，不是偏移，
-                # 所以这里自己按 key 在 body 里定位 '{'，再换算到 text 坐标系。
-                for k, _v, has_body in top_items(body):
-                    if k != eid or not has_body:
-                        continue
-                    blk = find_blocks(body, None) if False else None
-                    m = re.search(r'(?m)^[ \t]*' + re.escape(eid) + r'[ \t]*=[ \t]*\{', body)
-                    if not m:
-                        continue
-                    rel_b = m.end() - 1                       # body 内 '{' 的位置
-                    body_start = text.find("{", _s) + 1       # body 在 text 中的起点
-                    b_abs = body_start + rel_b
-                    e_abs = brace_match(text, b_abs)
-                    if e_abs <= b_abs:
-                        continue
-                    return base, p, b_abs, e_abs, text[b_abs + 1:e_abs - 1]
+        # 必须用保长版本：下面算出的偏移要能直接切 raw
+        text = _strip_keep_len(raw)
+        for _s, _e, body in find_blocks(text, "equipments"):
+            # top_items 的第三项是「有没有 {} 块」的布尔值，不是偏移，
+            # 所以这里自己按 key 在 body 里定位 '{'，再换算到 text 坐标系。
+            for k, _v, has_body in top_items(body):
+                if k != eid or not has_body:
+                    continue
+                m = re.search(r'(?m)^[ \t]*' + re.escape(eid) + r'[ \t]*=[ \t]*\{', body)
+                if not m:
+                    continue
+                rel_b = m.end() - 1                       # body 内 '{' 的位置
+                body_start = text.find("{", _s) + 1       # body 在 text 中的起点
+                b_abs = body_start + rel_b
+                e_abs = brace_match(text, b_abs)
+                if e_abs <= b_abs:
+                    continue
+                return base, p, b_abs, e_abs, text[b_abs + 1:e_abs - 1]
     return None, None, None, None, None
 
 
@@ -430,34 +426,22 @@ def delete_equipment(root, rel, eid):
         roots = [root]
     for r in reversed(roots):
         hit = False
-        seen_fn = set()
-        for base, d in _layer_dirs("common/units/equipment", r):
+        for base, d, fn in reversed(effective_layer_files("common/units/equipment", r)):
             src_l = os.path.basename((base or "").rstrip("\\/")) or base
+            fp = os.path.join(d, fn)
             try:
-                fns = sorted(f for f in os.listdir(d) if f.endswith(".txt"))
+                raw = io.open(fp, encoding="utf-8-sig", errors="replace", newline="").read()
             except Exception:
                 continue
-            for fn in fns:
-                fk = fn.lower()
-                if fk in seen_fn:
-                    continue
-                seen_fn.add(fk)
-                fp = os.path.join(d, fn)
-                try:
-                    raw = io.open(fp, encoding="utf-8-sig", errors="replace", newline="").read()
-                except Exception:
-                    continue
-                if eid not in raw:
-                    continue
-                rel_l = os.path.join("common", "units", "equipment", fn)
-                text_l = strip_comments(raw)
-                for _s, _e, body in find_blocks(text_l, "equipments"):
-                    for k, v, kb in top_items(body):
-                        if kb and k == eid:
-                            equips[eid] = _build_equip_entry(eid, v, rel_l, src_l)
-                            hit = True
-                            break
-                    if hit:
+            if eid not in raw:
+                continue
+            rel_l = os.path.join("common", "units", "equipment", fn)
+            text_l = strip_comments(raw)
+            for _s, _e, body in find_blocks(text_l, "equipments"):
+                for k, v, kb in top_items(body):
+                    if kb and k == eid:
+                        equips[eid] = _build_equip_entry(eid, v, rel_l, src_l)
+                        hit = True
                         break
                 if hit:
                     break

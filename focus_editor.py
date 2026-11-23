@@ -124,7 +124,7 @@ from xuerong.model.replace import (_REF_KEYWORDS, _REPLACE_NEVER_ADOPT,
 from xuerong.api import router as _router, routes_get, routes_post
 
 _paths.APP_DIR = _HERE          # options.json 等仍写在 work/ 下，不跟着模块跑
-_paths.set_root_picker(lambda: _map_pick(None))   # core 不认识 map 层，用钩子回注
+# 内容域默认 _paths._pick() 优先取最顶层非只读/非原版 mod；地图域显式走 _map_pick()
 
 # 贴图 / 图标 / 编码规范：实现在 xuerong/core/gfx.py 与 core/loc.py。
 # 四个容器（SPRITE_MAP / ICONS / EQUIP_ICONS / TECH_ICONS）与 _GFX_CACHE / GFX_KINDS
@@ -602,7 +602,7 @@ def load_countries(root):
 
     _layers_c = mod_layers(root)
     tag_files, _tag_replaced = _layer_files("common/country_tags", _layers_c)
-    for path in tag_files:
+    for path in reversed(tag_files):
         fn = os.path.basename(path)
         rel = os.path.join("common", "country_tags", fn)
         for m in re.finditer(r'(?m)^\s*([A-Z0-9_]{2,8})\s*=\s*"([^"]+)"', _read_text(path)):
@@ -618,13 +618,13 @@ def load_countries(root):
                               "states_owned": [], "states_core": [], "has_def": False}
 
     # 国家定义文件（颜色 / graphical_culture）
-    # mod 的覆盖文件可能只写 graphical_culture 而没有 color，这时要继续往原版找
+    # mod 的覆盖文件可能只写 graphical_culture 而没有 color，这时要继续往父层/原版找
     for tag, c in list(COUNTRIES.items()):
         if c.get("source") != name:
             continue
         rel = (c.get("def_file") or "").replace("/", os.sep)
-        for base in (root, GAME):
-            p = os.path.join(base, "common", rel) if rel else ""
+        for base in reversed(_layers_c or [root]):
+            p = os.path.join(base, "common", rel) if (base and rel) else ""
             if not (p and os.path.exists(p)):
                 continue
             text = _read_text(p)
@@ -660,12 +660,8 @@ def load_countries(root):
             c["color"] = [0.52, 0.52, 0.52]
             c["color_derived"] = True
 
-    # 开局历史
-    _hist_pairs = []
-    for _b, _d in _layer_dirs("history/countries", root):
-        for _f in sorted(f for f in os.listdir(_d) if f.endswith(".txt")):
-            _hist_pairs.append((_b, _d, _f))
-    for _hb, d, fn in _hist_pairs:
+    # 开局历史（底层 → 顶层，保证 submod 覆盖父层/原版且不被反向覆盖）
+    for _hb, d, fn in effective_layer_files("history/countries", root):
         if True:
             m = re.match(r'([A-Z0-9_]{2,8})\s*-\s*(.+)\.txt$', fn, re.I)
             tag = m.group(1).upper() if m else fn[:-4].strip().upper()[:4]
@@ -6752,60 +6748,56 @@ def find_usages(iid):
     return out[:500]
 
 def load_orgs(root):
-    # 整条链（父 → 子）；以前只有 [root, GAME]，中间层的 MIO 全丢
-    bases = _chain_layers(root)
-    if GAME and os.path.abspath(GAME) not in bases:
-        bases.append(os.path.abspath(GAME))
+    # 按 HOI4 实机规则读（respect replace_path 与同名文件整文件覆写，底层 → 顶层）。
     n = 0
-    for base in bases:
-        d = os.path.join(base, "common", "military_industrial_organization", "organizations")
-        if not os.path.isdir(d):
+    for _base, d, fn in effective_layer_files(
+        "common/military_industrial_organization/organizations", root
+    ):
+        try:
+            text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace").read())
+        except Exception:
             continue
-        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
-            text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
-            for k, v, b in top_items(text):
-                if b and re.match(r'^[A-Za-z0-9_]+$', k):
-                    ORGS[k] = LOC.get(k, k)
-                    n += 1
+        for k, v, b in top_items(text):
+            if b and re.match(r'^[A-Za-z0-9_]+$', k):
+                ORGS[k] = LOC.get(k, k)
+                n += 1
     return n
 
 def load_modules(root):
-    # 整条链（父 → 子）；以前只有 [root, GAME]，中间层的装备模块全丢
-    bases = _chain_layers(root)
-    if GAME and os.path.abspath(GAME) not in bases:
-        bases.append(os.path.abspath(GAME))
+    # 按 HOI4 实机规则读（respect replace_path 与同名文件整文件覆写，底层 → 顶层）。
     n = 0
-    for base_root in bases:
-        d = os.path.join(base_root, "common", "units", "equipment", "modules")
-        if not os.path.isdir(d):
+    for _base, d, fn in effective_layer_files(
+        "common/units/equipment/modules", root
+    ):
+        try:
+            text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace").read())
+        except Exception:
             continue
-        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
-            text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
-            for s, e, body in find_blocks(text, "equipment_modules"):
-                for k, v, b in top_items(body):
-                    if not b or k in ("limit", "template"):
-                        continue
-                    if "category" not in v:
-                        continue
-                    cm = re.search(r'(?m)^\s*category\s*=\s*"?([A-Za-z0-9_]+)"?', v)
-                    if not cm:
-                        continue
-                    gm = re.search(r'(?m)^\s*gfx\s*=\s*"?([A-Za-z0-9_]+)"?', v)
-                    stats = {}
-                    for am in re.finditer(r'add_stats\s*=\s*\{', v):
-                        ab = v.find('{', am.start())
-                        ae = brace_match(v, ab)
-                        inner = v[ab + 1:ae - 1]
-                        for sm in re.finditer(r'(?m)^\s*([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', inner):
-                            try:
-                                stats[sm.group(1)] = float(sm.group(2))
-                            except Exception:
-                                pass
-                    MODULES[k] = {"id": k, "category": cm.group(1),
-                                  "gfx": gm.group(1) if gm else "",
-                                  "stats": stats,
-                                  "file": os.path.join("common", "units", "equipment", "modules", fn)}
-                    n += 1
+        for s, e, body in find_blocks(text, "equipment_modules"):
+            for k, v, b in top_items(body):
+                if not b or k in ("limit", "template"):
+                    continue
+                if "category" not in v:
+                    continue
+                cm = re.search(r'(?m)^\s*category\s*=\s*"?([A-Za-z0-9_]+)"?', v)
+                if not cm:
+                    continue
+                gm = re.search(r'(?m)^\s*gfx\s*=\s*"?([A-Za-z0-9_]+)"?', v)
+                stats = {}
+                for am in re.finditer(r'add_stats\s*=\s*\{', v):
+                    ab = v.find('{', am.start())
+                    ae = brace_match(v, ab)
+                    inner = v[ab + 1:ae - 1]
+                    for sm in re.finditer(r'(?m)^\s*([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', inner):
+                        try:
+                            stats[sm.group(1)] = float(sm.group(2))
+                        except Exception:
+                            pass
+                MODULES[k] = {"id": k, "category": cm.group(1),
+                              "gfx": gm.group(1) if gm else "",
+                              "stats": stats,
+                              "file": os.path.join("common", "units", "equipment", "modules", fn)}
+                n += 1
     return n
 
 def _eq_view(e):

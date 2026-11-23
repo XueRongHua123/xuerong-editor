@@ -105,7 +105,13 @@ def _pick(root=None):
                 return r
         except Exception:
             pass
-    rs = state.roots()
+    rs = state.roots() or []
+    for r in reversed(rs):
+        if r and not is_readonly_mod(r):
+            return r
+    for r in reversed(rs):
+        if r and not is_under_game(r):
+            return r
     if rs:
         return rs[-1]
     return state.game()
@@ -1326,8 +1332,7 @@ def analyze_layer_chain(layers=None, query="", kind="interacted", dir_filter="",
 
 def ensure_writable_file(root, sub, basename):
     """确保某子目录下的目标文件落入可写顶层（不存在时从叠加链自动单文件接管）。"""
-    if not root and callable(_ROOT_PICKER):
-        root = _ROOT_PICKER()
+    root = _pick(root)
     sub = (sub or "").replace("\\", "/").strip("/")
     basename = os.path.basename(basename or "")
     if not sub or not basename:

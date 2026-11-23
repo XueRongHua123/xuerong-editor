@@ -1283,21 +1283,34 @@ async function mapShowGfxMissing(){
     }
 
     // 分层：按「触发的深度」排；根 = 没有入边的事件
+    // 若存在环（A→B→A），环内节点入度均 > 0；对其余未达节点按最小入度逐一破环展开，避免整条环路及下游全挤在第 0 层
     const indeg = {}, adj = {};
     nodes.forEach(n=>{ indeg[n.id] = 0; adj[n.id] = []; });
-    edges.forEach(e=>{ if(adj[e.from]) adj[e.from].push(e.to); if(indeg[e.to] !== undefined) indeg[e.to]++; });
+    edges.forEach(e=>{
+      if(e.from === e.to) return;
+      if(adj[e.from]) adj[e.from].push(e.to);
+      if(indeg[e.to] !== undefined) indeg[e.to]++;
+    });
     const depth = {};
-    const roots = nodes.filter(n=>indeg[n.id] === 0).map(n=>n.id);
-    const q = roots.slice();
-    roots.forEach(r=>{ depth[r] = 0; });
-    let guard = 0;
-    while(q.length && guard++ < 5000){
-      const cur = q.shift();
-      for(const nx of (adj[cur] || [])){
-        if(depth[nx] === undefined){ depth[nx] = depth[cur] + 1; q.push(nx); }
+    const bfsFrom = (starts, baseDepth)=>{
+      const q = [];
+      starts.forEach(id=>{
+        if(depth[id] === undefined){ depth[id] = baseDepth; q.push(id); }
+      });
+      let guard = 0;
+      while(q.length && guard++ < 5000){
+        const cur = q.shift();
+        for(const nx of (adj[cur] || [])){
+          if(depth[nx] === undefined){ depth[nx] = depth[cur] + 1; q.push(nx); }
+        }
       }
+    };
+    const roots = nodes.filter(n=>indeg[n.id] === 0).map(n=>n.id);
+    bfsFrom(roots, 0);
+    const remain = nodes.map(n=>n.id).sort((a,b)=>(indeg[a] - indeg[b]) || a.localeCompare(b, 'en', {numeric:true}));
+    for(const sid of remain){
+      if(depth[sid] === undefined) bfsFrom([sid], 0);
     }
-    nodes.forEach(n=>{ if(depth[n.id] === undefined) depth[n.id] = 0; });
 
     // 按层分组，层内按 id 排序
     const layers = {};
@@ -3847,13 +3860,6 @@ function mapSetMode(mode){
   if(mode === 'view' && !MAP.lastPid){
     const side = document.getElementById('mapSide');
   }
-}
-
-
-function mapStatusPos(clientX, clientY){
-  const p = mapScreenToImage(clientX, clientY);
-  const el = document.getElementById('msPos');
-  if(el) el.textContent = Math.round(p.x) + ', ' + Math.round(p.y);
 }
 
 

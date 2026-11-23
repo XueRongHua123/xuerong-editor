@@ -191,26 +191,6 @@ function openUnloadModal(){
   return openUnloadModalRecent();
 }
 
-
-function openUnloadModalOld(){
-  const box = document.getElementById('unloadList');
-  const roots = (DATA && DATA.roots) || [];
-  document.getElementById('unloadModal').classList.add('show');
-  if(!roots.length){
-    box.innerHTML = '<div class="ul-empty">还没有加载任何内容。用左侧「＋ 添加 mod」或「📖 加载原版参考」开始。</div>';
-    return;
-  }
-  box.innerHTML = roots.map((r, i)=>
-    '<div class="ul-row">' +
-      '<div class="ul-main"><b>' + escapeHtml(r.name || r.path) + '</b><span>' + escapeHtml(r.path || '') + '</span></div>' +
-      '<span class="ul-tag' + (r.readonly ? ' ro' : '') + '">' + (r.readonly ? '原版 · 只读' : '可编辑') + '</span>' +
-      '<button class="btn" data-i="' + i + '">卸载</button>' +
-    '</div>').join('');
-  box.querySelectorAll('button[data-i]').forEach(b=>{
-    b.onclick = ()=>unloadRoot(roots[Number(b.dataset.i)]);
-  });
-}
-
 function closeUnloadModal(){ document.getElementById('unloadModal').classList.remove('show'); }
 
 async function unloadRoot(r){
