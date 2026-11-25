@@ -241,7 +241,7 @@ OPTIONS = _state.OPTIONS          # 容器，门面与 state 指向同一个 dic
 
 def ensure_file_writable(root, sub, basename):
     """确保 mod 里某个文件可写（复用 core.paths.ensure_writable_file）。"""
-    return ensure_writable_file(_map_pick(root), sub, basename)
+    return ensure_writable_file(_paths._pick(root), sub, basename)
 
 
 

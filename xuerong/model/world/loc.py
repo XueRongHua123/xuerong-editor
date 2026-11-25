@@ -5,10 +5,9 @@ import os
 import re
 
 from xuerong import state
-from xuerong.core.paths import mod_layers
+from xuerong.core.paths import _pick, mod_layers
 from xuerong.core.text import _atomic_write, _bom_for, brace_match, strip_comments
 from xuerong.model.history import snapshot
-from xuerong.model.map import _map_pick
 from xuerong.model.world._inj import _reload
 
 # ref: CWTools "Code actions to generate .yml for missing localisation"
@@ -34,7 +33,8 @@ def _loc_need_keys(root, layers):
                     _files.append(os.path.join(_dp, _fn))
         for f in _files:
             try:
-                text = strip_comments(io.open(f, encoding="utf-8-sig", errors="replace").read())
+                with io.open(f, encoding="utf-8-sig", errors="replace") as _fh:
+                    text = strip_comments(_fh.read())
             except Exception:
                 continue
             # 文件可能来自别的盘（原版在 E:、mod 在 D:），不能按相对目录算
@@ -89,26 +89,34 @@ def _loc_need_keys(root, layers):
 
 
 def _loc_defined_set(root):
-    """已定义的本地化键 = 原版 LOC + 这个 mod（含所有语言与 replace 子目录）自己的 yml。
+    """已定义的本地化键 = 原版 LOC + 叠加链各层（含所有语言与根目录/子目录）的 yml。
 
-    LOC 里只有启动时载入的原版键，mod 的自定义键必须现扫，否则全部误报缺失。"""
+    LOC 里只有启动时载入的原版键，mod 及各父层的自定义键必须现扫，否则全部误报缺失。"""
     defined = set(state.loc().keys())
     line_re = re.compile(r'^\s*([A-Za-z0-9_.\-]+):\d*\s+"')
-    for lang in ("simp_chinese", "english", "japanese", "korean", "russian", "french",
-                 "german", "spanish", "polish", "portuguese", "braz_por", "turkish"):
-        d = os.path.join(root, "localisation", lang)
-        if not os.path.isdir(d):
+    layers = mod_layers(root) or ([root] if root else [])
+    seen_dirs = set()
+    for base in layers:
+        if not base:
             continue
-        for dirpath, _dn, files in os.walk(d):
+        loc_root = os.path.join(base, "localisation")
+        if not os.path.isdir(loc_root):
+            continue
+        ab_loc = os.path.normcase(os.path.abspath(loc_root))
+        if ab_loc in seen_dirs:
+            continue
+        seen_dirs.add(ab_loc)
+        for dirpath, _dn, files in os.walk(loc_root):
             for fn in files:
-                if not fn.endswith(".yml"):
+                if not fn.lower().endswith(".yml"):
                     continue
                 try:
-                    for ln in io.open(os.path.join(dirpath, fn), encoding="utf-8-sig",
-                                      errors="replace").read().splitlines():
-                        m = line_re.match(ln)
-                        if m:
-                            defined.add(m.group(1))
+                    with io.open(os.path.join(dirpath, fn), encoding="utf-8-sig",
+                                 errors="replace") as fh:
+                        for ln in fh.read().splitlines():
+                            m = line_re.match(ln)
+                            if m:
+                                defined.add(m.group(1))
                 except Exception:
                     pass
     return defined
@@ -116,9 +124,12 @@ def _loc_defined_set(root):
 
 def loc_missing(root=None, limit=800):
     """列出缺失的本地化键（引用存在但没有任何 yml 定义）"""
-    root = _map_pick(root)
+    root = _pick(root)
+    if not root:
+        return {"ok": True, "total": 0, "missing": [],
+                "msg": "没有找到需要本地化的脚本引用"}
     layers = mod_layers(root)
-    _defined = _loc_defined_set(root) if root else set(state.loc().keys())
+    _defined = _loc_defined_set(root)
     need = _loc_need_keys(root, layers)
     if not need:
         return {"ok": True, "total": 0, "missing": [],
@@ -143,7 +154,7 @@ def loc_generate(root=None, keys=None, lang="simp_chinese", dry=False):
 
     参考 CWTools：只补键不猜内容，占位值用键名本身，方便一眼认出还没翻译。
     """
-    root = _map_pick(root)
+    root = _pick(root)
     if not root:
         return {"ok": False, "msg": "没有加载 mod"}
     layers = mod_layers(root)
@@ -166,7 +177,9 @@ def loc_generate(root=None, keys=None, lang="simp_chinese", dry=False):
     if os.path.exists(fn):
         try:
             line_re = re.compile(r'^\s*([A-Za-z0-9_.\-]+):\d*\s+"(.*)"\s*$')
-            for ln in io.open(fn, encoding="utf-8-sig", errors="replace").read().splitlines():
+            with io.open(fn, encoding="utf-8-sig", errors="replace") as _fh:
+                _lines = _fh.read().splitlines()
+            for ln in _lines:
                 m = line_re.match(ln)
                 if m:
                     existing[m.group(1)] = m.group(2)

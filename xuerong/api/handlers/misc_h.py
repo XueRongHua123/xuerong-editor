@@ -16,6 +16,7 @@ import editor_i18n as i18n
 
 from xuerong.api.router import get, prefix
 from xuerong.core import facade_bridge as LG
+from xuerong.core.paths import _pick
 from xuerong import state
 from xuerong.model.map import _map_pick
 
@@ -59,7 +60,7 @@ def r_api_log(h, path_only):
 
 @get("/api/orphan_tags")
 def r_api_orphan_tags(h, path_only):
-    h._send(LG.orphan_tags(_map_pick(None)))
+    h._send(LG.orphan_tags(_pick(None)))
 
 
 @get("/api/strategic_regions")

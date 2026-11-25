@@ -8,14 +8,29 @@ import io
 import os
 import re
 
-from xuerong.core.paths import _layer_files, _top_mod, mod_layers, write_base
+from xuerong.core.paths import _layer_files, _pick, mod_layers, write_base
 from xuerong.core.text import (_atomic_write, _bom_for, _first, _strip_keep_len, brace_match,
                                find_blocks, top_items)
 from xuerong.model.history import snapshot
-from xuerong.model.map import _map_pick
+from xuerong.model.world._write_guard import world_write_base
 
 # load_units 的缓存：只在本模块用，不跨模块（原样从门面搬来）
 _UNITS_CACHE = {"root": "", "mtime": 0, "templates": [], "divisions": []}
+
+
+def _units_snapshot(src):
+    """返回与冷加载路径字段集合一致的浅拷贝副本，防止外部修改污染 _UNITS_CACHE。"""
+    templates = list(src.get("templates") or [])
+    divisions = list(src.get("divisions") or [])
+    by_prov = {k: list(v) for k, v in (src.get("by_prov") or {}).items()}
+    return {
+        "root": src.get("root", ""),
+        "templates": templates,
+        "divisions": divisions,
+        "templates_total": src.get("templates_total", len(templates)),
+        "divisions_total": src.get("divisions_total", len(divisions)),
+        "by_prov": by_prov,
+    }
 
 
 def _units_write_base(root):
@@ -25,17 +40,7 @@ def _units_write_base(root):
     必须先用自己的 mod 接管该目录。
     返回 (路径, 错误消息)。
     """
-    top = _top_mod(root)
-    if not top:
-        return None, "找不到可写的 mod 目录"
-    tgt, why = write_base(root, "history/units")
-    if not tgt:
-        return None, "找不到可写目录"
-    if os.path.abspath(tgt) != os.path.abspath(top):
-        nm = os.path.basename(tgt.rstrip("\\/")) or tgt
-        return None, ("history/units 被 %s 的 replace_path 独占，"
-                      "直接写进去会改坏它。请先在「诊断 → 目录写入目标」里接管该目录" % nm)
-    return tgt, ""
+    return world_write_base(root, "history/units")
 
 
 def _units_files(root):
@@ -98,7 +103,7 @@ def load_units(root=None, force=False):
 
     返回 {templates: [...], divisions: [...], templates_total, divisions_total}
     """
-    root = _map_pick(root)
+    root = _pick(root)
     base, files, mt, key = None, [], 0, ""
     try:
         base, files = _units_files(root)
@@ -106,7 +111,7 @@ def load_units(root=None, force=False):
         key = os.path.abspath(base or "")
         if (not force and _UNITS_CACHE["root"] == key
                 and _UNITS_CACHE["mtime"] == mt and mt):
-            return _UNITS_CACHE
+            return _units_snapshot(_UNITS_CACHE)
     except Exception:
         files = []
     templates, divisions = [], []
@@ -124,7 +129,8 @@ def load_units(root=None, force=False):
         except Exception:
             pass
         try:
-            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                raw = _fh.read()
         except Exception:
             continue
         text = _strip_keep_len(raw)
@@ -156,7 +162,8 @@ def load_units(root=None, force=False):
     for d in divisions:
         k = str(d["location"])
         out["by_prov"].setdefault(k, []).append(d)
-    _UNITS_CACHE.update(out)
+    _UNITS_CACHE.update(_units_snapshot(out))
+    _UNITS_CACHE["mtime"] = mt
     return out
 
 
@@ -195,7 +202,8 @@ def _oob_files(root, tag, kind="land"):
     if not hist:
         return []
     try:
-        txt = io.open(hist, encoding="utf-8-sig", errors="replace").read()
+        with io.open(hist, encoding="utf-8-sig", errors="replace") as _fh:
+            txt = _fh.read()
     except Exception:
         return []
 
@@ -245,7 +253,7 @@ def _tpl_render(name, regs, sup, locked, indent="\t", with_key=True):
 
 def template_add(name, unit, x=0, y=0, root=None, tag=None):
     """新建一个只有一格编制的 division_template。"""
-    root = _map_pick(root)
+    root = _pick(root)
     if not name:
         return {"ok": False, "msg": "模板名不能为空"}
     tgt, err = _units_write_base(root)
@@ -276,7 +284,8 @@ def template_add(name, unit, x=0, y=0, root=None, tag=None):
         p = os.path.join(d, "zz_units.txt")
     block = _tpl_render(name, [{"unit": unit or "infantry", "x": x, "y": y}], [], False)
     if os.path.exists(p):
-        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
     else:
         raw = ""
     new_text = (raw.rstrip() + "\n\n" if raw.strip() else "") + block
@@ -289,7 +298,7 @@ def template_add(name, unit, x=0, y=0, root=None, tag=None):
 
 def unit_add(location, template, name=None, exp=None, eq=None, root=None, tag=None):
     """在某省加一支开局部队。"""
-    root = _map_pick(root)
+    root = _pick(root)
     try:
         location = int(location)
     except Exception:
@@ -351,7 +360,8 @@ def unit_add(location, template, name=None, exp=None, eq=None, root=None, tag=No
     block = "".join(lines)
 
     if os.path.exists(p):
-        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
     else:
         raw = "units = {\n}\n"
     text = _strip_keep_len(raw)
@@ -384,7 +394,8 @@ def unit_add(location, template, name=None, exp=None, eq=None, root=None, tag=No
                         pass
                     break
         if os.path.exists(_p2):
-            _raw2 = io.open(_p2, encoding="utf-8-sig", errors="replace").read()
+            with io.open(_p2, encoding="utf-8-sig", errors="replace") as _fh:
+                _raw2 = _fh.read()
         else:
             _raw2 = "units = {\n}\n"
         _t2 = _strip_keep_len(_raw2)

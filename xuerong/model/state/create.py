@@ -23,13 +23,39 @@ def _states_dir_for_write(root):
             return lay, d
     return None, None
 
-def _free_state_id():
+def _free_state_id(root=None):
     used = set()
-    for sid in state.states().keys():
+    for sid in (state.states() or {}).keys():
         try:
             used.add(int(sid))
         except Exception:
             pass
+    targets = [root] if root else (list(state.roots() or []) or [_map_pick(None)])
+    seen_dirs = set()
+    for t in targets:
+        if not t:
+            continue
+        for lay in (mod_layers(t) or [t]):
+            if not lay:
+                continue
+            d = os.path.join(lay, "history", "states")
+            ab = os.path.abspath(d)
+            if ab in seen_dirs or not os.path.isdir(d):
+                continue
+            seen_dirs.add(ab)
+            try:
+                names = os.listdir(d)
+            except Exception:
+                continue
+            for fn in names:
+                if not fn.lower().endswith(".txt"):
+                    continue
+                m = re.match(r'^\s*(\d+)', fn)
+                if m:
+                    try:
+                        used.add(int(m.group(1)))
+                    except Exception:
+                        pass
     n = 1
     while n in used:
         n += 1
@@ -65,7 +91,7 @@ def state_create(provinces, root=None, name=None, category="rural", manpower=100
 
     # 目标州 id
     if sid in (None, "", 0):
-        new_id = _free_state_id()
+        new_id = _free_state_id(root)
     else:
         try:
             new_id = int(sid)
@@ -145,17 +171,20 @@ def state_create(provinces, root=None, name=None, category="rural", manpower=100
     if os.path.exists(fpath):
         return {"ok": False, "msg": "文件已存在：%s" % fname}
     try:
-        io.open(fpath, "w", encoding="utf-8", newline="").write(content)
+        with io.open(fpath, "w", encoding="utf-8", newline="") as _f:
+            _f.write(content)
     except Exception as e:
         return {"ok": False, "msg": "写文件失败：%s" % e}
 
     # 内存里也建一条，界面立刻能用
     state.states()[new_id] = {
         "id": new_id, "name": st_name, "manpower": str(mp), "category": cat,
-        "provinces": pids, "owner": (owner or "").strip().upper(),
+        "provinces": pids, "province_count": len(pids),
+        "owner": (owner or "").strip().upper(),
         "cores": [(owner or "").strip().upper()] if owner else [],
-        "victory_points": {},
-        "buildings": {}, "path": fpath, "file": fpath, "source": os.path.basename(top),
+        "victory_points": [],
+        "buildings": {}, "resources": {}, "province_buildings": {},
+        "path": fpath, "file": fpath, "source": os.path.basename(top),
         "root": top, "rel": os.path.relpath(fpath, top), "created": True,
     }
     state.changed()[fpath] = os.path.relpath(fpath, top)
@@ -169,7 +198,8 @@ def state_create(provinces, root=None, name=None, category="rural", manpower=100
             loc_path = os.path.join(loc_dir, "zz_xuerong_state_names_l_simp_chinese.yml")
             line = ' %s:0 "%s"' % (st_name, display_name.replace('"', "'"))
             if os.path.exists(loc_path):
-                old_txt = io.open(loc_path, encoding="utf-8-sig", errors="replace").read()
+                with io.open(loc_path, encoding="utf-8-sig", errors="replace") as _f:
+                    old_txt = _f.read()
                 if st_name not in old_txt:
                     body = old_txt.rstrip()
                     if not body.endswith("}"):

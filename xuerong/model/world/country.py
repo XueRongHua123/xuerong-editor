@@ -9,12 +9,12 @@ import os
 import re
 
 from xuerong import state
-from xuerong.core.paths import _LAYERS_CACHE, _layer_files, is_under_game, mod_layers, write_base
+from xuerong.core.paths import _LAYERS_CACHE, _layer_files, _pick, mod_layers
 from xuerong.core.text import _atomic_write, _bom_for, _strip_keep_len
 from xuerong.model.history import snapshot
-from xuerong.model.map import _map_pick
 from xuerong.model.state import _states_dir_for_write
 from xuerong.model.world._inj import _reload
+from xuerong.model.world._write_guard import world_write_base
 
 def load_country_tags(root=None):
     """解析 common/country_tags 里的所有 tag。
@@ -24,14 +24,15 @@ def load_country_tags(root=None):
         H00 = "countries/H00.txt"
         dynamic_tags  = yes          ← 特殊行，不是 tag
     """
-    root = _map_pick(root)
+    root = _pick(root)
     files, _rep = _layer_files("common/country_tags", mod_layers(root))
     out, seen = [], {}
     dyn = False
     for p in (files or []):
         fn = os.path.basename(p)
         try:
-            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                raw = _fh.read()
         except Exception:
             continue
         text = _strip_keep_len(raw)
@@ -57,33 +58,12 @@ def _country_tags_write_base(root):
     只看 ROOTS 的话，直接调用（脚本、world_create 这类编排）会因为没有
     全局状态而误报「找不到可写的 mod 目录」，哪怕 root 本身完全可写。
     """
-    top = None
-    if root:
-        lay = mod_layers(root) or [root]
-        cand = lay[-1] if lay else root
-        if cand and not is_under_game(cand):
-            top = cand
-    if not top:
-        for r in (state.roots() or []):
-            lay = mod_layers(r) or [r]
-            cand = lay[-1] if lay else r
-            if cand and not is_under_game(cand):
-                top = cand
-    if not top:
-        return None, "找不到可写的 mod 目录"
-    tgt, why = write_base(root, "common/country_tags")
-    if not tgt:
-        return None, "找不到可写目录"
-    if os.path.abspath(tgt) != os.path.abspath(top):
-        nm = os.path.basename(tgt.rstrip("\\/")) or tgt
-        return None, ("common/country_tags 被 %s 的 replace_path 独占，"
-                      "直接写进去会改坏它。请先在「诊断 → 目录写入目标」里接管该目录" % nm)
-    return tgt, ""
+    return world_write_base(root, "common/country_tags")
 
 
 def country_tag_refs(root, tag):
     """统计一个 tag 在哪些地方被引用，删之前先看清楚。"""
-    root = _map_pick(root)
+    root = _pick(root)
     tag = (tag or "").upper()
     refs = {"states_owner": 0, "states_core": 0, "history_files": [], "trees": []}
     try:
@@ -126,7 +106,7 @@ def country_tag_add(root, tag, color=None, culture="western_european_gfx"):
     """
     culture = culture or "western_european_gfx"
 
-    root = _map_pick(root)
+    root = _pick(root)
     tag = (tag or "").upper().strip()
     if not re.match(r'^[A-Z][A-Z0-9]{1,3}$', tag):
         return {"ok": False, "msg": "tag 格式不对（1 位字母 + 1-3 位字母数字，如 GER、UNI）"}
@@ -157,7 +137,8 @@ def country_tag_add(root, tag, color=None, culture="western_european_gfx"):
     p = os.path.join(d, "zz_editor_tags.txt")
     line = '%s = "countries/%s.txt"\n' % (tag, tag)
     if os.path.exists(p):
-        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
         if not raw.endswith("\n"):
             raw += "\n"
         new_text = raw + line
@@ -195,7 +176,7 @@ def country_history_create(root, tag, capital=1, ruling_party="neutrality",
     不写 history —— 新国家在游戏里就是「没有首都、没有政府、没有科技」的空壳。
     这个函数补的就是这一层，格式照原版最简国家（如 NWF）写。
     """
-    root = _map_pick(root)
+    root = _pick(root)
     tag = (tag or "").upper().strip()
     if not re.match(r'^[A-Z][A-Z0-9]{1,3}$', tag):
         return {"ok": False, "msg": "tag 格式不对（如 GER、UNI）"}
@@ -256,7 +237,7 @@ def country_history_create(root, tag, capital=1, ruling_party="neutrality",
 
 def country_tag_delete(root, tag):
     """删一个国家 tag（只从自己的 mod 层里摘，且要先看引用）。"""
-    root = _map_pick(root)
+    root = _pick(root)
     tag = (tag or "").upper().strip()
     if not tag:
         return {"ok": False, "msg": "tag 不能为空"}
@@ -277,7 +258,8 @@ def country_tag_delete(root, tag):
         if not fn.endswith(".txt"):
             continue
         p = os.path.join(d, fn)
-        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
         pat = re.compile(r'(?m)^[ \t]*' + re.escape(tag) + r'\s*=\s*"[^"]*"[ \t]*\r?\n?')
         new_text = pat.sub('', raw)
         if new_text != raw:

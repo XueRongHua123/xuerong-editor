@@ -8,24 +8,14 @@ import io
 import os
 import re
 
-from xuerong.core.paths import _top_mod, write_base
+from xuerong.core.paths import _pick
 from xuerong.core.text import _atomic_write, _bom_for, _strip_keep_len, brace_match
 from xuerong.model.history import snapshot
-from xuerong.model.map import _map_pick
+from xuerong.model.world._write_guard import world_write_base
 
 def _bookmark_write_base(root):
     """common/bookmarks 的写入层，拒写父 mod。"""
-    top = _top_mod(root)
-    if not top:
-        return None, "找不到可写的 mod 目录"
-    tgt, why = write_base(root, "common/bookmarks")
-    if not tgt:
-        return None, "找不到可写目录"
-    if os.path.abspath(tgt) != os.path.abspath(top):
-        nm = os.path.basename(tgt.rstrip("\\/")) or tgt
-        return None, ("common/bookmarks 被 %s 的 replace_path 独占，"
-                      "请先在「诊断 → 目录写入目标」里接管该目录" % nm)
-    return tgt, ""
+    return world_write_base(root, "common/bookmarks", detail="")
 
 
 def _bookmark_date(date):
@@ -66,7 +56,8 @@ def _game_language():
         p = os.path.join(os.path.expanduser("~"), "Documents",
                          "Paradox Interactive", "Hearts of Iron IV", "settings.txt")
         if os.path.exists(p):
-            txt = io.open(p, encoding="utf-8", errors="replace").read()
+            with io.open(p, encoding="utf-8", errors="replace") as _fh:
+                txt = _fh.read()
             m = re.search(r'language\s*=\s*"?([a-z_]+)"?', txt)
             if m:
                 return m.group(1)
@@ -91,7 +82,8 @@ def _bookmark_loc(root, key, disp, desc_text, countries):
     lines = []
     if os.path.exists(p):
         try:
-            old = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                old = _fh.read()
             if old.strip():
                 lines = [old.rstrip("\n")]
         except Exception:
@@ -118,7 +110,8 @@ def _bookmark_loc(root, key, disp, desc_text, countries):
     if not body:
         return True
     txt = "\n".join(lines + body) + "\n"
-    io.open(p, "w", encoding="utf-8-sig", newline="").write(txt)
+    with io.open(p, "w", encoding="utf-8-sig", newline="") as _fh:
+        _fh.write(txt)
     return True
 
 
@@ -129,7 +122,7 @@ def bookmark_add(root, name, date, desc=None, picture=None, default_country=None
     countries: 这个剧本里可选的国家列表，默认只放 default_country。
     HOI4 的选国家界面只列剧本里写了 "TAG" = {} 的那些国家，不写就是空的。
     """
-    root = _map_pick(root)
+    root = _pick(root)
     name = (name or "").strip()
     date = (date or "").strip()
     if not name:
@@ -171,7 +164,8 @@ def bookmark_add(root, name, date, desc=None, picture=None, default_country=None
     block_txt = "\n".join(block) + "\n"
 
     if os.path.exists(p):
-        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
     else:
         raw = "bookmarks = {\n}\n"
     text = _strip_keep_len(raw)

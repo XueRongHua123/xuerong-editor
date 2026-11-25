@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from xuerong import state
 from xuerong.api.router import get, post
 from xuerong.core import facade_bridge as LG
+from xuerong.core.paths import _pick
 from xuerong.model.character import (
     character_add, character_delete, character_set, characters_payload,
     portrait_import)
@@ -25,7 +26,6 @@ from xuerong.model.event import (
     event_space_create, event_space_delete, event_view, save_event)
 from xuerong.model.idea import add_idea, delete_idea, idea_view, save_idea
 from xuerong.model.loc import loc_browse, save_loc
-from xuerong.model.map import _map_pick
 from xuerong.model.tech import (
     add_tech, delete_tech, save_tech, tech_batch_move, tech_link, tech_move,
     tech_tree_graph, tech_unlink, tech_view)
@@ -450,7 +450,7 @@ def r_api_event_graph(h, path_only):
 @get("/api/equipment_list")
 def r_api_equipment_list(h, path_only):
     _q = parse_qs(urlparse(h.path).query)
-    h._send(equipment_list(_map_pick(None), _q.get("q", [""])[0]))
+    h._send(equipment_list(_pick(None), _q.get("q", [""])[0]))
 
 
 @get("/api/equipment_detail")

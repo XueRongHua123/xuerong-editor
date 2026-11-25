@@ -90,7 +90,7 @@ _PICK = {"fn": None}
 
 
 def set_root_picker(fn):
-    """注册「没指定 root 时选哪个」的策略（门面注入 _map_pick）。"""
+    """注册未指定 root 时的默认选层策略；未注入时默认选顶层非只读/非原版 mod。"""
     _PICK["fn"] = fn
 
 
@@ -289,8 +289,9 @@ _OPT_FILE = os.path.join(app_dir(), "cache", "options.json")
 def _load_options():
     try:
         if os.path.isfile(_OPT_FILE):
-            j = json.loads(io.open(_OPT_FILE, encoding="utf-8-sig",
-                                   errors="replace").read())
+            with io.open(_OPT_FILE, encoding="utf-8-sig",
+                         errors="replace") as _fh:
+                j = json.loads(_fh.read())
             for k in list(state.options()):
                 if k in j:
                     if k == "game_dir":
@@ -329,7 +330,8 @@ def _mod_descriptor(root):
         if not os.path.exists(p):
             continue
         try:
-            text = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                text = _fh.read()
         except Exception:
             continue
         m = re.search(r'(?m)^\s*name\s*=\s*"([^"]*)"', text)
@@ -436,7 +438,8 @@ def _steam_libraries():
     vdf = os.path.join(steam, "steamapps", "libraryfolders.vdf") if steam else ""
     if vdf and os.path.isfile(vdf):
         try:
-            txt = io.open(vdf, encoding="utf-8", errors="replace").read()
+            with io.open(vdf, encoding="utf-8", errors="replace") as _fh:
+                txt = _fh.read()
             for m in re.finditer(r'"path"\s+"([^"]+)"', txt):
                 lib = m.group(1).replace("\\\\", "\\")
                 if os.path.isdir(lib) and lib not in roots:
@@ -490,7 +493,8 @@ def _enabled_mod_order():
         return list(hit[1])
     out = []
     try:
-        j = json.loads(io.open(jf, encoding="utf-8-sig", errors="replace").read())
+        with io.open(jf, encoding="utf-8-sig", errors="replace") as _fh:
+            j = json.loads(_fh.read())
     except Exception:
         return out
     for item in (j.get("enabled_mods") or []):
@@ -502,7 +506,8 @@ def _enabled_mod_order():
             continue
         raw = None
         try:
-            txt = io.open(fn, encoding="utf-8-sig", errors="replace").read()
+            with io.open(fn, encoding="utf-8-sig", errors="replace") as _fh:
+                txt = _fh.read()
             m = re.search(r'(?m)^\s*path\s*=\s*"([^"]+)"', txt)
             if m:
                 raw = m.group(1)
@@ -1012,7 +1017,8 @@ def _layer_files(rel_dir, layers, exts=(".txt",)):
 # ---- P0-3 B0：带 BOM 的读写（依赖 _out_path，所以放在 paths 而不是 text）----
 def _read_bom_text(path):
     path = _out_read_path(path)          # 输出模式下读到的是「改过的版本」
-    raw = io.open(path, "rb").read()
+    with io.open(path, "rb") as _fh:
+        raw = _fh.read()
     has_bom = raw.startswith(b"\xef\xbb\xbf")
     return raw.decode("utf-8-sig", "replace"), has_bom
 

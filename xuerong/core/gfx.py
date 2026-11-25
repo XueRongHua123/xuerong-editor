@@ -158,7 +158,7 @@ def gfx_missing(root=None, limit=600):
     """列出引用了但没定义的 sprite，以及定义了但贴图文件不存在的 sprite"""
     root = _pick(root)
     layers = mod_layers(root)
-    sprites, textures = _gfx_collect(root, layers)
+    sprites, _textures = _gfx_collect(root, layers)
     refs = _gfx_refs(root, layers)
     if not refs:
         return {"ok": True, "total": 0, "missing": [],
@@ -202,7 +202,6 @@ def _gfx_texture_exists(rel, layers):
     rel = (rel or "").replace(chr(92), "/").strip("/")
     if not rel:
         return True
-    low = rel.lower()
     for base in (layers or []):
         if not base:
             continue
@@ -257,12 +256,6 @@ def gfx_list(root=None, kind="goal"):
 def gfx_registered(root=None, pattern=""):
     """列出 interface 里已注册的 spriteType（可选按名字过滤）。"""
     root = _pick(root)
-    top = None
-    for r in (state.roots() or []):
-        lay = mod_layers(r) or [r]
-        cand = lay[-1] if lay else r
-        if cand and not is_under_game(cand):
-            top = cand
     files, _r = _layer_files("interface", mod_layers(root))
     out, seen = [], set()
     pat = (pattern or "").lower()
