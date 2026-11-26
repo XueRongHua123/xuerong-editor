@@ -234,7 +234,12 @@ async function selectTech(t){
   document.getElementById('techDescEn').value = '';
   document.getElementById('techYear').value = t.year || '';
   document.getElementById('techCost').value = t.cost || '';
-  document.getElementById('techPath').value = t.path || '';
+  const pathEl = document.getElementById('techPath');
+  if(pathEl){
+    pathEl.value = t.path || '';
+    pathEl.readOnly = true;
+    pathEl.title = '只读展示所属科技树页签（folder），保存时不会覆盖科技块内的 path = { leads_to_tech = ... }';
+  }
   const xorEl = document.getElementById('techXorRaw');
   if(xorEl) xorEl.value = (t.xor || []).join('\n');
   if(typeof window.techStudioOnSelectTech === 'function') window.techStudioOnSelectTech(t, null);
@@ -273,7 +278,6 @@ async function saveTech(){
     const yearVal = document.getElementById('techYear').value.trim();
     const props = {
       research_cost: document.getElementById('techCost').value.trim(),
-      path: document.getElementById('techPath').value.trim(),
       prereq_raw: _unwrapScriptBlock(document.getElementById('techPrereq').value, 'prerequisite'),
       enable_equipments_raw: _unwrapScriptBlock(document.getElementById('techEnable').value, 'enable_equipments'),
       sub_technologies_raw: _unwrapScriptBlock(document.getElementById('techSub').value, 'sub_technologies')

@@ -19,7 +19,9 @@ import re
 
 import xuerong.core.paths
 from xuerong import state
-from xuerong.core.paths import _layer_dirs, effective_layer_files
+from xuerong.core.paths import (_layer_dirs, _top_mod, effective_layer_files,
+                                ensure_writable_file, is_readonly_mod, is_under_game,
+                                mod_layers)
 from xuerong.core.text import (_atomic_write, _bom_for, _first, _strip_keep_len, brace_match,
                                braces_balanced, find_blocks, remove_block, set_raw_block,
                                set_scalar, strip_comments, top_items)
@@ -492,14 +494,47 @@ def build_blocks(key, groups):
 
 
 
+def _writable_focus_top(root=None):
+    top = None
+    for r in (state.roots() or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_readonly_mod(cand):
+            top = cand
+    if not top and root:
+        cand = _top_mod(root)
+        if cand and not is_readonly_mod(cand):
+            top = cand
+    return top
+
+
 def save_focus(root, rel, fid, fields):
     # v1.24.1：参数缺失时原来会在 os.path.join 里抛 TypeError，
     # 一路冒到 socketserver，前端只看到「连接被断」。这里先拦住。
-    if not root or not rel:
+    if not rel:
         return False, "参数不完整：缺少 root 或 file"
     if not fid:
         return False, "参数不完整：缺少节点 id"
-    path = os.path.join(root, rel)
+    top = _writable_focus_top(root)
+    if not root and not top:
+        return False, "参数不完整：缺少 root 或 file"
+    need_adopt = (
+        not root
+        or is_under_game(root)
+        or is_readonly_mod(root)
+        or (bool(top) and os.path.normcase(os.path.abspath(top)) != os.path.normcase(os.path.abspath(root)))
+    )
+    path = os.path.join(root, rel) if root else ""
+    if need_adopt or not path or not os.path.isfile(path):
+        rel_n = rel.replace("\\", "/").strip("/")
+        sub = os.path.dirname(rel_n)
+        basename = os.path.basename(rel_n)
+        if not sub or not basename:
+            return False, "找不到文件：%s" % rel
+        path, err = ensure_writable_file(root, sub, basename)
+        if not path:
+            return False, err
+        root = top or root
     if not os.path.isfile(path):
         return False, "找不到文件：%s" % rel
     raw, _bom = _read_focus_text(path)

@@ -62,6 +62,47 @@ def _loc_write_pairs(root, pairs, lang="simp_chinese"):
 
 
 
+def _sync_later_replace_ymls(d, base_fn, edits):
+    """同步更新同目录下字母序排在 base_fn 之后的 .yml 中已存在但被保存覆盖的键，防止重载回盖。"""
+    if not edits or not os.path.isdir(d):
+        return
+    base_low = base_fn.lower()
+    line_re = re.compile(r'^(\s*)([A-Za-z0-9_.\-]+)(:\d*\s+)"(.*)"(\s*)$')
+    try:
+        names = sorted(os.listdir(d))
+    except Exception:
+        return
+    for other_fn in names:
+        if not other_fn.lower().endswith(".yml"):
+            continue
+        if other_fn.lower() <= base_low:
+            continue
+        other_path = os.path.join(d, other_fn)
+        if not os.path.isfile(other_path):
+            continue
+        try:
+            with io.open(other_path, encoding="utf-8-sig", errors="replace") as f:
+                raw_text = f.read()
+        except Exception:
+            continue
+        old_lines = raw_text.splitlines()
+        new_lines = []
+        changed = False
+        for ln in old_lines:
+            m = line_re.match(ln)
+            if m and m.group(2) in edits:
+                val = (edits[m.group(2)] or "").replace("\\", "\\\\").replace('"', '\\"')
+                new_ln = '%s%s%s"%s"%s' % (m.group(1), m.group(2), m.group(3), val, m.group(5))
+                if new_ln != ln:
+                    changed = True
+                new_lines.append(new_ln)
+            else:
+                new_lines.append(ln)
+        if changed:
+            snapshot(other_path)
+            _atomic_write(other_path, b"\xef\xbb\xbf" + ("\n".join(new_lines) + "\n").encode("utf-8"))
+
+
 def _write_loc(root, lang):
     d = os.path.join(root, "localisation", lang, "replace")
     os.makedirs(d, exist_ok=True)
@@ -69,14 +110,16 @@ def _write_loc(root, lang):
     path = os.path.join(d, fn)
     header = {"simp_chinese": "l_simp_chinese:", "english": "l_english:",
               "japanese": "l_japanese:"}.get(lang, "l_" + lang + ":")
+    edits = state.loc_edits().get(lang, {})
     merged = _read_yml_pairs(path, unescape=True)
-    merged.update(state.loc_edits().get(lang, {}))
+    merged.update(edits)
     lines = [header]
     for k, v in sorted(merged.items()):
         v = (v or "").replace("\\", "\\\\").replace('"', '\\"')
         lines.append(' %s:0 "%s"' % (k, v))
     snapshot(path)
     _atomic_write(path, b"\xef\xbb\xbf" + ("\n".join(lines) + "\n").encode("utf-8"))
+    _sync_later_replace_ymls(d, fn, edits)
     return path
 
 

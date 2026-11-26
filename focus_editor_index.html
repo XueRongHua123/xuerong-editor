@@ -1806,7 +1806,11 @@ window.onerror = function(m, s, l, c){
           </div>
         </details>
         <div class="k">事件图片 picture</div>
-        <input type="text" id="eventPic">
+        <div class="ev-pic-row">
+          <input type="text" id="eventPic" placeholder="如 GFX_report_event_generic_read_write">
+          <button class="btn" id="eventPicBtn" type="button">选择图片</button>
+        </div>
+        <div id="eventPicPreview" class="ev-pic-prev" style="display:none"><img id="eventPicImg" alt=""></div>
         <div class="k">选项（名称 key / 选项文本）</div>
         <div id="eventOptions"></div>
         <div style="margin:2px 0 8px"><button class="btn" id="eventAddOption">＋ 添加选项</button></div>

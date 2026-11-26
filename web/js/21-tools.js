@@ -234,7 +234,7 @@ async function openIconPicker(source){
   iconSource = (typeof source === 'string' && source) ? source : 'focus';
   document.getElementById('iconPick').classList.add('show');
   document.getElementById('ipSearch').value = '';
-  const kind = (iconSource === 'equip' || iconSource === 'idea') ? iconSource : 'focus';
+  const kind = (iconSource === 'equip' || iconSource === 'idea' || iconSource === 'event') ? iconSource : 'focus';
   if(!iconCache[kind]){
     try {
       const r = await fetch('/api/icons?kind=' + kind);
@@ -248,7 +248,7 @@ async function openIconPicker(source){
 function renderIcons(q){
   const g = document.getElementById('ipGrid'); if(!g) return;
   q = (q || '').toLowerCase();
-  const kind = (iconSource === 'equip' || iconSource === 'idea') ? iconSource : 'focus';
+  const kind = (iconSource === 'equip' || iconSource === 'idea' || iconSource === 'event') ? iconSource : 'focus';
   const c = iconCache[kind] || {list: [], map: {}};
   const map = c.map || {};
   const allMatches = (c.list || []).filter(n=>!q || n.toLowerCase().includes(q));
@@ -257,9 +257,9 @@ function renderIcons(q){
   g.innerHTML = '';
   list.forEach(gfx=>{
     const d = document.createElement('div');
-    d.className = 'ip-item';
+    d.className = 'ip-item' + (kind === 'event' ? ' ip-wide' : '');
     const m = map[gfx] || '';
-    const src = m.startsWith('/') ? m : ('/icons/' + encodeURIComponent(m));
+    const src = m ? (m.startsWith('/') ? m : ('/icons/' + encodeURIComponent(m))) : ('/api/icon?gfx=' + encodeURIComponent(gfx) + (kind === 'event' ? '&full=1' : ''));
     d.innerHTML = '<img src="' + src + '" loading="lazy" alt=""><span>' + escapeHtml(gfx) + '</span>';
     const img = d.querySelector('img');
     if(img) img.onerror = ()=>{ d.style.display = 'none'; };
@@ -276,6 +276,7 @@ function renderIcons(q){
           t.value = (iconSource === 'idea' && iconPickTarget === 'ideaPic')
             ? gfx.replace(/^GFX_idea_/, '')
             : gfx;
+          t.dispatchEvent(new Event('input', {bubbles: true}));
         }
         iconPickTarget = null;
         document.getElementById('iconPick').classList.remove('show');
@@ -895,11 +896,12 @@ function renderLint(){
   const filter = document.getElementById('lintFilter').value;
   const st = LINT_DATA.stats || {};
   const sc = LINT_DATA.scope || {};
+  const sharedTxt = (sc.shared_focuses > 0) ? (' · 共享国策 ' + sc.shared_focuses) : '';
   document.getElementById('lintStats').innerHTML =
     '<b style="color:#d16a6a">错误 ' + (st.error || 0) + '</b>' +
     '<b style="color:var(--accent)">警告 ' + (st.warn || 0) + '</b>' +
     '<span>提示 ' + (st.info || 0) + '</span>' +
-    '<span style="margin-left:auto">树 ' + (sc.trees||0) + ' · 国家 ' + (sc.countries||0) + ' · 州 ' + (sc.states||0) +
+    '<span style="margin-left:auto">树 ' + (sc.trees||0) + sharedTxt + ' · 国家 ' + (sc.countries||0) + ' · 州 ' + (sc.states||0) +
     ' · 精神 ' + (sc.ideas||0) + ' · 事件 ' + (sc.events||0) + ' · 科技 ' + (sc.techs||0) + '</span>';
   let items = LINT_DATA.items || [];
   if(filter === 'error') items = items.filter(x=>x.level === 'error');

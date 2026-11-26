@@ -262,12 +262,19 @@ function updateSourceBox(){
       st.textContent = '还没有加载 mod；先「添加 mod」或加载原版参考';
     } else {
       let txt = roots.map(r => (r.name || r.path) + (r.readonly ? '（原版·只读）' : '')).join(' ＋ ') + ' 已加载';
-      // 只挂了一个非原版 mod，且树全来自别处：它是个空壳
+      // 只挂了一个非原版 mod：综合检查多个静态域是否有自有条目，并区分依赖继承链与纯原版空壳
       if(roots.length === 1 && !roots[0].readonly){
-        const arr = (DATA && DATA.trees) || [];
-        const mine = arr.filter(t => t.source === roots[0].name);
-        if(arr.length && !mine.length){
-          txt += ' · 里面还没有自己的内容，看到的是原版';
+        const topName = roots[0].name;
+        const domains = ['trees', 'ideas', 'equipment', 'techs', 'events'];
+        const hasOwn = domains.some(k => ((DATA && DATA[k]) || []).some(x => x && x.source === topName));
+        const anyLoaded = domains.some(k => ((DATA && DATA[k]) || []).length > 0);
+        if(anyLoaded && !hasOwn){
+          const hasNonGameDep = layers.some(l => l && l.reason && l.reason !== 'game' && l.name !== topName && l.path !== roots[0].path);
+          if(layers.length > 2 || hasNonGameDep){
+            txt += ' · 继承自依赖模组（可直接在当前层新增或覆盖）';
+          } else {
+            txt += ' · 里面还没有自己的内容，看到的是原版';
+          }
         }
       }
       st.textContent = txt;
@@ -854,6 +861,12 @@ document.getElementById('ideaPicBtn').onclick = ()=>{ iconPickTarget = 'ideaPic'
 
 document.getElementById('equipPicBtn').onclick = ()=>{ iconPickTarget = 'equipPic'; openIconPicker('equip'); };
 
+document.getElementById('eventPicBtn').onclick = ()=>{ iconPickTarget = 'eventPic'; openIconPicker('event'); };
+
+const _evPicEl = document.getElementById('eventPic');
+_evPicEl.addEventListener('input', ()=>updateEventPicPreview(_evPicEl.value));
+_evPicEl.addEventListener('change', ()=>updateEventPicPreview(_evPicEl.value));
+
 document.getElementById('newModBtn').onclick = openNewMod;
 
 document.getElementById('nmClose').onclick = ()=>{ document.getElementById('newMod').classList.remove('show'); };
@@ -1059,6 +1072,11 @@ document.getElementById('stateEntry').onclick = ()=>openStates();
 document.getElementById('diploEntry').onclick = ()=>openDiplo();
 
 document.getElementById('diploClose').onclick = ()=>document.getElementById('diploModal').classList.remove('show');
+
+const _diploModalEl = document.getElementById('diploModal');
+if(_diploModalEl){
+  _diploModalEl.addEventListener('click', e=>{ if(e.target === _diploModalEl) _diploModalEl.classList.remove('show'); });
+}
 
 document.getElementById('diploTagSearch').onchange = (ev)=>{
   const v = ((ev.target && ev.target.value) || '').trim().toUpperCase();

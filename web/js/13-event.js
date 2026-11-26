@@ -82,6 +82,37 @@ function renderEventOptions(raw, optLoc){
   });
 }
 
+let _evPicSeq = 0;
+function updateEventPicPreview(gfx){
+  const seq = ++_evPicSeq;
+  const box = document.getElementById('eventPicPreview');
+  const img = document.getElementById('eventPicImg');
+  if(!box || !img) return;
+  const g = (gfx == null ? (document.getElementById('eventPic')?.value || '') : String(gfx)).trim();
+  if(!g){
+    img.onload = null;
+    img.onerror = null;
+    img.removeAttribute('src');
+    box.style.display = 'none';
+    return;
+  }
+  const src = '/api/icon?gfx=' + encodeURIComponent(g) + '&full=1';
+  img.onload = ()=>{
+    if(seq !== _evPicSeq) return;
+    box.style.display = img.naturalWidth > 0 ? 'flex' : 'none';
+  };
+  img.onerror = ()=>{
+    if(seq !== _evPicSeq) return;
+    box.style.display = 'none';
+  };
+  if(img.getAttribute('src') === src){
+    if(img.complete) box.style.display = img.naturalWidth > 0 ? 'flex' : 'none';
+  } else {
+    box.style.display = 'none';
+    img.src = src;
+  }
+}
+
 let _evSelSeq = 0;
 async function selectEvent(e){
   if(!e) return;
@@ -121,6 +152,7 @@ async function selectEvent(e){
     ['eventPic', pm ? pm[1] : '']
   ]);
   renderEventOptions(raw, (loc && loc.options) || {});
+  updateEventPicPreview(document.getElementById('eventPic')?.value || '');
 }
 
 async function saveEvent(){
@@ -230,6 +262,7 @@ async function deleteEventSel(){
          'eventPic', 'eventTrigger', 'eventImmediate', 'eventRaw'].forEach(id=>{
           const el = document.getElementById(id); if(el) el.value = '';
         });
+        updateEventPicPreview('');
         renderEventList(q);
       }
     }

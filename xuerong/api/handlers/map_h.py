@@ -14,8 +14,8 @@ from urllib.parse import parse_qs, urlparse
 from xuerong.api.router import get, post, prefix
 from xuerong.core import facade_bridge as LG
 from xuerong import state
-from xuerong.core.paths import (ensure_writable_file, is_readonly_mod,
-                                is_under_game, mod_layers)
+from xuerong.core.paths import (_chain_layers, _pick, ensure_writable_file,
+                                is_readonly_mod, is_under_game, mod_layers)
 from xuerong.model.map import (
     _ensure_prov_rgb, _map_pick, height_paint, height_preview, height_sample,
     map_analysis, map_asset, map_build, map_cache_clear, map_edit_begin,
@@ -346,6 +346,80 @@ def r_api_map_analysis(h, path_only):
     h._send(map_analysis(_q.get("root", [None])[0], _lim, _minpx, _ol))
 
 
+def _filter_existing_sprites(lst, smap):
+    """按有效叠加链过滤掉贴图文件不存在的幽灵 sprite；全空时回退原列表以兼容内存夹具。"""
+    if not lst or not smap:
+        return lst
+    bases = []
+    seen_b = set()
+    for r in (state.roots() or []):
+        for ab in reversed(_chain_layers(r)):
+            if ab and ab not in seen_b:
+                seen_b.add(ab)
+                bases.append(ab)
+    if not bases:
+        for ab in reversed(mod_layers(_pick(None)) or []):
+            if ab and ab not in seen_b:
+                seen_b.add(ab)
+                bases.append(ab)
+    g = state.game()
+    if g:
+        if g not in seen_b:
+            seen_b.add(g)
+            bases.append(g)
+        dlc = os.path.join(g, "dlc")
+        if os.path.isdir(dlc):
+            try:
+                for x in os.listdir(dlc):
+                    p = os.path.join(dlc, x)
+                    if os.path.isdir(p) and p not in seen_b:
+                        seen_b.add(p)
+                        bases.append(p)
+            except Exception:
+                pass
+    if not bases:
+        return lst
+
+    dir_cache = {}
+    is_nt = (os.name == "nt")
+
+    def _has_tex(tex):
+        rel = (tex or "").replace("\\", "/").strip("/")
+        if not rel:
+            return False
+        if "/" in rel:
+            rel_dir, fname = rel.rsplit("/", 1)
+            rel_dir_os = rel_dir.replace("/", os.sep)
+        else:
+            rel_dir_os, fname = "", rel
+        fl = fname.lower()
+        for base in bases:
+            d = os.path.join(base, rel_dir_os) if rel_dir_os else base
+            d_key = d.lower() if is_nt else d
+            names = dir_cache.get(d_key)
+            if names is None:
+                if os.path.isdir(d):
+                    try:
+                        names = frozenset(n.lower() for n in os.listdir(d))
+                    except Exception:
+                        names = frozenset()
+                else:
+                    names = False
+                dir_cache[d_key] = names
+            if names and fl in names:
+                return True
+        return False
+
+    def _tex_of(name):
+        ent = smap.get(name)
+        if isinstance(ent, (tuple, list)) and ent:
+            return ent[0]
+        return ent if isinstance(ent, str) else ""
+
+    filtered = [name for name in lst if _has_tex(_tex_of(name))]
+    return filtered or lst
+
+
 @get("/api/icons")
 def r_api_icons(h, path_only):
     qs = parse_qs(urlparse(h.path).query)
@@ -368,12 +442,28 @@ def r_api_icons(h, path_only):
     elif kind == "equip":
         h._send({"list": sorted(state.equip_icons().keys()), "map": state.equip_icons()})
     elif kind == "idea":
-        lst = [g for g in sorted((state.sprite_map() or {}).keys())
+        smap = state.sprite_map() or {}
+        lst = [g for g in sorted(smap.keys())
                if g.startswith("GFX_idea_") and not g.endswith("_shine")]
-        if not lst:
+        if lst:
+            lst = _filter_existing_sprites(lst, smap)
+        else:
             lst = [g for g in sorted(state.icons().keys())
                    if g.startswith("GFX_idea_") and not g.endswith("_shine")]
         h._send({"list": lst, "map": {g: "/api/icon?gfx=" + g for g in lst}})
+    elif kind == "event":
+        smap = state.sprite_map() or {}
+        lst = [
+            g for g, ent in sorted(smap.items())
+            if not g.endswith("_shine") and (
+                g.startswith(("GFX_report_event_", "GFX_news_event_"))
+                or "event_pictures" in (
+                    (ent[0] if isinstance(ent, (tuple, list)) and ent else "") or ""
+                ).lower().replace("\\", "/")
+            )
+        ]
+        lst = _filter_existing_sprites(lst, smap)
+        h._send({"list": lst, "map": {g: "/api/icon?gfx=" + g + "&full=1" for g in lst}})
     else:
         raw_lst = LG.all_goal_icons() or sorted(state.icons().keys())
         lst = [g for g in raw_lst if not g.endswith("_shine")]

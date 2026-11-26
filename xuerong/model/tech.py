@@ -737,7 +737,7 @@ def save_tech(root, rel, tid, raw, name="", desc="", name_ja="", desc_ja="", pro
     b = text.find('{', m.start())
     e = brace_match(text, b)
     if props:
-        for k in ("year", "start_year", "research_cost", "path"):
+        for k in ("year", "start_year", "research_cost"):
             if props.get(k) not in (None, ""):
                 raw = set_scalar(raw, k, props.get(k))
         if "prereq_raw" in props and props.get("prereq_raw") is not None:

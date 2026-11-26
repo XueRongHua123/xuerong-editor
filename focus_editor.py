@@ -6735,7 +6735,8 @@ def lint_project(limit=1500):
     for it in items:
         stats[it["level"]] = stats.get(it["level"], 0) + 1
     return {"items": items, "stats": stats, "truncated": len(items) >= limit,
-            "scope": {"trees": len(TREES), "countries": len(COUNTRIES), "states": len(STATES),
+            "scope": {"trees": len(TREES), "shared_focuses": len(SHARED_FOCUSES),
+                      "countries": len(COUNTRIES), "states": len(STATES),
                       "ideas": len(IDEAS), "events": len(EVENTS), "techs": len(TECHS)}}
 
 
@@ -8618,6 +8619,8 @@ from xuerong.model import character as _m_character
 _m_character.bind(ensure_file_writable=ensure_file_writable)
 _m_replace.set_ref_scanner(_diag_replace_refs)
 _m_replace.set_progress_hook(_lp, begin=_lp_begin, done=_lp_done, fail=_lp_fail)
+from xuerong.model import diagnose as _m_diag
+_m_diag.set_progress_hook(_lp, begin=_lp_begin, done=_lp_done, fail=_lp_fail)
 
 
 # ---- 路由表装配自检（必须在所有顶层名字定义完之后）----

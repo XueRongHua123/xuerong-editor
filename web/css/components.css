@@ -3,7 +3,7 @@
    规则顺序与原单文件一致，未做任何合并或重排。 */
   #side summary{cursor:pointer;font-size:13px;color:var(--accent);margin:8px 0 6px;user-select:none;outline:none}
   #side summary:hover{color:var(--accent)}
-  .mascot-float{position:fixed;right:calc(var(--pane-r,356px) + 14px);left:auto;bottom:14px;width:236px;z-index:45;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px;cursor:move;box-shadow:0 8px 28px rgba(0,0,0,.45);user-select:none;animation:mfIn .5s ease-out}
+  .mascot-float{position:fixed;right:calc(var(--pane-r,356px) + 14px);left:auto;bottom:48px;width:236px;z-index:45;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px;cursor:move;box-shadow:0 8px 28px rgba(0,0,0,.45);user-select:none;animation:mfIn .5s ease-out}
   @keyframes mfIn{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
   .mascot-float.large{width:480px}
   .mf-bubble{position:absolute;left:10px;right:10px;bottom:calc(100% - 4px);background:var(--panel2);color:var(--text);border:1px solid var(--line2);border-radius:10px;padding:6px 9px;font-size:12px;line-height:1.45;box-shadow:0 6px 18px rgba(0,0,0,.4);opacity:0;transform:translateY(6px) scale(.96);pointer-events:none;transition:opacity .25s,transform .25s}
@@ -244,6 +244,13 @@
   .ip-item{background:var(--input);border:1px solid var(--line);border-radius:8px;padding:6px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:10px;color:var(--muted);word-break:break-all;text-align:center}
   .ip-item:hover{border-color:var(--accent-2);background:var(--panel)}
   .ip-item img{width:64px;height:64px;object-fit:contain}
+  .ip-item.ip-wide{grid-column:span 2}
+  .ip-item.ip-wide img{width:100%;height:76px;object-fit:contain}
+  .ev-pic-row{display:flex;align-items:center;gap:6px;margin:2px 0 8px}
+  .ev-pic-row input[type=text]{flex:1;min-width:0;width:auto!important;margin:0!important}
+  .ev-pic-row .btn{flex-shrink:0}
+  .ev-pic-prev{margin:0 0 8px;padding:6px;border:1px solid var(--line);border-radius:8px;background:var(--input);display:flex;align-items:center;justify-content:center;max-height:140px;overflow:hidden}
+  .ev-pic-prev img{max-width:100%;max-height:126px;width:auto;height:auto;object-fit:contain;border-radius:4px;display:block}
   #treeSet{position:fixed;inset:0;z-index:88;background:rgba(10,12,13,.8);display:none;align-items:center;justify-content:center}
   #treeSet.show{display:flex}
   .ts-card{width:min(720px,calc(100% - 80px));max-height:calc(100% - 100px);background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.55)}
@@ -429,7 +436,8 @@
   .dp-row select{flex:1;max-width:280px;min-width:0}
   .dp-acts{display:flex;align-items:center;gap:10px;margin:8px 0 10px;font-size:11.5px;color:var(--muted)}
   .dp-acts .btn{flex:0 0 auto;white-space:nowrap}
-  #diploModal .cm-card{height:auto;max-height:calc(100% - 40px)}
+  #diploModal .cm-card{height:min(82vh,680px);min-height:360px;max-height:calc(100% - 40px)}
+  #diploModal .cm-body{flex:1;min-height:0;overflow-y:auto}
   #dpMsg{white-space:pre-wrap;line-height:1.6}
   .st-prov{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0 8px}
   .st-prov span{font-size:10.5px;padding:2px 6px;border:1px solid var(--line);border-radius:5px;color:var(--muted);background:var(--panel2)}
@@ -496,7 +504,16 @@
   #updHead{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line)}
   #updHead b{font-size:14px}
   #updVer{font-size:12px;color:var(--accent);font-variant-numeric:tabular-nums}
-  #updBody{flex:1;overflow:auto;padding:12px 16px;font-size:12px;line-height:1.7;color:var(--t2);white-space:pre-wrap}
+  #updBody{flex:1;overflow:auto;padding:12px 16px;font-size:12px;line-height:1.7;color:var(--t2);white-space:normal}
+  #updBody .upd-meta{font-size:11px;color:var(--muted);margin-bottom:8px}
+  #updBody h3,#updBody h4{margin:10px 0 4px;font-size:13px;color:var(--accent);font-weight:600}
+  #updBody h4{font-size:12px;color:var(--text)}
+  #updBody p{margin:4px 0}
+  #updBody ul{margin:4px 0 6px;padding-left:18px}
+  #updBody li{margin:2px 0}
+  #updBody blockquote{margin:6px 0;padding:4px 10px;border-left:3px solid var(--accent);background:var(--panel2);border-radius:0 6px 6px 0;color:var(--text)}
+  #updBody code{font-family:Consolas,monospace;font-size:11px;background:var(--input);border:1px solid var(--line);border-radius:4px;padding:0 4px}
+  #updBody .upd-log{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);white-space:pre-wrap;font-family:Consolas,monospace;font-size:11.5px;color:var(--text)}
   #updFoot{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
   #updFoot .btn{height:32px;padding:0 14px;justify-content:center}
   /* ---------- v1.0.9 播放集 ---------- */
@@ -853,9 +870,9 @@
   .src-cover{margin-top:6px;font-size:9.5px;color:var(--muted);line-height:1.55;word-break:break-word}
   .src-cover b{color:var(--accent);font-weight:600}
   .src-opts{margin-top:8px;padding-top:6px;border-top:1px dashed var(--line)}
-  .src-opts .src-opt{display:block;margin-top:5px;line-height:1.35;font-size:10.5px}
-  .src-opts .src-opt input{margin:0 5px 0 0;vertical-align:-2px}
-  .src-opts .src-opt small{display:block;margin-left:17px;font-size:9px;color:var(--muted);opacity:.72;line-height:1.4}
+  #srcBox .src-opt{display:block;margin-top:5px;line-height:1.35;font-size:10.5px;white-space:nowrap}
+  #srcBox .src-opt input{margin:0 5px 0 0;vertical-align:-2px;flex-shrink:0}
+  #srcBox .src-opt small{display:block;margin-left:17px;font-size:9px;color:var(--muted);opacity:.72;line-height:1.4;white-space:normal}
   .src-auto{display:block;margin-top:3px;font-size:10px;line-height:1.45;opacity:.75;cursor:help}
   .src-auto b{font-weight:600;color:color-mix(in srgb,var(--accent) 70%,var(--muted))}
   .src-game-bar{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:6px;padding:4px 7px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);font-size:10.5px}
@@ -890,9 +907,9 @@
   .gv-prog-fill{height:100%;background:var(--accent);transition:width .25s ease}
   .lc-wrap{display:flex;flex-direction:column;gap:8px;padding:10px 14px;overflow:hidden;flex:1;min-height:0}
   .lc-sec-title{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted)}
-  .lc-strip{display:flex;align-items:stretch;gap:6px;overflow-x:auto;padding:4px 2px 6px}
+  .lc-strip{display:flex;align-items:stretch;flex-wrap:wrap;gap:6px;overflow-x:visible;padding:4px 2px 6px;flex:0 0 auto}
   .lc-arrow{display:flex;align-items:center;color:var(--muted);font-size:14px;flex:0 0 auto;padding:0 2px}
-  .lc-card{flex:0 0 215px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer;display:flex;flex-direction:column;gap:4px;text-align:left;color:var(--text)}
+  .lc-card{flex:1 1 178px;min-width:168px;max-width:240px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer;display:flex;flex-direction:column;gap:4px;text-align:left;color:var(--text)}
   .lc-card:hover{border-color:var(--accent-2)}
   .lc-card.active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
   .lc-card-head{display:flex;align-items:center;gap:6px;font-size:12px}
@@ -1075,6 +1092,7 @@
   .tt-root-item.orphan{border-color:color-mix(in srgb,var(--warn) 55%,transparent)}
   .tt-icon-box{display:flex;align-items:center;gap:10px;padding:6px 8px;background:var(--input);border:1px solid var(--line);border-radius:8px;margin:4px 0 6px}
   #techIconImg{width:48px;height:48px;object-fit:contain;border-radius:6px;background:var(--panel2);border:1px solid var(--line);flex-shrink:0}
+  #techIconImg:not([src]),#techIconImg[src=""]{display:none}
   .tt-icon-acts{display:flex;flex-direction:column;gap:4px;flex:1}
   .tt-grid-info{font-size:11px;color:var(--muted);background:var(--input);border:1px solid var(--line);border-radius:6px;padding:5px 8px;margin:2px 0 6px;display:flex;justify-content:space-between;align-items:center;gap:6px}
   .tt-chip-box{display:flex;flex-wrap:wrap;gap:5px;min-height:24px;padding:4px 0}

@@ -2153,7 +2153,8 @@ function openBldBatch(d){
       wrap.remove();
       STATE_DATA = null;
       await loadData();
-      await openStates(d.id);
+      const stModal = document.getElementById('stateModal');
+      if(stModal && stModal.classList.contains('show')) await openStates(d.id);
     } else {
       btn.disabled = false;
       btn.textContent = '套用';
@@ -2172,11 +2173,16 @@ async function openDiplo(tag){
   document.getElementById('diploModal').classList.add('show');
   const t = tag || (DIPLO && DIPLO.tag) || '';
   // 空 tag 交给后端挑（它会选本 mod 里第一个有自己历史文件的国家）
-  await loadDiplo(t);
+  await loadDiplo(t, true);
 }
 
 
-async function loadDiplo(tag){
+async function loadDiplo(tag, force){
+  const norm = (tag || '').trim().toUpperCase();
+  if(!force && norm && DIPLO && String(DIPLO.tag || '').toUpperCase() === norm &&
+     document.querySelector('#diploBody .cm-sec')){
+    return;
+  }
   const body = document.getElementById('diploBody');
   body.innerHTML = '<div class="cm-empty">读取中…</div>';
   let d;
@@ -2298,7 +2304,7 @@ async function saveDiplo(d){
   }catch(e){ if(msg) msg.textContent = '失败：' + e.message; return; }
   if(!r.ok){ if(msg) msg.textContent = r.msg || '写入失败'; status(r.msg || '', true); return; }
   status(r.msg || '已保存');
-  await loadDiplo(d.tag);
+  await loadDiplo(d.tag, true);
   const box = document.getElementById('dpMsg');
   if(box){
     box.innerHTML = (r.diff || []).map(x=>'<div>' + escapeHtml(x.label) + '：' +
@@ -2360,9 +2366,12 @@ async function saveState(d){
     '<span class="new">' + escapeHtml(x.new || '（空）') + '</span></div>').join('');
   await loadData();
   STATE_DATA = null;
-  await openStates(d.id);
-  const box2 = document.getElementById('stDiff');
-  if(box2){ box2.style.display = rows ? '' : 'none'; box2.innerHTML = rows; }
+  const stModal = document.getElementById('stateModal');
+  if(stModal && stModal.classList.contains('show')){
+    await openStates(d.id);
+    const box2 = document.getElementById('stDiff');
+    if(box2){ box2.style.display = rows ? '' : 'none'; box2.innerHTML = rows; }
+  }
 }
 
 

@@ -168,11 +168,15 @@ def _first_in(text, pat):
 
 
 def set_scalar(block, key, value):
-    pat = re.compile(r'(?m)^(\s*)%s\s*=\s*[^\s#]+' % key)
+    ek = re.escape(key)
+    pat = re.compile(r'(?m)^([ \t]*)%s[ \t]*=[ \t]*(?!\{)[^\s#]+' % ek)
     if pat.search(block):
         return pat.sub(lambda m: "%s%s = %s" % (m.group(1), key, value), block, count=1)
+    # 块内已有同名子块 key = { ... } 时，不破坏也不重复插入同名标量
+    if re.search(r'(?m)^[ \t]*%s\s*=\s*\{' % ek, block):
+        return block
     # 插入到 id 行后
-    m = re.search(r'(?m)^(\s*)id\s*=\s*[^\n]+', block)
+    m = re.search(r'(?m)^([ \t]*)id[ \t]*=[ \t]*[^\n]+', block)
     if not m:
         return block
     indent = m.group(1)

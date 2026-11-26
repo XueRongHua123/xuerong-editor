@@ -155,6 +155,11 @@
     if(!box || !S.data) return;
     const folders = S.data.folders || [];
     const map = (DATA && DATA.techIconMap) || {};
+    const nameCounts = Object.create(null);
+    folders.forEach(f=>{
+      const base = (f.name && f.name !== f.id) ? f.name : f.id.replace(/_folder$/, '');
+      nameCounts[base] = (nameCounts[base] || 0) + 1;
+    });
     box.innerHTML = '';
     folders.forEach(f=>{
       const b = document.createElement('button');
@@ -163,10 +168,17 @@
       const spr = f.tab_sprite || ('GFX_' + f.id + '_tab');
       const icon = f.tab_icon_url || map[spr] || '';
       const warn = (!f.registered || !f.has_gui) ? ' <span style="color:var(--warn)">!</span>' : '';
+      const baseLabel = (f.name && f.name !== f.id) ? f.name : f.id.replace(/_folder$/, '');
+      const shortId = String(f.id || '').replace(/_folder$/, '') || f.id;
+      const dispLabel = (nameCounts[baseLabel] >= 2 && shortId && shortId !== baseLabel)
+        ? (baseLabel + ' [' + shortId + ']')
+        : baseLabel;
       b.innerHTML = (icon ? '<img src="' + escapeHtml(icon) + '" onerror="this.style.display=\'none\'">' : '') +
-        escapeHtml((f.name && f.name !== f.id) ? f.name : f.id.replace(/_folder$/, '')) +
+        escapeHtml(dispLabel) +
         ' <span class="muted">(' + (f.tech_count || 0) + ')</span>' + warn;
-      b.title = f.id + (f.registered ? '' : '（未在 00_technology.txt 注册）') + (f.has_gui ? '' : '（缺少 GUI 页面）');
+      b.title = (baseLabel && baseLabel !== f.id ? (baseLabel + ' · ') : '') + f.id +
+        (f.registered ? '' : '（未在 00_technology.txt 注册）') +
+        (f.has_gui ? '' : '（缺少 GUI 页面）');
       b.onclick = ()=>{
         if(ttDirty.size && !confirm('当前有 ' + ttDirty.size + ' 个未保存位置，切换页签将清空未保存拖动，继续吗？')) return;
         ttDirty.clear();
@@ -923,16 +935,17 @@
       const map = (DATA && DATA.techIconMap) || {};
       const spr = (node && node.icon_gfx) || t.icon || ('GFX_' + t.id + '_medium');
       const url = node ? (node.icon_url || '') : (map[spr] || '');
+      img.title = spr;
+      img.onerror = ()=>{ img.style.display = 'none'; };
+      img.onload = ()=>{ img.style.display = img.naturalWidth > 0 ? '' : 'none'; };
       if(url){
-        img.src = url;
+        img.style.display = '';
         img.style.opacity = '1';
+        img.src = url;
       } else {
         img.removeAttribute('src');
-        img.style.opacity = '0.25';
+        img.style.display = 'none';
       }
-      img.title = spr;
-      img.onerror = ()=>{ img.style.opacity = '0.25'; };
-      img.onload = ()=>{ img.style.opacity = '1'; };
     }
 
     // 所属根树与坐标信息
@@ -1470,6 +1483,8 @@
             cell.className = 'tt-icon-cell';
             const url = map[g] || ('/api/icon?gfx=' + encodeURIComponent(g));
             cell.innerHTML = '<img src="' + escapeHtml(url) + '" loading="lazy" alt=""><span>' + escapeHtml(g) + '</span>';
+            const cImg = cell.querySelector('img');
+            if(cImg) cImg.onerror = ()=>{ cImg.style.display = 'none'; };
             cell.onclick = ()=>{ closeDlg(); onPick(g, url); };
             grid.appendChild(cell);
           });
@@ -1713,7 +1728,12 @@
       if(!techSel){ status('先选择一项科技', true); return; }
       openStudioIconPicker('tech', (gfx, url)=>{
         const img = el('techIconImg');
-        if(img) img.src = url;
+        if(img){
+          img.onerror = ()=>{ img.style.display = 'none'; };
+          img.onload = ()=>{ img.style.display = img.naturalWidth > 0 ? '' : 'none'; };
+          img.style.display = url ? '' : 'none';
+          if(url) img.src = url; else img.removeAttribute('src');
+        }
         status('选中图标 ' + gfx + '（如需写入科技脚本请点击下方或原文添加 icon / GFX）');
       });
     });
@@ -1734,7 +1754,12 @@
           sprite: 'GFX_' + techSel.id + '_medium'
         }, ()=>{
           const img = el('techIconImg');
-          if(img) img.src = '/api/icon?gfx=' + encodeURIComponent('GFX_' + techSel.id + '_medium') + '&t=' + Date.now();
+          if(img){
+            img.onerror = ()=>{ img.style.display = 'none'; };
+            img.onload = ()=>{ img.style.display = img.naturalWidth > 0 ? '' : 'none'; };
+            img.style.display = '';
+            img.src = '/api/icon?gfx=' + encodeURIComponent('GFX_' + techSel.id + '_medium') + '&t=' + Date.now();
+          }
           techStudioLoad({silent: true, fit: false});
         });
       };

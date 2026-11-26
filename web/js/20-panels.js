@@ -696,9 +696,39 @@ function treeOptions(){
 
   async function run(){
     const useAll = !!(fullScope && fullScope.checked);
-    cnt.textContent = useAll ? '全链扫描中（含地图与父层，较慢）…' : '扫描当前 mod 中…';
+    const baseTxt = useAll ? '全链扫描中（含地图与父层，较慢）…' : '扫描当前 mod 中…';
+    const t0 = Date.now();
+    let stageTxt = '';
+    const paintProgress = ()=>{
+      const sec = ((Date.now() - t0) / 1000).toFixed(1) + 's';
+      cnt.textContent = (stageTxt || baseTxt) + ' · ' + sec;
+    };
+    paintProgress();
+    let timer = null;
+    let polling = false;
+    let finished = false;
     try{
+      timer = setInterval(async ()=>{
+        if(finished || polling) return;
+        polling = true;
+        try{
+          const p = await post('/api/load_progress', {});
+          if(finished) return;
+          if(p && p.active){
+            const parts = [];
+            if(p.stage) parts.push(p.stage);
+            if(p.sub) parts.push(p.sub);
+            if(parts.length) stageTxt = parts.join(' · ');
+          }
+        }catch(_e){}
+        finally{
+          polling = false;
+        }
+        if(!finished) paintProgress();
+      }, 350);
       const r = await post('/api/diagnose', {scope: useAll ? 'all' : 'current'});
+      finished = true;
+      if(timer){ clearInterval(timer); timer = null; }
       if(r.ok === false){ cnt.textContent = r.msg || '失败'; render([]); renderBar([]); await loadIgnored(); return; }
       const items = r.findings || [];
       const bad = items.filter(function(x){ return x.severity === 'error'; }).length;
@@ -710,7 +740,11 @@ function treeOptions(){
       renderBar(items);
       render(items);
     }catch(e){
+      finished = true;
       cnt.textContent = '请求失败';
+    }finally{
+      finished = true;
+      if(timer){ clearInterval(timer); timer = null; }
     }
     await loadIgnored();
   }

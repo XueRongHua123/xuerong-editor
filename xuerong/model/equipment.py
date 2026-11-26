@@ -15,8 +15,9 @@ import re
 
 from xuerong import state
 from xuerong.core import paths
-from xuerong.core.paths import (_layer_dirs, effective_layer_files, mod_layers,
-                                unique_editor_filename)
+from xuerong.core.paths import (_layer_dirs, _top_mod, effective_layer_files,
+                                ensure_writable_file, is_readonly_mod, is_under_game,
+                                mod_layers, unique_editor_filename)
 from xuerong.core.text import (_atomic_write, _bom_for, _strip_keep_len, brace_match,
                                braces_balanced, find_blocks, set_raw_block, set_scalar,
                                strip_comments, top_items)
@@ -313,9 +314,38 @@ def equipment_list(root=None, query=None):
 # ---------------- 装备 ----------------
 def save_equipment(root, rel, eid, raw, name="", desc="", name_ja="", desc_ja="", props=None,
                    name_en="", desc_en="", picture=""):
-    path = os.path.join(root, rel)
-    with io.open(path, encoding="utf-8", errors="replace", newline="") as f:
-        text = f.read()
+    if not rel or not eid:
+        return False, "参数不完整：缺少文件或装备 id"
+    top = None
+    for r in (state.roots() or []):
+        lay = mod_layers(r) or [r]
+        cand = lay[-1] if lay else r
+        if cand and not is_readonly_mod(cand):
+            top = cand
+    if not top and root:
+        cand = _top_mod(root)
+        if cand and not is_readonly_mod(cand):
+            top = cand
+    need_adopt = (
+        not root
+        or is_under_game(root)
+        or is_readonly_mod(root)
+        or (bool(top) and os.path.normcase(os.path.abspath(top)) != os.path.normcase(os.path.abspath(root)))
+    )
+    path = os.path.join(root, rel) if root else ""
+    if need_adopt or not path or not os.path.isfile(path):
+        rel_n = rel.replace("\\", "/").strip("/")
+        sub = os.path.dirname(rel_n)
+        basename = os.path.basename(rel_n)
+        if not sub or not basename:
+            return False, "找不到文件：" + str(rel)
+        path, err = ensure_writable_file(root, sub, basename)
+        if not path:
+            return False, err
+        root = top or root
+    with io.open(path, "rb") as f:
+        raw_bytes = f.read()
+    text = raw_bytes.decode("utf-8-sig" if raw_bytes.startswith(b"\xef\xbb\xbf") else "utf-8", errors="replace")
     m = re.search(r'(?m)^[ \t]*%s\s*=\s*\{' % re.escape(eid), text)
     if not m:
         return False, "未找到装备 " + eid
@@ -336,8 +366,8 @@ def save_equipment(root, rel, eid, raw, name="", desc="", name_ja="", desc_ja=""
     if not braces_balanced(raw):
         return False, "花括号不匹配，未保存"
     snapshot(path)
-    with io.open(path, "w", encoding="utf-8", newline="") as f:
-        f.write(text[:m.start()] + raw.strip() + "\n" + text[e:])
+    new_text = text[:m.start()] + raw.strip() + "\n" + text[e:]
+    _atomic_write(path, _bom_for(path) + new_text.encode("utf-8"))
     state.changed()[path] = rel
     ents = {}
     if name: ents.setdefault("simp_chinese", {})[eid] = name

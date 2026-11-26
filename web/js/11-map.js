@@ -375,15 +375,75 @@ async function mapRunCheck(){
     }catch(e){ return false; }
   }
 
+  function isDevVer(v){
+    const s = String(v || '').trim().toLowerCase();
+    return !s || s === 'dev' || s.endsWith('-dev');
+  }
+
+  function hasOpenModal(){
+    if(document.querySelector('[id$="Modal"].show:not(#updModal), #welcome.show, #busyMask.show')) return true;
+    const edIds = ['ideaModal', 'equipModal', 'techModal', 'eventModal'];
+    return edIds.some(id=>{
+      const el = document.getElementById(id);
+      return el && getComputedStyle(el).display !== 'none';
+    });
+  }
+
+  function renderInlineMd(raw){
+    let s = escapeHtml(raw);
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    return s;
+  }
+
+  function renderMdNotes(text){
+    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+    const out = [];
+    let inList = false;
+    const closeList = ()=>{ if(inList){ out.push('</ul>'); inList = false; } };
+    for(const rawLine of lines){
+      const line = rawLine.trim();
+      if(!line){ closeList(); continue; }
+      const hMatch = /^(#{1,3})\s+(.*)$/.exec(line);
+      if(hMatch){
+        closeList();
+        const tag = hMatch[1].length <= 2 ? 'h3' : 'h4';
+        out.push('<' + tag + '>' + renderInlineMd(hMatch[2]) + '</' + tag + '>');
+        continue;
+      }
+      if(/^>\s*/.test(line)){
+        closeList();
+        out.push('<blockquote>' + renderInlineMd(line.replace(/^>\s*/, '')) + '</blockquote>');
+        continue;
+      }
+      if(/^[-*]\s+/.test(line)){
+        if(!inList){ out.push('<ul>'); inList = true; }
+        out.push('<li>' + renderInlineMd(line.replace(/^[-*]\s+/, '')) + '</li>');
+        continue;
+      }
+      closeList();
+      out.push('<p>' + renderInlineMd(line) + '</p>');
+    }
+    closeList();
+    return out.join('');
+  }
+
+  function appendUpdLog(body, msg){
+    const div = document.createElement('div');
+    div.className = 'upd-log';
+    div.textContent = msg;
+    body.appendChild(div);
+    body.scrollTop = body.scrollHeight;
+  }
+
   function showModal(info){
     try{ sessionStorage.setItem('updShown', '1'); document.getElementById('welcome').classList.remove('show'); }catch(e){}   // F16：弹过就记一笔，并让欢迎页当场让位
     document.getElementById('updVer').textContent = fmtVer(info.current) + ' → ' + fmtVer(info.latest);
     const body = document.getElementById('updBody');
-    const lines = [];
-    if(info.published) lines.push('发布时间：' + info.published);
-    lines.push('');
-    lines.push(info.notes || '（这次发布没有填写说明）');
-    body.textContent = lines.join('\n');
+    const metaHtml = info.published
+      ? '<div class="upd-meta">发布时间：' + escapeHtml(info.published) + '</div>'
+      : '';
+    body.innerHTML = metaHtml + renderMdNotes(info.notes || '（这次发布没有填写说明）');
     document.getElementById('updPage').href = info.url;
     const dl = document.getElementById('updDl');
     dl.disabled = false;
@@ -397,16 +457,16 @@ async function mapRunCheck(){
           headers:{'Content-Type':'application/json'},
           body: JSON.stringify({act:'prepare'})})).json();
         if (!r.ok) {
-          body.textContent += String.fromCharCode(10, 10) + '[失败] ' + (r.msg || '');
+          appendUpdLog(body, '[失败] ' + (r.msg || ''));
           dl.disabled = false;
           dl.textContent = '重试';
           return;
         }
         dl.textContent = '已解压';
-        body.textContent += String.fromCharCode(10, 10) + '[完成] ' + r.msg;
+        appendUpdLog(body, '[完成] ' + r.msg);
         status('新版已解压到 ' + (r.dir || ''));
       } catch (e) {
-        body.textContent += String.fromCharCode(10, 10) + '[异常] ' + e.message;
+        appendUpdLog(body, '[异常] ' + e.message);
         dl.disabled = false;
         dl.textContent = '重试';
       }
@@ -425,7 +485,7 @@ async function mapRunCheck(){
       if(r.ok && r.newer){
         badge.classList.add('new');
         badge.textContent = fmtVer(r.current) + ' → ' + fmtVer(r.latest);
-        if(force || !snoozed()) showModal(r);
+        if(force || (!isDevVer(r.current) && !snoozed() && !hasOpenModal())) showModal(r);
       }else if(force){
         status(r.ok ? ('已是最新版本 v' + r.current) : (r.msg || '检查失败'));
       }
