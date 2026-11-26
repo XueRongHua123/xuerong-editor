@@ -1009,8 +1009,9 @@ def _layer_files(rel_dir, layers, exts=(".txt",)):
         except Exception:
             continue
         for fn in names:
-            if fn.lower().endswith(exts) and fn not in seen:
-                seen[fn] = os.path.join(dpath, fn)
+            fk = fn.lower()
+            if fk.endswith(exts) and fk not in seen:
+                seen[fk] = os.path.join(dpath, fn)
     return list(seen.values()), bool(repl)
 
 

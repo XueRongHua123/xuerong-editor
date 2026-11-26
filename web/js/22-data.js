@@ -740,9 +740,10 @@ function techFolderNames(){
     msg(r.msg || '');
     renderList();
     const sel = document.getElementById('ofsType');
-    if(sel && !sel.dataset.filled){
+    if(sel){
+      const prev = sel.value;
       sel.innerHTML = OTYPES.map(function(t){ return '<option value="' + t + '">' + t + '</option>'; }).join('');
-      sel.dataset.filled = '1';
+      if(prev && OTYPES.indexOf(prev) >= 0) sel.value = prev;
     }
   }
 

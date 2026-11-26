@@ -28,7 +28,7 @@ def load_country_tags(root=None):
     files, _rep = _layer_files("common/country_tags", mod_layers(root))
     out, seen = [], {}
     dyn = False
-    for p in (files or []):
+    for p in reversed(files or []):
         fn = os.path.basename(p)
         try:
             with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:

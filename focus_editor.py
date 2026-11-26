@@ -155,7 +155,8 @@ def _read_app_version():
         try:
             _p = os.path.join(_b, "_version.txt") if _b else ""
             if _p and os.path.exists(_p):
-                v = io.open(_p, encoding="utf-8").read().strip()
+                with io.open(_p, encoding="utf-8") as _fh:
+                    v = _fh.read().strip()
                 if v:
                     return v
         except Exception:
@@ -262,7 +263,9 @@ def load_game_loc():
                 if not fn.endswith(".yml"):
                     continue
                 try:
-                    for ln in io.open(os.path.join(dirpath, fn), encoding="utf-8-sig", errors="replace").read().splitlines():
+                    with io.open(os.path.join(dirpath, fn), encoding="utf-8-sig", errors="replace") as _fh:
+                        _yml_lines = _fh.read().splitlines()
+                    for ln in _yml_lines:
                         m = line_re.match(ln)
                         if m:
                             LOC[m.group(1)] = m.group(2)
@@ -384,7 +387,9 @@ def load_mod(root):
                 for fn in sorted(files):
                     if not fn.endswith(".yml"):
                         continue
-                    for ln in io.open(os.path.join(dirpath, fn), encoding="utf-8-sig", errors="replace").read().splitlines():
+                    with io.open(os.path.join(dirpath, fn), encoding="utf-8-sig", errors="replace") as _fh:
+                        _yml_lines = _fh.read().splitlines()
+                    for ln in _yml_lines:
                         m = line_re.match(ln)
                         if m:
                             LOC[m.group(1)] = m.group(2)
@@ -514,7 +519,8 @@ def error_log(limit=120):
     items = []
     if os.path.exists(p):
         try:
-            raw = io.open(p, encoding="utf-8", errors="replace").read().splitlines()
+            with io.open(p, encoding="utf-8", errors="replace") as _fh:
+                raw = _fh.read().splitlines()
             keep = [(i, ln) for i, ln in enumerate(raw, 1)
                     if re.search(r'focus|national_focus|idea|mod/|Error', ln, re.I)]
             for i, ln in keep[-limit:]:
@@ -1547,7 +1553,8 @@ def country_history_save(tag, fields):
         if not lines:
             return {"ok": False, "msg": "没有任何要写入的字段"}
         text = "\n".join(lines) + "\n"
-        io.open(path, "w", encoding="utf-8", newline="\r\n").write(text)
+        with io.open(path, "w", encoding="utf-8", newline="\r\n") as _fh:
+            _fh.write(text)
         diff = [{"key": "create", "label": "新建文件", "old": "", "new": rel}]
 
     reload_data()
@@ -1601,7 +1608,8 @@ def _diplo_index():
         if not os.path.exists(p):
             continue
         try:
-            txt = strip_comments(io.open(p, encoding="utf-8", errors="replace").read())
+            with io.open(p, encoding="utf-8", errors="replace") as _fh:
+                txt = strip_comments(_fh.read())
         except Exception:
             continue
         for blk in _diplo_autonomy_blocks(txt):
@@ -1715,7 +1723,8 @@ def _country_write_path(tag):
         if not os.path.exists(dst0):
             try:
                 os.makedirs(os.path.dirname(dst0) or ".", exist_ok=True)
-                io.open(dst0, "w", encoding="utf-8", newline="\n").write("")
+                with io.open(dst0, "w", encoding="utf-8", newline="\n") as _fh:
+                    _fh.write("")
             except Exception as e:
                 return None, "给 %s 建历史文件失败：%s" % (tag, str(e)[:60])
         return dst0, why0
@@ -2015,7 +2024,8 @@ def _flag_usage():
                     continue
                 seen_files.add(rel)
                 try:
-                    text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
+                    with io.open(os.path.join(d, fn), encoding="utf-8", errors="replace") as _fh:
+                        text = strip_comments(_fh.read())
                 except Exception:
                     continue
                 scan(text, "国策 " + fn)
@@ -2056,7 +2066,8 @@ def _scripted_defs():
                         continue
                     seen_files.add(rel)
                     try:
-                        text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
+                        with io.open(os.path.join(d, fn), encoding="utf-8", errors="replace") as _fh:
+                            text = strip_comments(_fh.read())
                     except Exception:
                         continue
                     for m in def_re.finditer(text):
@@ -2186,8 +2197,8 @@ def _script_ref_counts(names, files=None):
     key_re = re.compile(r'(?<!\w)([^\W\d][\w]*)\s*=')
     for _rel, fp in (files if files is not None else _script_ref_files()):
         try:
-            text = strip_comments(io.open(fp, encoding="utf-8",
-                                          errors="replace").read())
+            with io.open(fp, encoding="utf-8", errors="replace") as _fh:
+                text = strip_comments(_fh.read())
         except Exception:
             continue
         for m in key_re.finditer(text):
@@ -2288,7 +2299,8 @@ def check_update(force=False, timeout=6):
         # 磁盘缓存
         try:
             if os.path.exists(UPDATE_CACHE) and now - os.path.getmtime(UPDATE_CACHE) < UPDATE_TTL:
-                cached = json.loads(io.open(UPDATE_CACHE, encoding="utf-8").read())
+                with io.open(UPDATE_CACHE, encoding="utf-8") as _fh:
+                    cached = json.loads(_fh.read())
                 UPDATE_STATE["result"] = cached
                 UPDATE_STATE["last"] = os.path.getmtime(UPDATE_CACHE)
                 return dict(cached)
@@ -2321,7 +2333,8 @@ def check_update(force=False, timeout=6):
 
     try:
         os.makedirs(os.path.dirname(UPDATE_CACHE), exist_ok=True)
-        io.open(UPDATE_CACHE, "w", encoding="utf-8", newline="").write(json.dumps(out, ensure_ascii=False))
+        with io.open(UPDATE_CACHE, "w", encoding="utf-8", newline="") as _fh:
+            _fh.write(json.dumps(out, ensure_ascii=False))
     except Exception:
         pass
     UPDATE_STATE["result"] = out
@@ -2895,9 +2908,10 @@ def playset_save(paths):
     good, bad = playset_validate(paths)
     try:
         os.makedirs(WORK, exist_ok=True)
-        io.open(PLAYSET_FILE, "w", encoding="utf-8", newline="").write(
-            json.dumps({"order": good, "saved": time.strftime("%Y-%m-%d %H:%M:%S")},
-                       ensure_ascii=False, indent=1))
+        with io.open(PLAYSET_FILE, "w", encoding="utf-8", newline="") as _fh:
+            _fh.write(
+                json.dumps({"order": good, "saved": time.strftime("%Y-%m-%d %H:%M:%S")},
+                           ensure_ascii=False, indent=1))
     except Exception as e:
         return {"ok": False, "msg": "保存失败：%s" % e}
     _LAYERS_CACHE.clear()
@@ -2910,7 +2924,8 @@ def playset_load_saved():
     try:
         if not os.path.exists(PLAYSET_FILE):
             return []
-        d = json.loads(io.open(PLAYSET_FILE, encoding="utf-8").read())
+        with io.open(PLAYSET_FILE, encoding="utf-8") as _fh:
+            d = json.loads(_fh.read())
         out = []
         for p in (d.get("order") or []):
             if p and os.path.isdir(p) and p not in out:
@@ -3076,7 +3091,8 @@ def adopt_dir(mod_root, sub, force=False, reload=True):
     try:
         txt = ""
         if os.path.exists(desc_path):
-            txt = io.open(desc_path, encoding="utf-8-sig", errors="replace").read()
+            with io.open(desc_path, encoding="utf-8-sig", errors="replace") as _fh:
+                txt = _fh.read()
         norm = sub.lower()
         have = [x.replace("\\", "/").strip("/").lower()
                 for x in re.findall(r'replace_path\s*=\s*"([^"]*)"', txt)]
@@ -3268,12 +3284,13 @@ def load_battalions(root=None, force=False):
         files = []
     out = []
     seen = {}
-    for p in (files or []):
+    for p in reversed(files or []):
         fn = os.path.basename(p)
         if fn.endswith("equipment") or "equipment" in fn:
             continue
         try:
-            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                raw = _fh.read()
         except Exception:
             continue
         text = _strip_keep_len(raw)
@@ -3401,7 +3418,8 @@ def load_country_offsite(root=None, tag=""):
     if not p:
         return {"ok": False, "msg": "找不到 %s 的国家历史文件" % tag, "items": []}
     try:
-        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
     except Exception as e:
         return {"ok": False, "msg": "读取失败：%s" % e, "items": []}
     text = _strip_keep_len(raw)
@@ -3444,7 +3462,8 @@ def country_offsite_add(root, tag, btype, level=1):
             _sh.copyfile(src, dst)
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
-    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     ins = "\nadd_offsite_building = {\n\ttype = %s\n\tlevel = %d\n}\n" % (btype, level)
     new_text = raw.rstrip() + "\n" + ins
     snapshot(dst)
@@ -3479,7 +3498,8 @@ def country_offsite_delete(root, tag, index):
             _sh.copyfile(src, dst)
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
-    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     text = _strip_keep_len(raw)
     blocks = list(find_blocks(text, "add_offsite_building"))
     if index >= len(blocks):
@@ -3534,7 +3554,8 @@ def country_offsite_set(root, tag, index, btype=None, level=None):
             _sh.copyfile(src, dst)
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
-    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     text = _strip_keep_len(raw)
     blocks = list(find_blocks(text, "add_offsite_building"))
     if index >= len(blocks):
@@ -3596,7 +3617,8 @@ def load_navy(root=None):
         fn = os.path.basename(p)
         rel = os.path.join("history", "units", fn)
         try:
-            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                raw = _fh.read()
         except Exception:
             continue
         text = _strip_keep_len(raw)
@@ -3702,7 +3724,8 @@ def load_bookmarks(root=None):
     items = []
     for p in (files or []):
         try:
-            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                raw = _fh.read()
         except Exception:
             continue
         text = _strip_keep_len(raw)
@@ -3774,7 +3797,8 @@ def bookmark_set(root, index, fields):
             _sh.copyfile(src, p)
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
-    raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     text = _strip_keep_len(raw)
     # 全局索引 → 本文件内序号
     local = 0
@@ -3850,7 +3874,8 @@ def bookmark_delete(root, index):
             _sh.copyfile(src, p)
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
-    raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     text = _strip_keep_len(raw)
     local = 0
     for j, x in enumerate(items):
@@ -3941,7 +3966,8 @@ def load_politics(root=None, tag=""):
     if not p:
         return {"ok": False, "msg": "找不到 %s 的国家历史文件" % tag}
     try:
-        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
     except Exception as e:
         return {"ok": False, "msg": "读取失败：%s" % e}
     text = _strip_keep_len(raw)
@@ -4003,7 +4029,8 @@ def politics_save(root, tag, fields):
     dst, rel, err = _politics_write(root, tag)
     if not dst:
         return {"ok": False, "msg": err}
-    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     text = _strip_keep_len(raw)
     changed = []
 
@@ -4079,7 +4106,8 @@ def popularities_save(root, tag, pops):
     dst, rel, err = _politics_write(root, tag)
     if not dst:
         return {"ok": False, "msg": err}
-    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     text = _strip_keep_len(raw)
     blocks = list(find_blocks(text, "set_popularities"))
     body = "".join("\n\t\t%s = %d" % (k, v) for k, v in clean.items())
@@ -4119,7 +4147,8 @@ def war_add(root, tag, target, wargoal_type="annex"):
     dst, rel, err = _politics_write(root, tag)
     if not dst:
         return {"ok": False, "msg": err}
-    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     block = ('\n\tdeclare_war_on = {\n'
              '\t\ttarget = %s\n'
              '\t\ttype = %s\n'
@@ -4153,7 +4182,8 @@ def war_delete(root, tag, index):
     dst, rel, err = _politics_write(root, tag)
     if not dst:
         return {"ok": False, "msg": err}
-    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     text = _strip_keep_len(raw)
     blocks = list(find_blocks(text, "declare_war_on"))
     if index >= len(blocks):
@@ -4202,7 +4232,8 @@ def load_air_wings(root=None):
     wings = []
     for p in (files or []):
         try:
-            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                raw = _fh.read()
         except Exception:
             continue
         text = _strip_keep_len(raw)
@@ -4296,7 +4327,8 @@ def air_wing_delete(root, idx):
             _sh.copyfile(src, dst)
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
-    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     n = len(raw)
     if not (0 <= st < n and 0 <= en <= n and st < en):
         return {"ok": False, "msg": "偏移不合法"}
@@ -4373,7 +4405,8 @@ def air_wing_add(root, province, name, eq_type, owner, amount=10, tag=None):
                           eq_type, owner, amount)
 
     if os.path.exists(dst):
-        raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+        with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
     else:
         raw = "air_wings = {\n}\n"
     text = _strip_keep_len(raw)
@@ -4474,7 +4507,8 @@ def _navy_locate(root, fi=None, ti=None):
     idx = -1
     for p in (files or []):
         try:
-            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                raw = _fh.read()
         except Exception:
             continue
         text = _strip_keep_len(raw)
@@ -4567,7 +4601,8 @@ def navy_add_ship(root, fi, ti, name=None, definition="destroyer", exp=0.3, tag=
             _sh.copyfile(p, dst)
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
-    raw2 = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw2 = _fh.read()
     text = _strip_keep_len(raw2)
     # 在目标 task_force 的 } 前插入
     p2, rel2, st2, en2, _r = _navy_locate(root, fi, ti)
@@ -4616,7 +4651,8 @@ def navy_add_tf(root, fi, name=None, location=None, tag=None):
             _sh.copyfile(p, dst)
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
-    raw2 = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw2 = _fh.read()
     p2, rel2, st2, en2, _r = _navy_locate(root, fi, None)
     if not p2:
         return {"ok": False, "msg": "重新定位失败"}
@@ -4666,7 +4702,8 @@ def navy_set_ship(root, fi, ti, si, fields):
             _sh.copyfile(p, dst)
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
-    raw2 = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw2 = _fh.read()
     p2, rel2, st2, en2, _r = _navy_locate(root, fi, ti)
     if not p2:
         return {"ok": False, "msg": "重新定位失败"}
@@ -4755,7 +4792,8 @@ def _navy_cut(root, rel, start, end, what):
             _sh.copyfile(src, dst)
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
-    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     n = len(raw)
     if not (0 <= start < n and 0 <= end <= n and start < end):
         return {"ok": False, "msg": "偏移不合法（%s-%s / 文件 %d 字节）" % (start, end, n)}
@@ -4801,7 +4839,8 @@ def _tpl_locate(root, name):
     # 倒序：和 load_units 的「后者覆盖前者」一致，改到的才是列表里显示的那一份
     for p in reversed(files or []):
         try:
-            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                raw = _fh.read()
         except Exception:
             continue
         text = _strip_keep_len(raw)
@@ -4859,7 +4898,8 @@ def template_save(name, fields, root=None):
     if locked is None:
         locked = cur["locked"]
 
-    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     text = _strip_keep_len(raw)
     # 重新定位（raw 和 text 长度一致，偏移可复用）
     A = B = -1
@@ -4887,7 +4927,8 @@ def template_delete(name, root=None):
     dst, a, b, err = _tpl_locate(root, name)
     if not dst:
         return {"ok": False, "msg": err or "找不到模板"}
-    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     text = _strip_keep_len(raw)
     A = B = -1
     for _a, _b, body in find_blocks(text, "division_template"):
@@ -4968,7 +5009,8 @@ def unit_delete(location, index, root=None):
             _sh.copyfile(src_path, dst)
         except Exception:
             return {"ok": False, "msg": "复制来源文件失败"}
-    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     text = _strip_keep_len(raw)
     # 数到第 index 个匹配本省的 division
     cnt = -1
@@ -5039,7 +5081,8 @@ def unit_move(location, index, new_location, root=None):
             _sh.copyfile(src_path, dst)
         except Exception:
             return {"ok": False, "msg": "复制来源文件失败"}
-    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     text = _strip_keep_len(raw)
     cnt = -1
     for um in re.finditer(r'(?m)^[ \t]*units[ \t]*=\s*\{', text):
@@ -5387,7 +5430,8 @@ def _railway_parse(path):
     if not path or not os.path.exists(path):
         return out
     try:
-        raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+        with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
     except Exception:
         return out
     text = strip_comments(raw)
@@ -5474,7 +5518,8 @@ def railway_set_level(index, level, root=None):
         index = int(index)
     except Exception:
         return {"ok": False, "msg": "参数不合法"}
-    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     lines = raw.splitlines(True)
     # 收集行式铁路的行号
     line_rows = []
@@ -5542,7 +5587,8 @@ def railway_edit(index, level=None, provs=None, root=None):
                     "msg": "这些相邻省不接壤，会断连：%s" % bad[:3]}
         new_provs = cand
 
-    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     lines = raw.splitlines(True)
 
     if cur.get("form") == "line":
@@ -5605,7 +5651,8 @@ def railway_delete(index, root=None):
     if index < 0 or index >= len(rails):
         return {"ok": False, "msg": "没有第 %d 条铁路" % index}
     cur = rails[index]
-    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     lines = raw.splitlines(True)
     if cur.get("form") == "line":
         rows = []
@@ -5643,7 +5690,8 @@ def supply_areas(root=None):
                 continue
             p = os.path.join(d, fn)
             try:
-                text = strip_comments(io.open(p, encoding="utf-8-sig", errors="replace").read())
+                with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                    text = strip_comments(_fh.read())
             except Exception:
                 continue
             for m in re.finditer(r'supply_area\s*=\s*\{', text):
@@ -5747,7 +5795,8 @@ def _sr_parse_file(path):
     """一个文件里可能有多个 strategic_region 块"""
     out = []
     try:
-        text = strip_comments(io.open(path, encoding="utf-8-sig", errors="replace").read())
+        with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+            text = strip_comments(_fh.read())
     except Exception:
         return out
     for m in re.finditer(r'strategic_region\s*=\s*\{', text):
@@ -5800,7 +5849,8 @@ def _sr_weather_template(root):
                 continue
             p = os.path.join(d, fn)
             try:
-                text = strip_comments(io.open(p, encoding="utf-8-sig", errors="replace").read())
+                with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                    text = strip_comments(_fh.read())
             except Exception:
                 continue
             m = re.search(r'weather\s*=\s*\{', text)
@@ -5906,7 +5956,8 @@ def strategic_region_set_provinces(sid, provinces, root=None):
         return {"ok": False, "msg": "没有战略区 %d" % sid}
     if os.path.abspath(base) == os.path.abspath(GAME or ""):
         return {"ok": False, "msg": "这个战略区来自原版，只读"}
-    text = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+        text = _fh.read()
     b, e = rec["span"]
     body = text[b + 1:e - 1]
     inner = "\n" + "".join("\t\t" + " ".join(str(x) for x in provs[i:i + 12]) + "\n"
@@ -5940,7 +5991,8 @@ def strategic_region_delete(sid, root=None):
         return {"ok": False, "msg": "没有战略区 %d" % sid}
     if os.path.abspath(base) == os.path.abspath(GAME or ""):
         return {"ok": False, "msg": "这个战略区来自原版，只读"}
-    text = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+        text = _fh.read()
     others = [r for r in _sr_parse_file(path) if r["id"] != sid]
     if not others:
         snapshot(path)
@@ -5986,7 +6038,8 @@ def adjacencies_list(root=None):
         return {"ok": False, "msg": "找不到 map/adjacencies.csv"}
     items = []
     try:
-        raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+        with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
     except Exception as e:
         return {"ok": False, "msg": "读取失败：%s" % e}
     lines = raw.splitlines()
@@ -6038,7 +6091,8 @@ def adjacency_edit(line, adj_type=None, root=None):
         line = int(line)
     except Exception:
         return {"ok": False, "msg": "行号不合法"}
-    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     lines = raw.splitlines(True)
     idx = line - 1
     if idx < 0 or idx >= len(lines):
@@ -6069,7 +6123,8 @@ def adjacency_delete(line, root=None):
         line = int(line)
     except Exception:
         return {"ok": False, "msg": "行号不合法"}
-    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     lines = raw.splitlines(True)
     idx = line - 1
     if idx < 0 or idx >= len(lines):
@@ -6096,7 +6151,8 @@ def adjacency_add(frm, to, adj_type="sea", through="", root=None):
         return {"ok": False, "msg": "省号不合法"}
     if frm == to:
         return {"ok": False, "msg": "两端不能是同一个省"}
-    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     lines = raw.splitlines(True)
     for ln in lines[1:]:
         c = ln.split(";")
@@ -6215,7 +6271,8 @@ def supply_area_save(sid, value=None, states=None, name=None, root=None):
                 continue
             p = os.path.join(_d, fn)
             try:
-                t = strip_comments(io.open(p, encoding="utf-8-sig", errors="replace").read())
+                with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                    t = strip_comments(_fh.read())
             except Exception:
                 continue
             for m in re.finditer(r'supply_area\s*=\s*\{', t):
@@ -6237,7 +6294,8 @@ def supply_area_save(sid, value=None, states=None, name=None, root=None):
     cur_value, cur_states, cur_name = 12, [], "SUPPLYAREA_%d" % sid
     if exist_path:
         try:
-            t = strip_comments(io.open(exist_path, encoding="utf-8-sig", errors="replace").read())
+            with io.open(exist_path, encoding="utf-8-sig", errors="replace") as _fh:
+                t = strip_comments(_fh.read())
             b = t.find("{", t.find("supply_area"))
             e = brace_match(t, b)
             body = t[b + 1:e - 1]
@@ -6303,7 +6361,8 @@ def supply_area_delete(sid, root=None):
             continue
         p = os.path.join(d, fn)
         try:
-            t = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                t = _fh.read()
         except Exception:
             continue
         ct = strip_comments(t)
@@ -6374,36 +6433,50 @@ def _log_paths():
 # v0.86 铁路等级静态检查
 def _rail_over_level(root, max_level=5):
     """返回 level 超过上限的铁路条数（HOI4 默认上限 5，日志里会刷 Railway level > MAX）"""
-    for base in (root, GAME):
-        p = os.path.join(base or "", "map", "railways.txt")
-        if not os.path.exists(p):
+    try:
+        layers = list(mod_layers(root) or [])
+    except Exception:
+        layers = []
+    seen = {os.path.normcase(os.path.abspath(x)) for x in layers if x}
+    if GAME:
+        _g = os.path.normcase(os.path.abspath(GAME))
+        if _g not in seen:
+            layers.insert(0, GAME)
+            seen.add(_g)
+    if root:
+        _r = os.path.normcase(os.path.abspath(root))
+        if _r not in seen:
+            layers.append(root)
+            seen.add(_r)
+    p, _src = _layers_find("map/railways.txt", layers)
+    if not p or not os.path.exists(p):
+        return 0, 0
+    try:
+        with io.open(p, encoding="utf-8", errors="replace") as _fh:
+            text = strip_comments(_fh.read())
+    except Exception:
+        return 0, 0
+    over = 0
+    total = 0
+    # 格式一：railway = { level = N provinces = { ... } }
+    for m in re.finditer(r'railway\s*=\s*\{', text):
+        b = text.find('{', m.end() - 1)
+        e = brace_match(text, b)
+        if e <= b:
             continue
-        try:
-            text = strip_comments(io.open(p, encoding="utf-8", errors="replace").read())
-        except Exception:
-            return 0, 0
-        over = 0
-        total = 0
-        # 格式一：railway = { level = N provinces = { ... } }
-        for m in re.finditer(r'railway\s*=\s*\{', text):
-            b = text.find('{', m.end() - 1)
-            e = brace_match(text, b)
-            if e <= b:
-                continue
-            total += 1
-            lv = re.search(r'level\s*=\s*(\d+)', text[b + 1:e - 1])
-            if lv and int(lv.group(1)) > max_level:
-                over += 1
-        # 格式二（MUVLUV 等老 mod）：每行 "level count p1 p2 ..."
-        if not total:
-            for ln in text.splitlines():
-                parts = ln.split()
-                if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
-                    total += 1
-                    if int(parts[0]) > max_level:
-                        over += 1
-        return over, total
-    return 0, 0
+        total += 1
+        lv = re.search(r'level\s*=\s*(\d+)', text[b + 1:e - 1])
+        if lv and int(lv.group(1)) > max_level:
+            over += 1
+    # 格式二（MUVLUV 等老 mod）：每行 "level count p1 p2 ..."
+    if not total:
+        for ln in text.splitlines():
+            parts = ln.split()
+            if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
+                total += 1
+                if int(parts[0]) > max_level:
+                    over += 1
+    return over, total
 
 
 # v0.87 日志快照（防止 error.log 被下一次启动覆盖）
@@ -6441,7 +6514,8 @@ def read_error_log(path=None, limit_files=40):
     p = cand[0]
     snap, stamp, created = _log_snapshot(p)
     try:
-        text = io.open(snap if os.path.exists(snap) else p, encoding="utf-8", errors="replace").read()
+        with io.open(snap if os.path.exists(snap) else p, encoding="utf-8", errors="replace") as _fh:
+            text = _fh.read()
     except Exception as e:
         return {"ok": False, "msg": "读取日志失败：%s" % e}
     lines = text.splitlines()
@@ -6755,7 +6829,8 @@ def load_orgs(root):
         "common/military_industrial_organization/organizations", root
     ):
         try:
-            text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace").read())
+            with io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace") as _fh:
+                text = strip_comments(_fh.read())
         except Exception:
             continue
         for k, v, b in top_items(text):
@@ -6771,7 +6846,8 @@ def load_modules(root):
         "common/units/equipment/modules", root
     ):
         try:
-            text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace").read())
+            with io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace") as _fh:
+                text = strip_comments(_fh.read())
         except Exception:
             continue
         for s, e, body in find_blocks(text, "equipment_modules"):
@@ -7160,13 +7236,18 @@ def add_tree(root, tree_id):
     os.makedirs(d, exist_ok=True)
     fn = unique_editor_filename(root, "common/national_focus", "zz_focus_editor_trees.txt")
     path = os.path.join(d, fn)
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read() if os.path.exists(path) else ""
+    if os.path.exists(path):
+        with io.open(path, encoding="utf-8", errors="replace", newline="") as _fh:
+            text = _fh.read()
+    else:
+        text = ""
     if re.search(r'(?m)^\s*id\s*=\s*"?%s"?' % re.escape(tree_id), text):
         return False, "树已存在: " + tree_id
     block = "\nfocus_tree = {\n\tid = %s\n\n\tcountry = {\n\t\tfactor = 0\n\t}\n}\n" % tree_id
     backup(path)
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(text + block)
+    with io.open(path, "w", encoding="utf-8", newline="") as _fh:
+        _fh.write(text + block)
     CHANGED[path] = os.path.join("common", "national_focus", fn)
     reload_data()
     return True, "已新建树 " + tree_id
@@ -7177,7 +7258,8 @@ def delete_tree(root, file, tree_id):
     path = os.path.join(root, file)
     if not os.path.isfile(path):
         return False, "找不到文件：%s" % file
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read()
+    with io.open(path, encoding="utf-8", errors="replace", newline="") as _fh:
+        text = _fh.read()
     for m in re.finditer(r'(?m)^\s*focus_tree\s*=\s*\{', text):
         b = text.find('{', m.end() - 1)
         e = brace_match(text, b)
@@ -7187,7 +7269,8 @@ def delete_tree(root, file, tree_id):
             newtext = text[:m.start()] + text[e:]
             backup(path)
             snapshot(path)
-            io.open(path, "w", encoding="utf-8", newline="").write(newtext)
+            with io.open(path, "w", encoding="utf-8", newline="") as _fh:
+                _fh.write(newtext)
             CHANGED[path] = file
             reload_data()
             return True, "已删除树 " + tree_id
@@ -7197,7 +7280,8 @@ def delete_tree(root, file, tree_id):
 # ---------------- 树级设置 ----------------
 def save_tree(root, rel, tree_id, default=None, country_raw=None):
     path = os.path.join(root, rel)
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read()
+    with io.open(path, encoding="utf-8", errors="replace", newline="") as _fh:
+        text = _fh.read()
     for m in re.finditer(r'(?m)^\s*focus_tree\s*=\s*\{', text):
         b = text.find('{', m.start())
         e = brace_match(text, b)
@@ -7217,7 +7301,8 @@ def save_tree(root, rel, tree_id, default=None, country_raw=None):
                 else:
                     nb = nb.rstrip() + "\n\t" + country_raw.strip() + "\n"
             snapshot(path)
-            io.open(path, "w", encoding="utf-8", newline="").write(text[:b + 1] + nb + text[e - 1:])
+            with io.open(path, "w", encoding="utf-8", newline="") as _fh:
+                _fh.write(text[:b + 1] + nb + text[e - 1:])
             CHANGED[path] = rel
             reload_data()
             return True, "树设置已保存"
@@ -7286,7 +7371,8 @@ def brace_issues():
     for root in ROOTS:
         for p in brace_scan_roots(root):
             try:
-                text = io.open(p, encoding="utf-8", errors="replace").read()
+                with io.open(p, encoding="utf-8", errors="replace") as _fh:
+                    text = _fh.read()
             except Exception:
                 continue
             d, extras = brace_balance(text)
@@ -7302,7 +7388,8 @@ def repair_file_braces(rel):
         p = os.path.join(root, rel.replace("/", os.sep))
         if not os.path.exists(p):
             continue
-        text = io.open(p, encoding="utf-8", errors="replace", newline="").read()
+        with io.open(p, encoding="utf-8", errors="replace", newline="") as _fh:
+            text = _fh.read()
         depth, extras = brace_balance(text)
         if not depth and not extras:
             return False, "这个文件花括号本来就是平衡的"
@@ -7314,7 +7401,8 @@ def repair_file_braces(rel):
         if d2 > 0:
             newtext = newtext.rstrip() + "\n" + ("}\n" * d2)
         snapshot(p)
-        io.open(p, "w", encoding="utf-8", newline="").write(newtext)
+        with io.open(p, "w", encoding="utf-8", newline="") as _fh:
+            _fh.write(newtext)
         CHANGED[p] = rel
         return True, "已修复 %s（补 %s 个 / 删 %s 个括号）" % (rel, d2, len(extras))
     return False, "没有找到文件"
@@ -7339,7 +7427,8 @@ def mod_conflicts():
         p = os.path.join(r, "descriptor.mod")
         if os.path.exists(p):
             try:
-                txt = io.open(p, encoding="utf-8", errors="replace").read()
+                with io.open(p, encoding="utf-8", errors="replace") as _fh:
+                    txt = _fh.read()
                 rp = set(re.findall(r'replace_path\s*=\s*"([^"]+)"', txt))
             except Exception:
                 pass
@@ -7420,7 +7509,11 @@ def writable_target(target=""):
     return writable_root()
 
 def _append_container(path, container, block):
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read() if os.path.exists(path) else (container + " = {\n}\n")
+    if os.path.exists(path):
+        with io.open(path, encoding="utf-8", errors="replace", newline="") as _fh:
+            text = _fh.read()
+    else:
+        text = container + " = {\n}\n"
     m = re.search(r'(?m)^\s*%s\s*=\s*\{' % re.escape(container), text)
     if not m:
         text = text.rstrip() + "\n" + container + " = {\n}\n"
@@ -7428,7 +7521,8 @@ def _append_container(path, container, block):
     b = text.find('{', m.start())
     e = brace_match(text, b)
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(text[:e - 1] + block + text[e - 1:])
+    with io.open(path, "w", encoding="utf-8", newline="") as _fh:
+        _fh.write(text[:e - 1] + block + text[e - 1:])
     return os.path.relpath(path, os.path.dirname(path))
 
 def copy_tree(tree_id, new_id):
@@ -7445,7 +7539,8 @@ def copy_tree(tree_id, new_id):
     src = os.path.join(t.get("root") or dest, t["file"])
     if not os.path.exists(src):
         return False, "找不到源文件"
-    text = io.open(src, encoding="utf-8", errors="replace", newline="").read()
+    with io.open(src, encoding="utf-8", errors="replace", newline="") as _fh:
+        text = _fh.read()
     block = None
     for m in re.finditer(r'(?m)^\s*focus_tree\s*=\s*\{', text):
         b = text.find('{', m.start())
@@ -7469,12 +7564,14 @@ def copy_tree(tree_id, new_id):
     path = os.path.join(dest, "common", "national_focus", "zz_focus_editor_copied.txt")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if os.path.exists(path):
-        txt = io.open(path, encoding="utf-8", errors="replace", newline="").read()
+        with io.open(path, encoding="utf-8", errors="replace", newline="") as _fh:
+            txt = _fh.read()
         txt = txt.rstrip() + "\nfocus_tree = {\n" + newblock.strip() + "\n}\n"
     else:
         txt = "focus_tree = {\n" + newblock.strip() + "\n}\n"
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(txt)
+    with io.open(path, "w", encoding="utf-8", newline="") as _fh:
+        _fh.write(txt)
     CHANGED[path] = os.path.join("common", "national_focus", "zz_focus_editor_copied.txt")
     ents = {"simp_chinese": {}}
     for oid in ids:
@@ -7540,12 +7637,17 @@ def copy_item(kind, item_id, new_id):
     else:
         path = os.path.join(dest, "events", "zz_focus_editor_copied.txt")
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        txt = io.open(path, encoding="utf-8", errors="replace", newline="").read() if os.path.exists(path) else "add_namespace = zzfe_copied\n\n"
+        if os.path.exists(path):
+            with io.open(path, encoding="utf-8", errors="replace", newline="") as _fh:
+                txt = _fh.read()
+        else:
+            txt = "add_namespace = zzfe_copied\n\n"
         if "add_namespace = zzfe_copied" not in txt:
             txt = "add_namespace = zzfe_copied\n\n" + txt
         txt = txt.rstrip() + "\n" + raw.strip() + "\n"
         snapshot(path)
-        io.open(path, "w", encoding="utf-8", newline="").write(txt)
+        with io.open(path, "w", encoding="utf-8", newline="") as _fh:
+            _fh.write(txt)
         rel = os.path.join("events", "zz_focus_editor_copied.txt")
         ents.setdefault("simp_chinese", {})[new_id + ".t"] = src.get("title", new_id)
     if ents:
@@ -7560,7 +7662,11 @@ def save_design(archetype, modules, org="", name="", target=""):
     d = os.path.join(dest, "common", "units", "equipment")
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, "zz_focus_editor_designs.txt")
-    old = io.open(path, encoding="utf-8", errors="replace", newline="").read() if os.path.exists(path) else ""
+    if os.path.exists(path):
+        with io.open(path, encoding="utf-8", errors="replace", newline="") as _fh:
+            old = _fh.read()
+    else:
+        old = ""
     lines = ["# 设计草稿（不会自动生效，供参考/复制）",
              "# archetype = %s" % archetype,
              "# org = %s" % (org or ""),
@@ -7571,7 +7677,8 @@ def save_design(archetype, modules, org="", name="", target=""):
     if old and not old.endswith("\n"):
         old += "\n"
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(old + "\n" + block)
+    with io.open(path, "w", encoding="utf-8", newline="") as _fh:
+        _fh.write(old + "\n" + block)
     CHANGED[path] = os.path.join("common", "units", "equipment", "zz_focus_editor_designs.txt")
     return True, "设计草稿已保存到模组"
 
@@ -7610,7 +7717,11 @@ def save_variant(arch, modules, name="", org="", target=""):
     d = os.path.join(dest, "common", "scripted_effects")
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, "zz_focus_editor_variants.txt")
-    old = io.open(path, encoding="utf-8", errors="replace", newline="").read() if os.path.exists(path) else ""
+    if os.path.exists(path):
+        with io.open(path, encoding="utf-8", errors="replace", newline="") as _fh:
+            old = _fh.read()
+    else:
+        old = ""
     m = re.search(r'(?m)^%s\s*=\s*\{' % re.escape(effect_id), old)
     if m:
         b = old.find('{', m.start())
@@ -7619,7 +7730,8 @@ def save_variant(arch, modules, name="", org="", target=""):
     else:
         newtext = old.rstrip() + ("\n\n" if old.strip() else "") + effect
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(newtext)
+    with io.open(path, "w", encoding="utf-8", newline="") as _fh:
+        _fh.write(newtext)
     CHANGED[path] = os.path.join("common", "scripted_effects", "zz_focus_editor_variants.txt")
     return True, "已生成装备变体效果（%s），可插入国策/事件或直接调用" % effect_id
 
@@ -7791,7 +7903,8 @@ def load_ai():
     cfg = dict(DEFAULT_AI)
     try:
         if os.path.exists(AI_CONFIG_PATH):
-            cfg.update(json.loads(io.open(AI_CONFIG_PATH, encoding="utf-8").read()))
+            with io.open(AI_CONFIG_PATH, encoding="utf-8") as _fh:
+                cfg.update(json.loads(_fh.read()))
     except Exception:
         pass
     return cfg
@@ -7802,8 +7915,9 @@ def save_ai(cfg):
         data = {k: cfg.get(k, DEFAULT_AI.get(k, "")) for k in DEFAULT_AI}
         if not data.get("api_key"):
             data["api_key"] = old.get("api_key", "")
-        io.open(AI_CONFIG_PATH, "w", encoding="utf-8", newline="").write(
-            json.dumps(data, ensure_ascii=False, indent=2))
+        with io.open(AI_CONFIG_PATH, "w", encoding="utf-8", newline="") as _fh:
+            _fh.write(
+                json.dumps(data, ensure_ascii=False, indent=2))
         return True, "AI 配置已保存"
     except Exception as e:
         return False, "保存失败: %s" % e
@@ -7978,26 +8092,33 @@ def add_shared_focus(root, sid):
     os.makedirs(d, exist_ok=True)
     fn = unique_editor_filename(root, "common/national_focus", "zz_focus_editor_shared.txt")
     path = os.path.join(d, fn)
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read() if os.path.exists(path) else ""
+    if os.path.exists(path):
+        with io.open(path, encoding="utf-8", errors="replace", newline="") as _fh:
+            text = _fh.read()
+    else:
+        text = ""
     if re.search(r'(?m)^\s*id\s*=\s*"?%s"?' % re.escape(sid), text):
         return False, "共享焦点已存在"
     block = ("\nshared_focus = {\n\tid = %s\n\ticon = GFX_goal_generic_national_unity\n"
              "\tx = 0\n\ty = 0\n\tcost = 1\n}\n" % sid)
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(text + block)
+    with io.open(path, "w", encoding="utf-8", newline="") as _fh:
+        _fh.write(text + block)
     CHANGED[path] = os.path.join("common", "national_focus", fn)
     reload_data()
     return True, "已新建共享焦点 " + sid
 
 def delete_shared_focus(root, rel, sid):
     path = os.path.join(root, rel)
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read()
+    with io.open(path, encoding="utf-8", errors="replace", newline="") as _fh:
+        text = _fh.read()
     for m in re.finditer(r'(?m)^\s*shared_focus\s*=\s*\{', text):
         b = text.find('{', m.start())
         e = brace_match(text, b)
         if re.search(r'(?m)^\s*id\s*=\s*"?%s"?' % re.escape(sid), text[b:e]):
             snapshot(path)
-            io.open(path, "w", encoding="utf-8", newline="").write(text[:m.start()] + text[e:])
+            with io.open(path, "w", encoding="utf-8", newline="") as _fh:
+                _fh.write(text[:m.start()] + text[e:])
             CHANGED[path] = rel
             reload_data()
             return True, "已删除共享焦点 " + sid
