@@ -149,8 +149,9 @@ def _replace_collect(layer, sub, pat):
         if not fn.endswith(".txt"):
             continue
         try:
-            txt = io.open(os.path.join(d, fn), encoding="utf-8-sig",
-                          errors="replace").read()
+            with io.open(os.path.join(d, fn), encoding="utf-8-sig",
+                         errors="replace") as _fh:
+                txt = _fh.read()
         except Exception:
             continue
         for m in re.finditer(pat, txt):
@@ -188,8 +189,9 @@ def _replace_adopt_block(sub):
 
 def _replace_ignore_all():
     try:
-        data = json.loads(io.open(_REPLACE_IGNORE_FILE, encoding="utf-8",
-                                  errors="replace").read())
+        with io.open(_REPLACE_IGNORE_FILE, encoding="utf-8",
+                     errors="replace") as _fh:
+            data = json.loads(_fh.read())
         return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
     except Exception:
         return []
@@ -347,7 +349,8 @@ def replace_drop(root, sub, reload=True):
                            sub, os.path.basename(owner.rstrip("\\/")) or owner)}
 
     try:
-        raw = io.open(desc_path, "rb").read()
+        with io.open(desc_path, "rb") as _fh:
+            raw = _fh.read()
     except Exception as e:
         return {"ok": False, "msg": "读 descriptor.mod 失败：%s" % e, "removed": 0}
     has_bom = raw.startswith(b"\xef\xbb\xbf")

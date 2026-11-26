@@ -262,7 +262,9 @@ def r_api_river_preview_png(h, path_only):
     if not _rp:
         h._send({"ok": False, "msg": "生成河流预览失败"}, 404)
     else:
-        h._send(io.open(_rp, "rb").read(), 200, "image/png")
+        with io.open(_rp, "rb") as _f:
+            data = _f.read()
+        h._send(data, 200, "image/png")
 
 
 @get("/api/height_preview.png")
@@ -272,7 +274,9 @@ def r_api_height_preview_png(h, path_only):
     if not _hp:
         h._send({"ok": False, "msg": "生成高程预览失败"}, 404)
     else:
-        h._send(io.open(_hp, "rb").read(), 200, "image/png")
+        with io.open(_hp, "rb") as _f:
+            data = _f.read()
+        h._send(data, 200, "image/png")
 
 
 @get("/api/map_meta")
@@ -289,7 +293,8 @@ def r_api_map_asset(h, path_only):
     if not p:
         h._send({"ok": False, "msg": "没有这个图块"}, 404)
     else:
-        data = io.open(p, "rb").read()
+        with io.open(p, "rb") as _f:
+            data = _f.read()
         h._send(data, 200, "image/png" if p.endswith(".png") else
                    ("application/json; charset=utf-8" if p.endswith(".json") else "application/octet-stream"))
 
@@ -382,6 +387,8 @@ def rp_icons(h, path_only):
     fn = os.path.basename(path_only)
     p = os.path.join(state.path_var("ICON_DIR"), fn)
     if fn and os.path.isfile(p):
-        h._send(io.open(p, "rb").read(), ctype="image/png")
+        with io.open(p, "rb") as _f:
+            data = _f.read()
+        h._send(data, ctype="image/png")
     else:
         h._send({"err": "no icon"}, 404)

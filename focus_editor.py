@@ -532,13 +532,14 @@ def file_excerpt(rel, line, root=None, span=6):
     if not rel:
         return {"ok": False, "msg": "没有文件路径"}
     cands = []
-    for base in mod_layers(_map_pick(root)) or [GAME]:
+    for base in reversed(mod_layers(_paths._pick(root)) or [GAME]):
         if base:
             cands.append(os.path.join(base, rel.replace("/", os.sep)))
     for c in cands:
         if os.path.exists(c):
             try:
-                lines = io.open(c, encoding="utf-8-sig", errors="replace").read().splitlines()
+                with io.open(c, encoding="utf-8-sig", errors="replace") as _f:
+                    lines = _f.read().splitlines()
             except Exception as e:
                 return {"ok": False, "msg": "读取失败：%s" % e}
             line = max(1, min(int(line or 1), len(lines) or 1))
@@ -3134,7 +3135,7 @@ def verify_adopt(mod_root, sub):
     if not sub:
         return {"ok": False, "msg": "目录名不能为空"}
 
-    root = _map_pick(mod_root)
+    root = _paths._pick(mod_root)
     top = None
     for r in (ROOTS or []):
         lay = mod_layers(r) or [r]
@@ -3203,7 +3204,7 @@ def verify_adopt(mod_root, sub):
 
 def verify_all_adopted(mod_root=None):
     """把所有被自己接管的目录逐个校验一遍。"""
-    root = _map_pick(mod_root)
+    root = _paths._pick(mod_root)
     top = None
     for r in (ROOTS or []):
         lay = mod_layers(r) or [r]
@@ -3254,7 +3255,7 @@ def load_battalions(root=None, force=False):
 
     每个兵种带 group（infantry / mobile / armor …），界面按组分类。
     """
-    root = _map_pick(root)
+    root = _paths._pick(root)
     base, files = "", []
     try:
         files, _r = _layer_files("common/units", mod_layers(root))
@@ -3392,7 +3393,7 @@ def load_country_offsite(root=None, tag=""):
             level = 5
         }
     """
-    root = _map_pick(root)
+    root = _paths._pick(root)
     tag = (tag or "").upper()
     if not tag:
         return {"ok": False, "msg": "没给 tag", "items": []}
@@ -3418,7 +3419,7 @@ def load_country_offsite(root=None, tag=""):
 
 def country_offsite_add(root, tag, btype, level=1):
     """加一项离岸建筑。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     tag = (tag or "").upper()
     btype = (btype or "").strip()
     if not tag or not btype:
@@ -3453,7 +3454,7 @@ def country_offsite_add(root, tag, btype, level=1):
 
 def country_offsite_delete(root, tag, index):
     """删掉第 index 项离岸建筑。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     tag = (tag or "").upper()
     try:
         index = int(index)
@@ -3501,7 +3502,7 @@ def country_offsite_delete(root, tag, index):
 
 def country_offsite_set(root, tag, index, btype=None, level=None):
     """改第 index 项离岸建筑的类型或数量。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     tag = (tag or "").upper()
     try:
         index = int(index)
@@ -3588,7 +3589,7 @@ def load_navy(root=None):
             }
         }
     """
-    root = _map_pick(root)
+    root = _paths._pick(root)
     _base, files = _units_files(root)
     fleets = []
     for p in (files or []):
@@ -3696,7 +3697,7 @@ def load_bookmarks(root=None):
             }
         }
     """
-    root = _map_pick(root)
+    root = _paths._pick(root)
     files, _rep = _layer_files("common/bookmarks", mod_layers(root))
     items = []
     for p in (files or []):
@@ -3746,7 +3747,7 @@ def load_bookmarks(root=None):
 
 def bookmark_set(root, index, fields):
     """改某个剧本的 date / name / desc / picture / default_country。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     try:
         index = int(index)
     except Exception:
@@ -3821,7 +3822,7 @@ def bookmark_set(root, index, fields):
 
 def bookmark_delete(root, index):
     """删掉第 index 个剧本。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     try:
         index = int(index)
     except Exception:
@@ -3932,7 +3933,7 @@ def load_politics(root=None, tag=""):
     set_popularities = { democratic = 75  fascism = 10 … }
     declare_war_on = { target = X  type = Y }
     """
-    root = _map_pick(root)
+    root = _paths._pick(root)
     tag = (tag or "").upper()
     if not tag:
         return {"ok": False, "msg": "没给 tag"}
@@ -3982,7 +3983,7 @@ def politics_save(root, tag, fields):
 
     fields 里给什么改什么，没给的保留原值。
     """
-    root = _map_pick(root)
+    root = _paths._pick(root)
     tag = (tag or "").upper()
     cur = load_politics(root, tag)
     if not cur.get("ok"):
@@ -4059,7 +4060,7 @@ def politics_save(root, tag, fields):
 
 def popularities_save(root, tag, pops):
     """改四党支持率（整组替换，和为 100 时提示）。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     tag = (tag or "").upper()
     if not isinstance(pops, dict) or not pops:
         return {"ok": False, "msg": "要传 {democratic: 60, ...}"}
@@ -4103,7 +4104,7 @@ def popularities_save(root, tag, pops):
 
 def war_add(root, tag, target, wargoal_type="annex"):
     """给某国加一条 declare_war_on。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     tag = (tag or "").upper()
     target = (target or "").upper()
     if not tag or not target:
@@ -4138,7 +4139,7 @@ def war_add(root, tag, target, wargoal_type="annex"):
 
 def war_delete(root, tag, index):
     """删掉第 index 条宣战。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     tag = (tag or "").upper()
     try:
         index = int(index)
@@ -4196,7 +4197,7 @@ def load_air_wings(root=None):
             }
         }
     """
-    root = _map_pick(root)
+    root = _paths._pick(root)
     _base, files = _units_files(root)
     wings = []
     for p in (files or []):
@@ -4276,7 +4277,7 @@ def _air_locate(root, idx):
 
 def air_wing_delete(root, idx):
     """删掉第 idx 支航空联队。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     try:
         idx = int(idx)
     except Exception:
@@ -4319,7 +4320,7 @@ def air_wing_add(root, province, name, eq_type, owner, amount=10, tag=None):
 
     加进哪个文件：优先按 owner 找 TAG_*.txt，找不到就建 zz_air_wings.txt。
     """
-    root = _map_pick(root)
+    root = _paths._pick(root)
     try:
         province = int(province)
     except Exception:
@@ -4411,7 +4412,7 @@ def air_wings_payload(root=None):
 
 def navy_delete_fleet(root, fi):
     """删掉第 fi 支舰队（整块）。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     try:
         fi = int(fi)
     except Exception:
@@ -4427,7 +4428,7 @@ def navy_delete_fleet(root, fi):
 
 def navy_delete_taskforce(root, fi, ti):
     """删掉某支舰队里的第 ti 个特遣队。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     try:
         fi, ti = int(fi), int(ti)
     except Exception:
@@ -4468,7 +4469,7 @@ def _navy_locate(root, fi=None, ti=None):
     返回 (目标路径, rel, start, end, raw) 或 (None, "", -1, -1, "")。
     start/end 直接来自 find_blocks（start 是 { 位置，end 是 } 位置）。
     """
-    root = _map_pick(root)
+    root = _paths._pick(root)
     _base, files = _units_files(root)
     idx = -1
     for p in (files or []):
@@ -4539,7 +4540,7 @@ def navy_add_ship(root, fi, ti, name=None, definition="destroyer", exp=0.3, tag=
     tag 给了就按国家过滤：fi 变成「该国的第几支舰队」，
     避免默认加到按文件名字母序排在最前的那个国家（通常是 ARG）。
     """
-    root = _map_pick(root)
+    root = _paths._pick(root)
     try:
         fi, ti = int(fi), int(ti)
     except Exception:
@@ -4581,7 +4582,7 @@ def navy_add_ship(root, fi, ti, name=None, definition="destroyer", exp=0.3, tag=
 
 def navy_add_tf(root, fi, name=None, location=None, tag=None):
     """往某支舰队里加一个特遣队。tag 语义同 navy_add_ship。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     try:
         fi = int(fi)
     except Exception:
@@ -4631,7 +4632,7 @@ def navy_add_tf(root, fi, name=None, location=None, tag=None):
 
 def navy_set_ship(root, fi, ti, si, fields):
     """改一艘船的 name / definition / experience。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     try:
         fi, ti, si = int(fi), int(ti), int(si)
     except Exception:
@@ -4831,7 +4832,7 @@ def template_save(name, fields, root=None):
       support    [{unit,x,y}]  整组替换
       locked     bool
     """
-    root = _map_pick(root)
+    root = _paths._pick(root)
     if not name:
         return {"ok": False, "msg": "模板名不能为空"}
     dst, a, b, err = _tpl_locate(root, name)
@@ -4882,7 +4883,7 @@ def template_save(name, fields, root=None):
 
 def template_delete(name, root=None):
     """删掉一个 division_template。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     dst, a, b, err = _tpl_locate(root, name)
     if not dst:
         return {"ok": False, "msg": err or "找不到模板"}
@@ -4936,7 +4937,7 @@ def _units_write_file(root, src_rel):
 
 def unit_delete(location, index, root=None):
     """删掉某省的第 index 支部队。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     try:
         location = int(location)
         index = int(index)
@@ -5005,7 +5006,7 @@ def unit_delete(location, index, root=None):
 
 def unit_move(location, index, new_location, root=None):
     """把某省的第 index 支部队移到另一个省。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     try:
         location = int(location)
         index = int(index)
@@ -5076,7 +5077,7 @@ def write_targets(root=None):
     """列出各类资源在叠加链里的真实写入目标，给界面做提示。
 
     回答「我在这里改，游戏到底会不会读到」。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     subs = [
         ("history/states", "州"),
         ("history/countries", "国家历史"),
@@ -6139,7 +6140,7 @@ def orphan_tags(root=None):
 
     mod 换了国家表但没跟着改 history/states 时会出现这种不一致；
     游戏里这些省会指向不存在的国家，政治图上没法给它们上色。"""
-    root = _map_pick(root)
+    root = _paths._pick(root)
     by_tag = {}
     for sid, st in (STATES.items() if isinstance(STATES, dict) else []):
         ow = (st.get("owner") or "").strip().upper()

@@ -88,8 +88,8 @@ def load_ideas(root):
         src = os.path.basename(base.rstrip("\\/")) or base
         rel = os.path.join("common", "ideas", fn)
         try:
-            raw = io.open(os.path.join(d, fn), encoding="utf-8-sig",
-                          errors="replace", newline="").read()
+            with io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace", newline="") as f:
+                raw = f.read()
         except Exception:
             continue
         text = strip_comments(raw)
@@ -142,7 +142,8 @@ def load_country_ideas(root=None, tag=""):
     if not p:
         return {"ok": False, "msg": "找不到 %s 的国家历史文件" % tag, "ideas": []}
     try:
-        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        with io.open(p, encoding="utf-8-sig", errors="replace") as f:
+            raw = f.read()
     except Exception as e:
         return {"ok": False, "msg": "读取失败：%s" % e, "ideas": []}
     text = _strip_keep_len(raw)
@@ -176,7 +177,8 @@ def country_idea_toggle(root, tag, idea, on=True):
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
 
-    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as f:
+        raw = f.read()
     text = _strip_keep_len(raw)
     non_date_blocks, dspans = collect_top_blocks(text, "add_ideas", include_date=False)
     top_blocks = [blk for blk in non_date_blocks if blk[0] == 0]
@@ -322,7 +324,8 @@ def add_idea(root, oid):
     fn = unique_editor_filename(root, "common/ideas", "zz_focus_editor_ideas.txt")
     path = os.path.join(d, fn)
     if os.path.exists(path):
-        text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read()
+        with io.open(path, encoding="utf-8-sig", errors="replace", newline="") as f:
+            text = f.read()
     else:
         text = "ideas = {\n\tcountry = {\n\t}\n}\n"
     if re.search(r'(?m)^\s*%s\s*=\s*\{' % re.escape(oid), text):
@@ -358,7 +361,8 @@ def delete_idea(root, rel, oid):
         _top, path, err = _adopt_idea_rel(root, rel)
         if not path:
             return False, err
-    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace", newline="") as f:
+        text = f.read()
     m = re.search(r'(?m)^[ \t]*%s\s*=\s*\{' % re.escape(oid), text)
     if not m:
         return False, "未找到国家精神 " + oid
@@ -379,7 +383,8 @@ def delete_idea(root, rel, oid):
         for base, d, fn in reversed(effective_layer_files("common/ideas", r)):
             fp = os.path.join(d, fn)
             try:
-                txt = io.open(fp, encoding="utf-8-sig", errors="replace", newline="").read()
+                with io.open(fp, encoding="utf-8-sig", errors="replace", newline="") as f:
+                    txt = f.read()
             except Exception:
                 continue
             if oid not in txt:

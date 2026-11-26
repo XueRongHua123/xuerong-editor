@@ -10,7 +10,6 @@
 依赖边界：
   · DECISION_SKIP / DECISION_SCALARS 两个只读白名单 → xuerong.state
   · 叠加链与写盘目标 → xuerong.core.paths；文本定位与写入 → xuerong.core.text
-  · _map_pick 来自 xuerong.model.map（它认得 output 模式的落点）
   · 写前快照 → xuerong.model.history
   · 没有横切钩子，也不需要 bind()
 
@@ -26,7 +25,6 @@ from xuerong.core.paths import (_layer_files, _replace_owner, is_under_game,
                                 mod_layers, unique_editor_filename, write_base)
 from xuerong.core.text import _atomic_write, _bom_for, _first, _strip_keep_len, brace_match
 from xuerong.model.history import snapshot
-from xuerong.model.map import _map_pick
 from xuerong.state import DECISION_SCALARS, DECISION_SKIP
 
 
@@ -60,7 +58,8 @@ def load_decisions(root=None):
     seen_cat = set()
     for p in (files or []):
         try:
-            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as f:
+                raw = f.read()
         except Exception:
             continue
         text = _strip_keep_len(raw)
@@ -168,7 +167,8 @@ def _dec_find(root, did, info=None):
             _sh.copyfile(src, p)
         except Exception as e:
             return None, -1, -1, None, "复制来源失败：%s" % e
-    raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    with io.open(p, encoding="utf-8-sig", errors="replace") as f:
+        raw = f.read()
     text = _strip_keep_len(raw)
     a = b = -1
     for m in re.finditer(r'(?m)^([A-Za-z][A-Za-z0-9_\-\.]*)[ \t]*=\s*\{', text):
@@ -220,7 +220,8 @@ def _dec_category_register(root, category, icon="GFX_decision_category_generic")
             '\t}\n'
             '}\n') % (category, icon)
     if os.path.exists(p):
-        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        with io.open(p, encoding="utf-8-sig", errors="replace") as f:
+            raw = f.read()
         if re.search(r'(?m)^[ \t]*' + re.escape(category) + r'[ \t]*=\s*\{', raw):
             return True, "类别已注册"
         new_text = raw.rstrip() + "\n\n" + body
@@ -322,7 +323,8 @@ def decision_add(root, did, category, icon="GFX_decision_category_generic", cost
     block_txt = "\n".join(block) + "\n"
 
     if os.path.exists(p):
-        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        with io.open(p, encoding="utf-8-sig", errors="replace") as f:
+            raw = f.read()
     else:
         raw = ""
 
@@ -370,7 +372,8 @@ def decision_set(root, did, fields):
     p, a, b, it, err = _dec_find(root, did)
     if not p:
         return {"ok": False, "msg": err}
-    raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    with io.open(p, encoding="utf-8-sig", errors="replace") as f:
+        raw = f.read()
     seg = raw[a:b]
     new_seg = seg
     changed = []
@@ -405,7 +408,8 @@ def decision_delete(root, did):
     p, a, b, it, err = _dec_find(root, did)
     if not p:
         return {"ok": False, "msg": err}
-    raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    with io.open(p, encoding="utf-8-sig", errors="replace") as f:
+        raw = f.read()
     st = a
     while st > 0 and raw[st - 1] in " \t":
         st -= 1

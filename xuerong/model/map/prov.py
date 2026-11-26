@@ -38,7 +38,8 @@ def _save_point_undo(bmp, changes):
 def _load_point_undo(fn):
     """读回点级备份 → [(idx, (r,g,b)), ...]"""
     import struct
-    raw = io.open(fn, "rb").read()
+    with io.open(fn, "rb") as _f:
+        raw = _f.read()
     if len(raw) < 4:
         return []
     n = struct.unpack("<I", raw[:4])[0]
@@ -222,7 +223,8 @@ def map_repair_preview(root=None):
     if not os.path.exists(idx_path):
         return {"ok": False, "msg": "请先构建图层"}
     try:
-        idx = json.loads(io.open(idx_path, encoding="utf-8").read())
+        with io.open(idx_path, encoding="utf-8") as _f:
+            idx = json.loads(_f.read())
     except Exception as e:
         return {"ok": False, "msg": "读取索引失败：%s" % e}
     have = set()
@@ -238,16 +240,17 @@ def map_repair_preview(root=None):
     ghost = []
     total = 0
     try:
-        for line in io.open(csvp, encoding="utf-8", errors="replace"):
-            parts = line.strip().split(";")
-            if len(parts) < 4 or not parts[0].isdigit():
-                continue
-            total += 1
-            pid = int(parts[0])
-            if pid == 0:
-                continue
-            if pid not in have:
-                ghost.append(pid)
+        with io.open(csvp, encoding="utf-8", errors="replace") as _f:
+            for line in _f:
+                parts = line.strip().split(";")
+                if len(parts) < 4 or not parts[0].isdigit():
+                    continue
+                total += 1
+                pid = int(parts[0])
+                if pid == 0:
+                    continue
+                if pid not in have:
+                    ghost.append(pid)
     except Exception as e:
         return {"ok": False, "msg": "读 csv 失败：%s" % e}
     return {"ok": True, "csv": csvp, "csv_from": prov, "csv_rows": total,
@@ -267,7 +270,8 @@ def map_repair_ghost(root=None):
     if not ghost:
         return {"ok": True, "removed": 0, "msg": "没有幽灵省，不需要修"}
     try:
-        raw = io.open(csvp, "rb").read()
+        with io.open(csvp, "rb") as _f:
+            raw = _f.read()
         has_bom = raw[:3] == bytes((0xEF, 0xBB, 0xBF))
         text = raw.decode("utf-8-sig", errors="replace")
     except Exception as e:
@@ -309,7 +313,8 @@ def map_analysis(root=None, limit=60, min_px=800, only_land=True):
     if not os.path.exists(idx_path):
         return {"ok": False, "msg": "请先构建图层（缺少 prov_index.json）"}
     try:
-        idx = json.loads(io.open(idx_path, encoding="utf-8").read())
+        with io.open(idx_path, encoding="utf-8") as _f:
+            idx = json.loads(_f.read())
     except Exception as e:
         return {"ok": False, "msg": "读取索引失败：%s" % e}
 
@@ -487,7 +492,8 @@ def map_merge_preview(src, dst, root=None):
         _d, _key, _b = _map_dir(root)
         _idx = os.path.join(_d or "", "prov_index.json")
         if os.path.exists(_idx):
-            _j = json.loads(io.open(_idx, encoding="utf-8").read())
+            with io.open(_idx, encoding="utf-8") as _f:
+                _j = json.loads(_f.read())
             _n = int((_j.get(str(src)) or {}).get("px") or 0)
     except Exception:
         _n = 0
@@ -787,7 +793,8 @@ def map_integrity(root=None, limit=200):
             break
     if rp:
         try:
-            text = strip_comments(io.open(rp, encoding="utf-8", errors="replace").read())
+            with io.open(rp, encoding="utf-8", errors="replace") as _f:
+                text = strip_comments(_f.read())
             for m in re.finditer(r'railway\s*=\s*\{([^{}]*)\}', text):
                 body = m.group(1)
                 pm = re.search(r'provinces\s*=\s*\{([^}]*)\}', body)
@@ -809,7 +816,8 @@ def map_integrity(root=None, limit=200):
     try:
         _mp = os.path.join(dirp, "meta.json")
         if os.path.exists(_mp):
-            _m = json.loads(io.open(_mp, encoding="utf-8").read())
+            with io.open(_mp, encoding="utf-8") as _f:
+                _m = json.loads(_f.read())
             _c = _m.get("consistency") or {}
             if _c.get("ghost"):
                 add("warn", "definition.csv 里有 %d 个省在地图上没有像素" % _c["ghost"],

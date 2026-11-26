@@ -36,7 +36,8 @@ def _building_caps(root=None):
     for _ab, d, fn in files:
         fp = os.path.join(d, fn)
         try:
-            text = strip_comments(io.open(fp, encoding="utf-8-sig", errors="replace").read())
+            with io.open(fp, encoding="utf-8-sig", errors="replace") as _f:
+                text = strip_comments(_f.read())
         except Exception:
             continue
         bm = re.search(r'(?m)^\s*buildings\s*=\s*\{', text)

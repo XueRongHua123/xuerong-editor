@@ -56,13 +56,14 @@ def _def_rgb_kind():
         return state.map_var("_DEF_RGB_CACHE")["map"]
     m = {}
     try:
-        for ln in io.open(csvp, encoding="utf-8", errors="replace"):
-            p = ln.strip().split(";")
-            if len(p) >= 5:
-                try:
-                    m[(int(p[1]), int(p[2]), int(p[3]))] = p[4].strip().lower()
-                except Exception:
-                    pass
+        with io.open(csvp, encoding="utf-8", errors="replace") as _f:
+            for ln in _f:
+                p = ln.strip().split(";")
+                if len(p) >= 5:
+                    try:
+                        m[(int(p[1]), int(p[2]), int(p[3]))] = p[4].strip().lower()
+                    except Exception:
+                        pass
     except Exception:
         pass
     state.map_var("_DEF_RGB_CACHE")["key"] = key
@@ -174,37 +175,33 @@ def river_paint(points, kind="main", brush=1, erase=False, new_stroke=False, roo
             state.map_var("_RIVER_UNDO").pop(0)
     undo = state.map_var("_RIVER_UNDO")[-1]
 
+    from contextlib import nullcontext
     rgb2kind = _def_rgb_kind() if erase else {}
-    pb = open(pbmp, "rb") if erase else None
     pinfo = bmp_info(pbmp) if erase else None
     n = 0
-    try:
-        with open(rbmp, "r+b") as f:
-            for (x, y) in hit:
-                fy = y if top_down else (H - 1 - y)
-                f.seek(off0 + fy * rowb + x)
-                old_b = f.read(1)
-                old = old_b[0] if old_b else 0
-                if erase:
-                    new = state.map_var("RIVER_LAND")
-                    if rgb2kind and pb and pinfo:
-                        pfy = y if pinfo.get("top_down") else (pinfo["h"] - 1 - y)
-                        pb.seek(pinfo["offset"] + pfy * pinfo["row"] + x * 3)
-                        b3 = pb.read(3)
-                        if len(b3) == 3:
-                            new = state.map_var("RIVER_LAND") if rgb2kind.get((b3[2], b3[1], b3[0])) == "land" else state.map_var("RIVER_SEA")
-                else:
-                    new = new_idx
-                if old == new:
-                    continue
-                if (x, y) not in undo["px"]:
-                    undo["px"][(x, y)] = old
-                f.seek(off0 + fy * rowb + x)
-                f.write(bytes((new,)))
-                n += 1
-    finally:
-        if pb:
-            pb.close()
+    with (open(pbmp, "rb") if erase else nullcontext()) as pb, open(rbmp, "r+b") as f:
+        for (x, y) in hit:
+            fy = y if top_down else (H - 1 - y)
+            f.seek(off0 + fy * rowb + x)
+            old_b = f.read(1)
+            old = old_b[0] if old_b else 0
+            if erase:
+                new = state.map_var("RIVER_LAND")
+                if rgb2kind and pb and pinfo:
+                    pfy = y if pinfo.get("top_down") else (pinfo["h"] - 1 - y)
+                    pb.seek(pinfo["offset"] + pfy * pinfo["row"] + x * 3)
+                    b3 = pb.read(3)
+                    if len(b3) == 3:
+                        new = state.map_var("RIVER_LAND") if rgb2kind.get((b3[2], b3[1], b3[0])) == "land" else state.map_var("RIVER_SEA")
+            else:
+                new = new_idx
+            if old == new:
+                continue
+            if (x, y) not in undo["px"]:
+                undo["px"][(x, y)] = old
+            f.seek(off0 + fy * rowb + x)
+            f.write(bytes((new,)))
+            n += 1
 
     if n:
         _invalidate_river_preview_cache()
@@ -444,8 +441,9 @@ def river_preview(root=None):
     sig = "%s|%s|%s" % (rbmp, mt, sz)
     try:
         if os.path.exists(outc) and os.path.exists(stamp):
-            if io.open(stamp, encoding="utf-8").read().strip() == sig:
-                return outc
+            with io.open(stamp, encoding="utf-8") as _f:
+                if _f.read().strip() == sig:
+                    return outc
     except Exception:
         pass
     try:
@@ -458,7 +456,8 @@ def river_preview(root=None):
         out = _indices_to_rgba_image(idx.tobytes(), W, H, _RIVER_RGBA_MAP)
         os.makedirs(state.map_var("MAP_CACHE_DIR"), exist_ok=True)
         out.save(outc)
-        io.open(stamp, "w", encoding="utf-8", newline="\n").write(sig)
+        with io.open(stamp, "w", encoding="utf-8", newline="\n") as _f:
+            _f.write(sig)
         return outc
     except Exception:
         return None

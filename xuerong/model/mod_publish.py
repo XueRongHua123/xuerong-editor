@@ -108,7 +108,8 @@ def _read_descriptor_full(mod_root):
     if not info["exists"]:
         return info
     try:
-        text = io.open(dp, encoding="utf-8-sig", errors="replace").read()
+        with io.open(dp, encoding="utf-8-sig", errors="replace") as _f:
+            text = _f.read()
     except Exception:
         return info
 
@@ -293,7 +294,8 @@ def _scan_mod_tree(mod_root, picture_rel="thumbnail.png"):
             bom_action = "none"
             if ext in _TEXT_EXTS:
                 try:
-                    raw = io.open(full, "rb").read()
+                    with io.open(full, "rb") as _f:
+                        raw = _f.read()
                 except Exception:
                     raw = b""
                 has_bom = raw.startswith(_UTF8_BOM)
@@ -370,7 +372,8 @@ def _check_launcher_conflict(folder_id, target_dir, docs_dir=""):
         return {"exists": False, "conflict": False, "mod_file": mod_file, "existing_path": ""}
     existing_path = ""
     try:
-        txt = io.open(mod_file, encoding="utf-8-sig", errors="replace").read()
+        with io.open(mod_file, encoding="utf-8-sig", errors="replace") as _f:
+            txt = _f.read()
         m = re.search(r'(?m)^\s*path\s*=\s*"([^"]+)"', txt)
         if m:
             existing_path = _resolve_mod_path(m.group(1), dd) or m.group(1)
@@ -533,7 +536,8 @@ def _verify_exported_tree(export_dir, picture_rel="thumbnail.png"):
     if not os.path.isfile(desc_fp):
         problems.append("缺少 descriptor.mod")
     else:
-        raw_d = io.open(desc_fp, "rb").read()
+        with io.open(desc_fp, "rb") as _f:
+            raw_d = _f.read()
         if raw_d.startswith(_UTF8_BOM):
             problems.append("descriptor.mod 不应带 UTF-8 BOM")
         txt_d = raw_d.decode("utf-8", errors="replace")
@@ -560,7 +564,8 @@ def _verify_exported_tree(export_dir, picture_rel="thumbnail.png"):
             ext = os.path.splitext(low)[1]
             if ext not in _TEXT_EXTS:
                 continue
-            raw = io.open(fp, "rb").read()
+            with io.open(fp, "rb") as _f:
+                raw = _f.read()
             has_bom = raw.startswith(_UTF8_BOM)
             if _is_loc_yml(rel):
                 yml_checked += 1
@@ -632,12 +637,14 @@ def export_publish(mod_root="", layers=None, out_dir="", folder_id="", docs_dir=
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             act = item["bom_action"]
             if act == "add_bom":
-                raw = io.open(src, "rb").read()
+                with io.open(src, "rb") as _f:
+                    raw = _f.read()
                 if not raw.startswith(_UTF8_BOM):
                     raw = _UTF8_BOM + raw
                 _atomic_write(dst, raw)
             elif act == "strip_bom":
-                raw = io.open(src, "rb").read()
+                with io.open(src, "rb") as _f:
+                    raw = _f.read()
                 if raw.startswith(_UTF8_BOM):
                     raw = raw[3:]
                 _atomic_write(dst, raw)

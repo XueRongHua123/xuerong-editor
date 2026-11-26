@@ -115,8 +115,8 @@ def event_graph(ns="", root=None):
                 if not fn.endswith(".txt"):
                     continue
                 try:
-                    text = strip_comments(io.open(os.path.join(_dp, fn), encoding="utf-8-sig",
-                                                  errors="replace").read())
+                    with io.open(os.path.join(_dp, fn), encoding="utf-8-sig", errors="replace") as f:
+                        text = strip_comments(f.read())
                 except Exception:
                     continue
                 for eid, body, kind in _event_block(text, "event"):
@@ -246,7 +246,8 @@ def event_space_delete(ns, root=None):
                 continue
             p = os.path.join(_dp, fn)
             try:
-                raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+                with io.open(p, encoding="utf-8-sig", errors="replace") as f:
+                    raw = f.read()
             except Exception:
                 continue
             text = strip_comments(raw)
@@ -320,7 +321,8 @@ def event_detail(eid, root=None):
                 continue
             p = os.path.join(_dp, fn)
             try:
-                text = strip_comments(io.open(p, encoding="utf-8-sig", errors="replace").read())
+                with io.open(p, encoding="utf-8-sig", errors="replace") as f:
+                    text = strip_comments(f.read())
             except Exception:
                 continue
             for m in re.finditer(r'(?m)^\s*[a-z_]*_event\s*=\s*\{', text):
@@ -379,7 +381,8 @@ def event_edit(eid, title=None, desc=None, options=None, root=None,
                 continue
             p = os.path.join(_dp, fn)
             try:
-                raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+                with io.open(p, encoding="utf-8-sig", errors="replace") as f:
+                    raw = f.read()
             except Exception:
                 continue
             text = strip_comments(raw)
@@ -521,7 +524,8 @@ def load_events(root):
     for ab, d, fn in effective_layer_files("events", root):
         name = os.path.basename(ab.rstrip("\\/")) or ab
         rel = os.path.join("events", fn)
-        text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace").read())
+        with io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace") as f:
+            text = strip_comments(f.read())
         all_ns = re.findall(r'(?m)^\s*add_namespace\s*=\s*(\w+)', text)
         def_ns = all_ns[0] if all_ns else ""
         for k, v, b in top_items(text):
@@ -666,7 +670,11 @@ def add_event(root, eid):
     os.makedirs(d, exist_ok=True)
     fn = unique_editor_filename(root, "events", "zz_focus_editor_events.txt")
     path = os.path.join(d, fn)
-    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read() if os.path.exists(path) else ""
+    if os.path.exists(path):
+        with io.open(path, encoding="utf-8-sig", errors="replace", newline="") as f:
+            text = f.read()
+    else:
+        text = ""
     if re.search(r'(?m)^\s*id\s*=\s*"?%s"?' % re.escape(eid), text):
         return False, "事件已存在"
     if not re.search(r'(?m)^\s*add_namespace\s*=\s*' + re.escape(ns) + r'\b', text):
@@ -728,7 +736,8 @@ def delete_event(root, rel, eid):
         for ab, d, fn in reversed(effective_layer_files("events", r)):
             fp = os.path.join(d, fn)
             try:
-                raw = io.open(fp, encoding="utf-8-sig", errors="replace", newline="").read()
+                with io.open(fp, encoding="utf-8-sig", errors="replace", newline="") as f:
+                    raw = f.read()
             except Exception:
                 continue
             if eid not in raw:

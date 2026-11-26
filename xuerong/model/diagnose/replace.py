@@ -141,7 +141,8 @@ def _diag_replace_refs(root, own_only=False):
             # 原版文件加 vanilla/ 前缀，避免和同名 mod 文件混在一起
             rel = base if layer == top else ("vanilla/" + base)
             try:
-                txt = io.open(p, encoding="utf-8-sig", errors="replace").read()
+                with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                    txt = _fh.read()
             except Exception:
                 continue
             for sub, label, kws in _REF_KEYWORDS:
@@ -311,8 +312,9 @@ def _diag_replace_stub(root, own_only=False):
                 blob = ""
                 for f in files:
                     try:
-                        blob += io.open(os.path.join(d, f), encoding="utf-8-sig",
-                                        errors="replace").read()
+                        with io.open(os.path.join(d, f), encoding="utf-8-sig",
+                                     errors="replace") as _fh:
+                            blob += _fh.read()
                     except Exception:
                         pass
                 if "default = yes" not in blob:
@@ -327,8 +329,9 @@ def _diag_replace_stub(root, own_only=False):
             if sub == "common/ai_strategy":
                 for f in files:
                     try:
-                        raw = io.open(os.path.join(d, f), encoding="utf-8-sig",
-                                      errors="replace").read()
+                        with io.open(os.path.join(d, f), encoding="utf-8-sig",
+                                     errors="replace") as _fh:
+                            raw = _fh.read()
                     except Exception:
                         continue
                     if re.match(r'\s*ai_strategy\s*=\s*\{\s*\}', raw):

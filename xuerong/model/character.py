@@ -15,7 +15,7 @@
 依赖边界：
   · CHAR_TYPES / PORTRAIT_W / PORTRAIT_H / PORTRAIT_SMALL 四个只读常量 → xuerong.state
   · 叠加链与写盘目标 → xuerong.core.paths；文本定位与写入 → xuerong.core.text
-  · _map_pick 来自 xuerong.model.map；写前快照 → xuerong.model.history
+  · 写前快照 → xuerong.model.history
   · 唯一横切口 ensure_file_writable（要判只读/接管）由门面 bind() 回注
 """
 import io
@@ -29,7 +29,6 @@ from xuerong.core.text import (_atomic_write, _bom_for, _first, _strip_keep_len,
                                brace_match, date_block_spans, find_blocks,
                                insert_before_date_or_end)
 from xuerong.model.history import snapshot
-from xuerong.model.map import _map_pick
 from xuerong.state import CHAR_TYPES, PORTRAIT_H, PORTRAIT_SMALL, PORTRAIT_W
 
 # ---------------------------------------------------------------- 门面回注
@@ -122,7 +121,8 @@ def portrait_import(root, src_path, tag, cid=None, overwrite=False, small=False)
              '\t\ttexturefile = "%s"\n'
              '\t}\n') % (sprite, rel_tex)
     if os.path.exists(gfxp):
-        raw = io.open(gfxp, encoding="utf-8-sig", errors="replace").read()
+        with io.open(gfxp, encoding="utf-8-sig", errors="replace") as f:
+            raw = f.read()
     else:
         raw = "spriteTypes = {\n}\n"
     m = re.search(r'spriteTypes\s*=\s*\{', raw)
@@ -172,7 +172,8 @@ def load_characters(root=None):
     items, seen = [], set()
     for p in (files or []):
         try:
-            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as f:
+                raw = f.read()
         except Exception:
             continue
         text = _strip_keep_len(raw)
@@ -370,7 +371,8 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
     block = "\n".join(body) + "\n"
 
     if os.path.exists(p):
-        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        with io.open(p, encoding="utf-8-sig", errors="replace") as f:
+            raw = f.read()
     else:
         raw = "characters = {\n}\n"
     text = _strip_keep_len(raw)
@@ -418,7 +420,8 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
                                                   os.path.basename(hist))
                 hp = _hp or hist
                 if hp and not is_under_game(hp):
-                    hraw = io.open(hp, encoding="utf-8-sig", errors="replace").read()
+                    with io.open(hp, encoding="utf-8-sig", errors="replace") as f:
+                        hraw = f.read()
                     htext = _strip_keep_len(hraw)
                     if not re.search(r'(?m)^\s*recruit_character\s*=\s*' + re.escape(cid) + r'\b', htext):
                         dspans = date_block_spans(htext)
@@ -473,7 +476,8 @@ def character_set(root, cid, fields):
             _sh.copyfile(src, p)
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
-    raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    with io.open(p, encoding="utf-8-sig", errors="replace") as f:
+        raw = f.read()
     text = _strip_keep_len(raw)
     # 重新定位这个人物
     a = b = -1
@@ -575,7 +579,8 @@ def character_delete(root, cid):
             _sh.copyfile(src, p)
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
-    raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    with io.open(p, encoding="utf-8-sig", errors="replace") as f:
+        raw = f.read()
     text = _strip_keep_len(raw)
     a = b = -1
     for oa, ob, oBody in find_blocks(text, "characters"):
@@ -620,7 +625,8 @@ def character_delete(root, cid):
                     continue
                 hp = os.path.join(hd, fn)
                 try:
-                    ht = io.open(hp, encoding="utf-8-sig", errors="replace").read()
+                    with io.open(hp, encoding="utf-8-sig", errors="replace") as f:
+                        ht = f.read()
                 except Exception:
                     continue
                 if not re.search(r'(?m)^\s*recruit_character\s*=\s*' + re.escape(cid) + r'\b', ht):
@@ -629,7 +635,8 @@ def character_delete(root, cid):
                 target = _hp2 or hp
                 if is_under_game(target):
                     continue
-                ht2 = io.open(target, encoding="utf-8-sig", errors="replace").read()
+                with io.open(target, encoding="utf-8-sig", errors="replace") as f:
+                    ht2 = f.read()
                 pat = re.compile(r'(?m)^[ \t]*recruit_character[ \t]*=[ \t]*' + re.escape(cid) + r'[ \t]*\r?\n')
                 nh = pat.sub("", ht2)
                 if nh != ht2:

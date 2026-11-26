@@ -29,7 +29,9 @@ def _read_yml_pairs(path, unescape=False):
     if not os.path.exists(path):
         return existing
     try:
-        for ln in io.open(path, encoding="utf-8-sig", errors="replace").read().splitlines():
+        with io.open(path, encoding="utf-8-sig", errors="replace") as f:
+            raw = f.read()
+        for ln in raw.splitlines():
             m = _YML_LINE_RE.match(ln)
             if m:
                 val = m.group(2)
@@ -133,7 +135,8 @@ def _scan_mod_loc_files(top, lang_filter=""):
             if lang_filter and flang and flang != lang_filter:
                 continue
             try:
-                lines = io.open(fp, encoding="utf-8-sig", errors="replace").read().splitlines()
+                with io.open(fp, encoding="utf-8-sig", errors="replace") as f:
+                    lines = f.read().splitlines()
             except Exception:
                 continue
             for ln in lines:

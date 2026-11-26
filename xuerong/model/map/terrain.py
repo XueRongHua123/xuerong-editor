@@ -22,8 +22,8 @@ def _terrain_tex_map(root):
             continue
         for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
             try:
-                text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig",
-                                              errors="replace").read())
+                with io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace") as _f:
+                    text = strip_comments(_f.read())
             except Exception:
                 continue
             for m in re.finditer(r'(?m)^\s*([A-Za-z_][\w]*)\s*=\s*\{', text):
@@ -107,7 +107,8 @@ def prov_terrain_set(pid, terrain, root=None, adopt=False):
     new_idx = t2i[terrain]
 
     # 1) 改 definition.csv
-    raw = io.open(csvp, encoding="utf-8", errors="replace").read()
+    with io.open(csvp, encoding="utf-8", errors="replace") as _f:
+        raw = _f.read()
     lines = raw.splitlines(True)
     old_type = None
     hit = False
@@ -197,7 +198,8 @@ def _terrain_apply(csvp, tbmp, ids, w, h, pid_set, new_idx, renumber_from=None):
     from PIL import Image
     Image.MAX_IMAGE_PIXELS = None
 
-    raw = io.open(csvp, encoding="utf-8", errors="replace").read()
+    with io.open(csvp, encoding="utf-8", errors="replace") as _f:
+        raw = _f.read()
     lines = raw.splitlines(True)
     old_types = {}
     changed_pids = set()
@@ -262,7 +264,8 @@ def prov_terrain_batch(pids, terrain, root=None, adopt=False):
         return err if isinstance(err, dict) else {"ok": False, "msg": err}
 
     # 找出真正要改的（已经是指定类型的跳过）
-    raw = io.open(csvp, encoding="utf-8", errors="replace").read()
+    with io.open(csvp, encoding="utf-8", errors="replace") as _f:
+        raw = _f.read()
     lines = raw.splitlines(True)
     todo = set()
     old_types = {}
@@ -293,10 +296,11 @@ def prov_terrain_by_type(from_type, to_type, root=None, adopt=False):
     if not csvp:
         return {"ok": False, "msg": "找不到 definition.csv"}
     pids = []
-    for ln in io.open(csvp, encoding="utf-8", errors="replace"):
-        p = ln.rstrip("\r\n").split(";")
-        if len(p) >= 8 and p[0].isdigit() and p[6] == from_type:
-            pids.append(int(p[0]))
+    with io.open(csvp, encoding="utf-8", errors="replace") as _f:
+        for ln in _f:
+            p = ln.rstrip("\r\n").split(";")
+            if len(p) >= 8 and p[0].isdigit() and p[6] == from_type:
+                pids.append(int(p[0]))
     if not pids:
         return {"ok": False, "msg": "没有地形为 %s 的省" % from_type}
     r = prov_terrain_batch(pids, to_type, root, adopt=adopt)
@@ -425,8 +429,9 @@ def height_preview(root=None):
     sig = "%s|%s|%s" % (hbmp, mt, sz)
     try:
         if os.path.exists(outc) and os.path.exists(stamp):
-            if io.open(stamp, encoding="utf-8").read().strip() == sig:
-                return outc
+            with io.open(stamp, encoding="utf-8") as _f:
+                if _f.read().strip() == sig:
+                    return outc
     except Exception:
         pass
     try:
@@ -458,7 +463,8 @@ def height_preview(root=None):
             out = g.convert("RGBA")
         os.makedirs(state.map_var("MAP_CACHE_DIR"), exist_ok=True)
         out.save(outc)
-        io.open(stamp, "w", encoding="utf-8", newline="\n").write(sig)
+        with io.open(stamp, "w", encoding="utf-8", newline="\n") as _f:
+            _f.write(sig)
         return outc
     except Exception:
         return None

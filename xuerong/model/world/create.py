@@ -60,14 +60,15 @@ def _centroids_from_map(map_dir, notes=None):
                   % (e.__class__.__name__, e))
         return cen
     rgb2pid = {}
-    for line in io.open(csvp, encoding="utf-8", errors="replace"):
-        p = line.strip().split(";")
-        if len(p) < 4:
-            continue
-        try:
-            rgb2pid[(int(p[1]), int(p[2]), int(p[3]))] = int(p[0])
-        except Exception:
-            continue
+    with io.open(csvp, encoding="utf-8", errors="replace") as _f:
+        for line in _f:
+            p = line.strip().split(";")
+            if len(p) < 4:
+                continue
+            try:
+                rgb2pid[(int(p[1]), int(p[2]), int(p[3]))] = int(p[0])
+            except Exception:
+                continue
     try:
         im = Image.open(provp).convert("RGB")
     except Exception as e:
@@ -173,15 +174,16 @@ def world_create(out_dir, source="procedural", width=1024, height=512,
     land = []
     csvp = os.path.join(out_dir, "map", "definition.csv")
     try:
-        for line in io.open(csvp, encoding="utf-8", errors="replace"):
-            parts = line.strip().split(";")
-            if len(parts) >= 5 and parts[4].strip() == "land":
-                try:
-                    pid = int(parts[0])
-                except Exception:
-                    continue
-                if pid > 0:
-                    land.append(pid)
+        with io.open(csvp, encoding="utf-8", errors="replace") as _f:
+            for line in _f:
+                parts = line.strip().split(";")
+                if len(parts) >= 5 and parts[4].strip() == "land":
+                    try:
+                        pid = int(parts[0])
+                    except Exception:
+                        continue
+                    if pid > 0:
+                        land.append(pid)
     except Exception as e:
         steps.append({"step": "读 definition.csv", "ok": False, "msg": str(e)})
         return done()
@@ -398,7 +400,8 @@ def _write_placeholder_thumbnail(mod_root):
                      fill=(196, 158, 86))
         img.save(out, format="PNG")
     except Exception:
-        io.open(out, "wb").write(_FALLBACK_PNG_1X1)
+        with io.open(out, "wb") as _f:
+            _f.write(_FALLBACK_PNG_1X1)
     return out
 
 
@@ -454,11 +457,13 @@ def create_mod(base, mod_id, name, version="0.1.0", game_version="",
                 'picture="thumbnail.png"']
         if dep_name:
             desc += ['dependencies={', '\t"%s"' % dep_name, '}']
-        io.open(os.path.join(root, "descriptor.mod"), "w", encoding="utf-8", newline="").write("\r\n".join(desc) + "\r\n")
+        with io.open(os.path.join(root, "descriptor.mod"), "w", encoding="utf-8", newline="") as _f:
+            _f.write("\r\n".join(desc) + "\r\n")
         # 启动器 .mod 文件
         if os.path.abspath(base) == os.path.abspath(mod_home()):
             launcher = "\r\n".join(desc + ['path="%s"' % root.replace("\\", "/")]) + "\r\n"
-            io.open(os.path.join(base, mod_id + ".mod"), "w", encoding="utf-8", newline="").write(launcher)
+            with io.open(os.path.join(base, mod_id + ".mod"), "w", encoding="utf-8", newline="") as _f:
+                _f.write(launcher)
         if create_tree:
             nf = os.path.join(root, "common", "national_focus")
             os.makedirs(nf)
@@ -483,13 +488,14 @@ def create_mod(base, mod_id, name, version="0.1.0", game_version="",
 	}
 }
 """ % (tree_id, tag, tree_id)
-            io.open(os.path.join(nf, "zz_%s_focus.txt" % mod_id), "w", encoding="utf-8", newline="").write(tree)
+            with io.open(os.path.join(nf, "zz_%s_focus.txt" % mod_id), "w", encoding="utf-8", newline="") as _f:
+                _f.write(tree)
             for lang, header, text in (("simp_chinese", "l_simp_chinese", "新国策"), ("english", "l_english", "New Focus")):
                 d = os.path.join(root, "localisation", lang, "replace")
                 os.makedirs(d)
-                io.open(os.path.join(d, "zz_%s_l_%s.yml" % (mod_id, lang)), "w",
-                        encoding="utf-8", newline="").write(
-                    "\ufeff%s:\r\n %s_root:0 \"%s\"\r\n" % (header, tree_id, text))
+                with io.open(os.path.join(d, "zz_%s_l_%s.yml" % (mod_id, lang)), "w",
+                             encoding="utf-8", newline="") as _f:
+                    _f.write("\ufeff%s:\r\n %s_root:0 \"%s\"\r\n" % (header, tree_id, text))
     except Exception as e:
         return False, "创建失败: %s" % e
     return True, "已创建模组: " + root

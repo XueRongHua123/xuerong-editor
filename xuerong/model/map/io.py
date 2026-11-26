@@ -259,7 +259,8 @@ def map_meta(root=None):
     meta = {}
     if built:
         try:
-            meta = json.loads(io.open(os.path.join(dirp, "meta.json"), encoding="utf-8").read())
+            with io.open(os.path.join(dirp, "meta.json"), encoding="utf-8") as _f:
+                meta = json.loads(_f.read())
         except Exception:
             meta = {}
     # 缓存过期：同一来源以前构建过，但缓存键变了（数据或版本改动）
@@ -268,7 +269,8 @@ def map_meta(root=None):
     lastp = os.path.join(state.map_var("MAP_CACHE_DIR"), "_last.json")
     if os.path.exists(lastp):
         try:
-            prev = json.loads(io.open(lastp, encoding="utf-8").read())
+            with io.open(lastp, encoding="utf-8") as _f:
+                prev = json.loads(_f.read())
         except Exception:
             prev = {}
     if not built and prev.get("root") and os.path.abspath(prev.get("root")) == os.path.abspath(base or ""):

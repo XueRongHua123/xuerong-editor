@@ -47,13 +47,14 @@ def _coastal_provinces():
         return _COASTAL_CACHE["set"]
     out = set()
     try:
-        for ln in io.open(p, encoding="utf-8", errors="replace"):
-            f = ln.strip().split(";")
-            if len(f) >= 6 and f[5].strip().lower() == "true":
-                try:
-                    out.add(int(f[0]))
-                except Exception:
-                    pass
+        with io.open(p, encoding="utf-8", errors="replace") as _f:
+            for ln in _f:
+                f = ln.strip().split(";")
+                if len(f) >= 6 and f[5].strip().lower() == "true":
+                    try:
+                        out.add(int(f[0]))
+                    except Exception:
+                        pass
     except Exception:
         pass
     _COASTAL_CACHE["key"] = stamp

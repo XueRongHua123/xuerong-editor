@@ -10,13 +10,14 @@
   · TREES / TREE_ORDER / SHARED_FOCUSES / LOC / CHANGED / ROOTS → xuerong.state 访问器
   · 叠加链 _layer_dirs → core.paths；脚本改写工具 → core.text
   · _politics_write 在 model/country.py（它本质是「拿到可写的国家历史文件」，politics 域也用）
-  · 写前备份 → model.history；_map_pick → model.map
+  · 写前备份 → model.history；选层 _pick → core.paths
   · 两个横切口由门面 bind()：reload_data（35 处调用，不可能搬）、lp（加载进度上报）
 """
 import io
 import os
 import re
 
+import xuerong.core.paths
 from xuerong import state
 from xuerong.core.paths import _layer_dirs, effective_layer_files
 from xuerong.core.text import (_atomic_write, _bom_for, _first, _strip_keep_len, brace_match,
@@ -24,7 +25,6 @@ from xuerong.core.text import (_atomic_write, _bom_for, _first, _strip_keep_len,
                                set_scalar, strip_comments, top_items)
 from xuerong.model.country import (_country_hist_file, _country_hist_write_base, _politics_write)
 from xuerong.model.history import backup, snapshot
-from xuerong.model.map import _map_pick
 
 # ---------------------------------------------------------------- 门面回注
 _INJ = {}
@@ -150,7 +150,7 @@ def load_focus(root):
         for _b, _d, _f in effective_layer_files("common/national_focus", root)
     ]
     _n_all = max(1, len(_nf_pairs))
-    for _i, (name, nf, fn) in enumerate(_nf_pairs):
+    for _i, (_layer_name, nf, fn) in enumerate(_nf_pairs):
         if _i % 4 == 0:
             _lp("解析国策树", "%d / %d 个文件" % (_i + 1, _n_all), 4 + int(_i * 54.0 / _n_all))
         # 文件真正属于哪一层：nf 是 <层>/common/national_focus，去掉两级就是层根。
@@ -163,7 +163,7 @@ def load_focus(root):
         text = strip_comments(_read_focus_text(os.path.join(nf, fn))[0])
         rel = os.path.join("common", "national_focus", fn)
         for start, end, body in find_blocks(text, "shared_focus"):
-            node = parse_focus_like(body, rel, name)
+            node = parse_focus_like(body, rel, _layer_name)
             if node:
                 node["shared"] = True
                 node["root"] = _lay
@@ -187,14 +187,14 @@ def load_focus(root):
                 elif k == "shared_focus" and not b:
                     shared_refs.append(v)
                 elif k == "focus" and b:
-                    node = parse_focus_like(v, os.path.join("common","national_focus",fn), name)
+                    node = parse_focus_like(v, os.path.join("common","national_focus",fn), _layer_name)
                     if node:
                         node["root"] = _lay
                         focuses.append(node)
             if tid:
                 if tid in state.trees():
                     state.tree_order().remove(tid)
-                state.trees()[tid] = {"id": tid, "file": os.path.join("common","national_focus",fn), "source": name, "root": _lay,
+                state.trees()[tid] = {"id": tid, "file": os.path.join("common","national_focus",fn), "source": _layer_name, "root": _lay,
                               "focuses": focuses, "shared": shared_refs,
                               "default": t_default, "country_raw": t_country}
                 state.tree_order().append(tid)
@@ -297,7 +297,7 @@ def load_completed_focuses(root=None, tag=""):
         complete_national_focus = xxx
         mark_focus_tree_completed = yes
     """
-    root = _map_pick(root)
+    root = xuerong.core.paths._pick(root)
     tag = (tag or "").upper()
     if not tag:
         return {"ok": False, "msg": "没给 tag", "items": []}
@@ -327,7 +327,7 @@ def load_completed_focuses(root=None, tag=""):
 
 def focus_complete_add(root, tag, focus_id):
     """给某国加一个「开局已完成」的国策。"""
-    root = _map_pick(root)
+    root = xuerong.core.paths._pick(root)
     tag = (tag or "").upper()
     focus_id = (focus_id or "").strip()
     if not tag or not focus_id:
@@ -364,7 +364,7 @@ def focus_complete_add(root, tag, focus_id):
 
 def focus_complete_delete(root, tag, index):
     """删掉第 index 个已完成国策。"""
-    root = _map_pick(root)
+    root = xuerong.core.paths._pick(root)
     tag = (tag or "").upper()
     try:
         index = int(index)

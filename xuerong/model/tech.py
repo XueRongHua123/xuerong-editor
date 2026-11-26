@@ -173,7 +173,8 @@ def load_techs(root):
     ]
     for src, d, fn in _tech_files:
         rel = os.path.join("common", "technologies", fn)
-        text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace").read())
+        with io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace") as _fh:
+            text = strip_comments(_fh.read())
         macros = {}
         for mm in re.finditer(r'(?m)^\s*@([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', text):
             macros[mm.group(1)] = mm.group(2)
@@ -273,7 +274,8 @@ def _ensure_tech_file_writable(root, rel, tid=None):
         if not src or not os.path.isfile(src):
             return top, None, rel_n, "找不到文件：" + rel_n
         os.makedirs(os.path.dirname(dst) or top, exist_ok=True)
-        txt = io.open(src, encoding="utf-8-sig", errors="replace").read()
+        with io.open(src, encoding="utf-8-sig", errors="replace") as _fh:
+            txt = _fh.read()
         _atomic_write(dst, txt.encode("utf-8"))
     return top, dst, rel_n, ""
 
@@ -337,7 +339,8 @@ def _sync_tech_relations(tid, old_entry, new_entry):
 def _refresh_tech_in_state(top, path, rel, tid, full_text=None):
     """从磁盘文本重新解析 tid 并增量刷新 state.techs()。"""
     if full_text is None:
-        full_text = io.open(path, encoding="utf-8-sig", errors="replace").read()
+        with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+            full_text = _fh.read()
     clean = strip_comments(full_text)
     loc = _tech_block_range(clean, tid)
     if not loc:
@@ -424,7 +427,8 @@ def tech_move(root, rel, tid, x, y):
     except Exception:
         return {"ok": False, "msg": "坐标必须是整数"}
 
-    text = io.open(p, encoding="utf-8-sig", errors="replace").read()
+    with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+        text = _fh.read()
     macros = {}
     for mm in re.finditer(r'(?m)^[ \t]*@([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', text):
         macros[mm.group(1)] = mm.group(2)
@@ -471,7 +475,8 @@ def tech_batch_move(root, moves):
         if not p:
             results.append({"rel": rel_n, "ok": False, "msg": err})
             continue
-        text = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+            text = _fh.read()
         macros = {}
         for mm in re.finditer(r'(?m)^[ \t]*@([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', text):
             macros[mm.group(1)] = mm.group(2)
@@ -523,7 +528,8 @@ def load_country_techs(root=None, tag=""):
     if not p:
         return {"ok": False, "msg": "找不到 %s 的国家历史文件" % tag, "unlocked": []}
     try:
-        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
     except Exception as e:
         return {"ok": False, "msg": "读取失败：%s" % e, "unlocked": []}
     text = _strip_keep_len(raw)
@@ -572,7 +578,8 @@ def country_tech_toggle(root, tag, tech, on=True):
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
 
-    raw = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     text = _strip_keep_len(raw)
     non_date_blocks, dspans = collect_top_blocks(text, "set_technology", include_date=False)
     top_blocks = [blk for blk in non_date_blocks if blk[0] == 0]
@@ -722,7 +729,8 @@ def save_tech(root, rel, tid, raw, name="", desc="", name_ja="", desc_ja="", pro
     top, path, rel_n, err = _ensure_tech_file_writable(root, rel, tid=tid)
     if not path:
         return False, err
-    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace", newline="") as _fh:
+        text = _fh.read()
     m = re.search(r'(?m)^[ \t]*%s\s*=\s*\{' % re.escape(tid), text)
     if not m:
         return False, "未找到科技 " + tid
@@ -789,7 +797,11 @@ def add_tech(root, tid, folder, year="1936", x=0, y=0, parent_tech=None, as_root
     os.makedirs(d, exist_ok=True)
     fn = unique_editor_filename(top, "common/technologies", "zz_focus_editor_technologies.txt")
     path = os.path.join(d, fn)
-    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read() if os.path.exists(path) else "technologies = {\n}\n"
+    if os.path.exists(path):
+        with io.open(path, encoding="utf-8-sig", errors="replace", newline="") as _fh:
+            text = _fh.read()
+    else:
+        text = "technologies = {\n}\n"
     if re.search(r'(?m)^\s*%s\s*=\s*\{' % re.escape(tid), text):
         return False, "科技已存在"
     block = ("\t%s = {\n\t\tresearch_cost = 1\n\t\tstart_year = %s\n"
@@ -839,7 +851,8 @@ def delete_tech(root, rel, tid):
     path = os.path.join(root, rel) if root else ""
     if not path or not os.path.isfile(path):
         return False, "找不到文件：" + str(rel)
-    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace", newline="") as _fh:
+        text = _fh.read()
     m = re.search(r'(?m)^[ \t]*%s\s*=\s*\{' % re.escape(tid), text)
     if not m:
         return False, "未找到科技 " + tid
@@ -858,7 +871,8 @@ def delete_tech(root, rel, tid):
         for base, d, fn in reversed(effective_layer_files("common/technologies", r)):
             fp = os.path.join(d, fn)
             try:
-                raw = io.open(fp, encoding="utf-8-sig", errors="replace", newline="").read()
+                with io.open(fp, encoding="utf-8-sig", errors="replace", newline="") as _fh:
+                    raw = _fh.read()
             except Exception:
                 continue
             if tid not in raw:
@@ -948,7 +962,8 @@ def _edit_xor_in_file(root, rel, tid, peer_id, add=True):
     top, path, rel_n, err = _ensure_tech_file_writable(root, rel, tid=tid)
     if not path:
         return False, None, None, "", err
-    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace", newline="") as _fh:
+        text = _fh.read()
     loc = _tech_block_range(text, tid)
     if not loc:
         return False, None, None, "", "未找到科技 " + tid
@@ -1016,7 +1031,8 @@ def tech_link(root, rel, src, dst, mode="path", coeff=1):
     top, path, rel_n, err = _ensure_tech_file_writable(root, rel, tid=src)
     if not path:
         return False, err
-    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace", newline="") as _fh:
+        text = _fh.read()
     loc = _tech_block_range(text, src)
     if not loc:
         return False, "未找到源科技 " + src
@@ -1082,7 +1098,8 @@ def tech_unlink(root, rel, src, dst, mode="path"):
     top, path, rel_n, err = _ensure_tech_file_writable(root, rel, tid=src)
     if not path:
         return False, err
-    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace", newline="") as _fh:
+        text = _fh.read()
     loc = _tech_block_range(text, src)
     if not loc:
         return False, "未找到源科技 " + src

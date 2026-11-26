@@ -143,7 +143,8 @@ def _diag_schema_unknown_field(root):
         if not os.path.isfile(p):
             return
         try:
-            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                lines = _fh.read().splitlines()
         except Exception:
             return
         depth = 0
@@ -230,7 +231,8 @@ def _diag_schema_character(root):
         rel = "common/characters/" + fn
         p = os.path.join(cd, fn)
         try:
-            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                lines = _fh.read().splitlines()
         except Exception:
             continue
         in_chars = False
@@ -329,7 +331,8 @@ def _diag_schema_decision(root):
             continue
         rel = "common/decisions/" + fn
         try:
-            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                lines = _fh.read().splitlines()
         except Exception:
             continue
         depth = 0
@@ -413,7 +416,8 @@ def _diag_schema_ideas(root):
             continue
         rel = "common/ideas/" + fn
         try:
-            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                lines = _fh.read().splitlines()
         except Exception:
             continue
         depth = 0
@@ -498,7 +502,8 @@ def _diag_schema_focus(root):
             continue
         rel = "common/national_focus/" + fn
         try:
-            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                lines = _fh.read().splitlines()
         except Exception:
             continue
         depth = 0

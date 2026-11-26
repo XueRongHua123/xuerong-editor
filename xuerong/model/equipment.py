@@ -99,7 +99,8 @@ def load_equipment(root):
         name = os.path.basename(base.rstrip("\\/")) or base
         rel = os.path.join("common", "units", "equipment", fn)
         try:
-            text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace").read())
+            with io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace") as f:
+                text = strip_comments(f.read())
         except Exception:
             continue
         for s, e, body in find_blocks(text, "equipments"):
@@ -120,7 +121,8 @@ def _equip_locate(root, eid):
     for base, d, fn in reversed(effective_layer_files("common/units/equipment", root)):
         p = os.path.join(d, fn)
         try:
-            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as f:
+                raw = f.read()
         except Exception:
             continue
         # 必须用保长版本：下面算出的偏移要能直接切 raw
@@ -192,7 +194,8 @@ def equipment_detail(eid, root=None):
                     continue
                 p2 = os.path.join(dp, f)
                 try:
-                    t2 = io.open(p2, encoding="utf-8-sig", errors="replace").read()
+                    with io.open(p2, encoding="utf-8-sig", errors="replace") as fh:
+                        t2 = fh.read()
                 except Exception:
                     continue
                 if re.search(r'\b%s\b' % re.escape(eid), t2):
@@ -226,7 +229,8 @@ def equipment_edit(eid, props, root=None):
     if os.path.abspath(base) == os.path.abspath(state.game() or ""):
         return {"ok": False, "msg": "这个装备来自原版，只读"}
 
-    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace") as f:
+        raw = f.read()
     new_body = body
     changed = []
     for k, v in props.items():
@@ -274,7 +278,8 @@ def equipment_delete(eid, root=None):
     if refs:
         return {"ok": False,
                 "msg": "还有 %d 处引用这个装备，先改掉再删：%s" % (len(refs), refs[:3])}
-    raw = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace") as f:
+        raw = f.read()
     start = raw.rfind("\n", 0, b)
     if start < 0:
         start = b
@@ -309,7 +314,8 @@ def equipment_list(root=None, query=None):
 def save_equipment(root, rel, eid, raw, name="", desc="", name_ja="", desc_ja="", props=None,
                    name_en="", desc_en="", picture=""):
     path = os.path.join(root, rel)
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read()
+    with io.open(path, encoding="utf-8", errors="replace", newline="") as f:
+        text = f.read()
     m = re.search(r'(?m)^[ \t]*%s\s*=\s*\{' % re.escape(eid), text)
     if not m:
         return False, "未找到装备 " + eid
@@ -330,7 +336,8 @@ def save_equipment(root, rel, eid, raw, name="", desc="", name_ja="", desc_ja=""
     if not braces_balanced(raw):
         return False, "花括号不匹配，未保存"
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(text[:m.start()] + raw.strip() + "\n" + text[e:])
+    with io.open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text[:m.start()] + raw.strip() + "\n" + text[e:])
     state.changed()[path] = rel
     ents = {}
     if name: ents.setdefault("simp_chinese", {})[eid] = name
@@ -358,9 +365,11 @@ def _ensure_script_enum_equipment(root, eid):
     dst = os.path.join(root, "common", "script_enums.txt")
     if not os.path.isfile(dst):
         os.makedirs(os.path.dirname(dst), exist_ok=True)
-        raw = io.open(src, "rb").read()
+        with io.open(src, "rb") as f:
+            raw = f.read()
         _atomic_write(dst, raw)
-    txt = io.open(dst, encoding="utf-8-sig", errors="replace", newline="").read()
+    with io.open(dst, encoding="utf-8-sig", errors="replace", newline="") as f:
+        txt = f.read()
     m = re.search(r'(?m)^\s*script_enum_equipment_bonus_type\s*=\s*\{', txt)
     if not m:
         return
@@ -370,7 +379,8 @@ def _ensure_script_enum_equipment(root, eid):
     if re.search(r'(?m)^\s*%s(?:\s|$|#)' % re.escape(eid), body):
         return
     snapshot(dst)
-    has_bom = io.open(dst, "rb").read(3) == b"\xef\xbb\xbf"
+    with io.open(dst, "rb") as f:
+        has_bom = f.read(3) == b"\xef\xbb\xbf"
     new_txt = txt[:e - 1].rstrip("\r\n") + "\n\t%s\n" % eid + txt[e - 1:]
     _atomic_write(dst, (b"\xef\xbb\xbf" if has_bom else b"") + new_txt.encode("utf-8"))
     state.changed()[dst] = os.path.join("common", "script_enums.txt")
@@ -383,7 +393,11 @@ def add_equipment(root, eid):
     os.makedirs(d, exist_ok=True)
     fn = unique_editor_filename(root, "common/units/equipment", "zz_focus_editor_equipment.txt")
     path = os.path.join(d, fn)
-    text = io.open(path, encoding="utf-8", errors="replace", newline="").read() if os.path.exists(path) else "equipments = {\n}\n"
+    if os.path.exists(path):
+        with io.open(path, encoding="utf-8", errors="replace", newline="") as f:
+            text = f.read()
+    else:
+        text = "equipments = {\n}\n"
     if re.search(r'(?m)^\s*%s\s*=\s*\{' % re.escape(eid), text):
         return False, "装备已存在"
     brace = text.find('{', text.find("equipments"))
@@ -391,7 +405,8 @@ def add_equipment(root, eid):
     block = ("\n\t%s = {\n\t\tyear = 1936\n\t\tis_buildable = yes\n\t\ttype = infantry\n"
              "\t\tbuild_cost_ic = 1.0\n\t}\n" % eid)
     snapshot(path)
-    io.open(path, "w", encoding="utf-8", newline="").write(text[:end - 1] + block + text[end - 1:])
+    with io.open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text[:end - 1] + block + text[end - 1:])
     rel = os.path.join("common", "units", "equipment", fn)
     state.changed()[path] = rel
     _ensure_script_enum_equipment(root, eid)
@@ -410,7 +425,8 @@ def delete_equipment(root, rel, eid):
     path = os.path.join(root, rel) if root else ""
     if not path or not os.path.isfile(path):
         return False, "找不到文件：" + str(rel)
-    text = io.open(path, encoding="utf-8-sig", errors="replace", newline="").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace", newline="") as f:
+        text = f.read()
     m = re.search(r'(?m)^[ \t]*%s\s*=\s*\{' % re.escape(eid), text)
     if not m:
         return False, "未找到装备 " + eid
@@ -430,7 +446,8 @@ def delete_equipment(root, rel, eid):
             src_l = os.path.basename((base or "").rstrip("\\/")) or base
             fp = os.path.join(d, fn)
             try:
-                raw = io.open(fp, encoding="utf-8-sig", errors="replace", newline="").read()
+                with io.open(fp, encoding="utf-8-sig", errors="replace", newline="") as f:
+                    raw = f.read()
             except Exception:
                 continue
             if eid not in raw:

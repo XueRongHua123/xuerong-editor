@@ -30,7 +30,8 @@ _NO_CACHE_HEADERS = [
 @get("/")
 def r_index(h, path_only):
     lang = LG._lang(h.path)
-    html = io.open(state.path_var("INDEX"), encoding="utf-8", errors="replace").read()
+    with io.open(state.path_var("INDEX"), encoding="utf-8", errors="replace") as _f:
+        html = _f.read()
     html = i18n.inject(html, lang)
     h._send(html.encode("utf-8"), ctype="text/html; charset=utf-8", extra=_NO_CACHE_HEADERS)
 
@@ -119,7 +120,9 @@ def r_api_icon(h, path_only):
     full = qs.get("full", [""])[0] in ("1", "true", "yes")
     p = LG.icon_png(qs.get("gfx", [""])[0], full=full)
     if p:
-        h._send(io.open(p, "rb").read(), ctype="image/png")
+        with io.open(p, "rb") as _f:
+            data = _f.read()
+        h._send(data, ctype="image/png")
     else:
         h._send({"err": "no icon"}, 404)
 
@@ -130,7 +133,9 @@ def r_mascot_files(h, path_only):
     p = os.path.join(state.path_var("RES_DIR"), fn)
     if os.path.exists(p):
         ctype = "image/x-icon" if fn.endswith(".ico") else "image/png"
-        h._send(io.open(p, "rb").read(), ctype=ctype)
+        with io.open(p, "rb") as _f:
+            data = _f.read()
+        h._send(data, ctype=ctype)
     else:
         h._send({"err": "no mascot"}, 404)
 
@@ -141,7 +146,9 @@ def r_mascot_files(h, path_only):
     p = os.path.join(state.path_var("RES_DIR"), fn)
     if os.path.exists(p):
         ctype = "image/x-icon" if fn.endswith(".ico") else "image/png"
-        h._send(io.open(p, "rb").read(), ctype=ctype)
+        with io.open(p, "rb") as _f:
+            data = _f.read()
+        h._send(data, ctype=ctype)
     else:
         h._send({"err": "no mascot"}, 404)
 
@@ -152,7 +159,9 @@ def r_mascot_files(h, path_only):
     p = os.path.join(state.path_var("RES_DIR"), fn)
     if os.path.exists(p):
         ctype = "image/x-icon" if fn.endswith(".ico") else "image/png"
-        h._send(io.open(p, "rb").read(), ctype=ctype)
+        with io.open(p, "rb") as _f:
+            data = _f.read()
+        h._send(data, ctype=ctype)
     else:
         h._send({"err": "no mascot"}, 404)
 
@@ -160,7 +169,8 @@ def r_mascot_files(h, path_only):
 @prefix("/index")
 def rp_index(h, path_only):
     lang = LG._lang(h.path)
-    html = io.open(state.path_var("INDEX"), encoding="utf-8", errors="replace").read()
+    with io.open(state.path_var("INDEX"), encoding="utf-8", errors="replace") as _f:
+        html = _f.read()
     html = i18n.inject(html, lang)
     h._send(html.encode("utf-8"), ctype="text/html; charset=utf-8", extra=_NO_CACHE_HEADERS)
 
@@ -184,7 +194,9 @@ def rp_web(h, path_only):
             and _p.lower().endswith((".css", ".js"))):
         _ct = ("text/css; charset=utf-8" if _p.lower().endswith(".css")
                else "application/javascript; charset=utf-8")
-        h._send(io.open(_p, "rb").read(), ctype=_ct, extra=_NO_CACHE_HEADERS)
+        with io.open(_p, "rb") as _f:
+            data = _f.read()
+        h._send(data, ctype=_ct, extra=_NO_CACHE_HEADERS)
     else:
         h._send({"err": "no static file"}, 404)
 
@@ -194,6 +206,8 @@ def rp_mascot(h, path_only):
     fn = os.path.basename(path_only)
     p = os.path.join(state.path_var("RES_DIR"), "mascot", fn)
     if fn and os.path.isfile(p):
-        h._send(io.open(p, "rb").read(), ctype="image/png")
+        with io.open(p, "rb") as _f:
+            data = _f.read()
+        h._send(data, ctype="image/png")
     else:
         h._send({"err": "no mascot"}, 404)

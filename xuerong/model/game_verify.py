@@ -56,7 +56,8 @@ def _read_verify_store():
     p = _state_file()
     if os.path.isfile(p):
         try:
-            return json.loads(io.open(p, encoding="utf-8", errors="replace").read())
+            with io.open(p, encoding="utf-8", errors="replace") as _fh:
+                return json.loads(_fh.read())
         except Exception:
             pass
     return {}
@@ -132,9 +133,10 @@ def _exception_head(docs_dir, cname):
     p = os.path.join(docs_dir, "crashes", cname, "exception.txt")
     if not os.path.isfile(p):
         return ""
-    for ln in io.open(p, encoding="utf-8", errors="replace"):
-        if "Unhandled Exception" in ln:
-            return ln.strip()
+    with io.open(p, encoding="utf-8", errors="replace") as _fh:
+        for ln in _fh:
+            if "Unhandled Exception" in ln:
+                return ln.strip()
     return ""
 
 
@@ -281,7 +283,8 @@ def recover_pending_dlc_load(docs_dir=""):
     if not os.path.isfile(bk):
         return {"recovered": False, "msg": ""}
     try:
-        meta = json.loads(io.open(bk, encoding="utf-8", errors="replace").read())
+        with io.open(bk, encoding="utf-8", errors="replace") as _fh:
+            meta = json.loads(_fh.read())
     except Exception:
         try:
             os.remove(bk)
@@ -374,7 +377,8 @@ def run_once(game_dir, docs_dir, enabled_mods, timeout=140.0, post_ready_wait=5.
     err_path = os.path.join(docs_dir, "logs", "error.log")
     game_log_path = os.path.join(docs_dir, "logs", "game.log")
 
-    orig_dlc = io.open(dlc_path, "rb").read()
+    with io.open(dlc_path, "rb") as _fh:
+        orig_dlc = _fh.read()
     _write_backup(dlc_path, orig_dlc, temp_mods, temp_junctions)
     try:
         cfg = json.loads(orig_dlc.decode("utf-8"))
@@ -424,7 +428,8 @@ def run_once(game_dir, docs_dir, enabled_mods, timeout=140.0, post_ready_wait=5.
                 died_early = True
                 break
             if os.path.isfile(game_log_path):
-                txt = io.open(game_log_path, encoding="utf-8", errors="replace").read()
+                with io.open(game_log_path, encoding="utf-8", errors="replace") as _fh:
+                    txt = _fh.read()
                 if "Executing History" in txt:
                     ready = True
                     break
@@ -439,14 +444,16 @@ def run_once(game_dir, docs_dir, enabled_mods, timeout=140.0, post_ready_wait=5.
         alive_at_end = _hoi4_running()
         _kill_and_wait()
 
-        error_lines = (
-            io.open(err_path, encoding="utf-8", errors="replace").read().splitlines()
-            if os.path.isfile(err_path) else []
-        )
-        game_tail = (
-            [x for x in io.open(game_log_path, encoding="utf-8", errors="replace").read().splitlines() if x.strip()][-10:]
-            if os.path.isfile(game_log_path) else []
-        )
+        if os.path.isfile(err_path):
+            with io.open(err_path, encoding="utf-8", errors="replace") as _fh:
+                error_lines = _fh.read().splitlines()
+        else:
+            error_lines = []
+        if os.path.isfile(game_log_path):
+            with io.open(game_log_path, encoding="utf-8", errors="replace") as _fh:
+                game_tail = [x for x in _fh.read().splitlines() if x.strip()][-10:]
+        else:
+            game_tail = []
         if new_crashes or not alive_at_end:
             status = "DIED"
         elif ready:
@@ -522,7 +529,8 @@ def _resolve_chain_to_enabled_mods(mod_dirs, docs_dir):
             continue
         fp = os.path.join(mod_home_dir, fn)
         try:
-            txt = io.open(fp, encoding="utf-8-sig", errors="replace").read()
+            with io.open(fp, encoding="utf-8-sig", errors="replace") as _fh:
+                txt = _fh.read()
         except Exception:
             continue
         mn = re.search(r'(?m)^\s*name\s*=\s*"([^"]*)"', txt)
@@ -549,7 +557,8 @@ def _resolve_chain_to_enabled_mods(mod_dirs, docs_dir):
         lines = []
         orig_name = ""
         if os.path.isfile(desc_fp):
-            raw = io.open(desc_fp, encoding="utf-8-sig", errors="replace").read()
+            with io.open(desc_fp, encoding="utf-8-sig", errors="replace") as _fh:
+                raw = _fh.read()
             for ln in raw.splitlines():
                 if re.match(r"^\s*(?:path|remote_file_id)\s*=", ln):
                     continue
@@ -567,7 +576,8 @@ def _resolve_chain_to_enabled_mods(mod_dirs, docs_dir):
         if junc:
             temp_junctions.append(junc)
         lines.append('path="%s"' % mount_dir.replace("\\", "/"))
-        io.open(temp_fp, "w", encoding="utf-8", newline="").write("\r\n".join(lines) + "\r\n")
+        with io.open(temp_fp, "w", encoding="utf-8", newline="") as _fh:
+            _fh.write("\r\n".join(lines) + "\r\n")
         temp_mods.append(temp_fp)
         enabled.append("mod/" + temp_name)
     return enabled, temp_mods, temp_junctions
@@ -669,7 +679,8 @@ def _run_verify_worker(mod_dirs, game_dir, docs_dir, baseline_mode, reuse_baseli
         base_res = None
         if reuse_baseline and os.path.isfile(b_cache_fp):
             try:
-                cj = json.loads(io.open(b_cache_fp, encoding="utf-8", errors="replace").read())
+                with io.open(b_cache_fp, encoding="utf-8", errors="replace") as _fh:
+                    cj = json.loads(_fh.read())
                 if isinstance(cj.get("error_lines"), list):
                     base_lines = cj["error_lines"]
                     base_res = {"status": "CACHED", "elapsed": 0.0, "error_count": len(base_lines)}

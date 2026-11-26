@@ -150,7 +150,8 @@ def _bom_for(path):
 
 
 def _read_text(path):
-    return strip_comments(io.open(path, encoding="utf-8-sig", errors="replace").read())
+    with io.open(path, encoding="utf-8-sig", errors="replace") as _f:
+        return strip_comments(_f.read())
 
 
 # ---- P0-3 B0：脚本块改写工具（set_scalar / remove_block / set_raw_block ...）----

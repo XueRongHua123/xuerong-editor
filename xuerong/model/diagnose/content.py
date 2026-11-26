@@ -44,7 +44,8 @@ def _diag_oob_not_referenced(root):
             if not fn.endswith(".txt"):
                 continue
             try:
-                txt = io.open(os.path.join(h2, fn), encoding="utf-8-sig", errors="replace").read()
+                with io.open(os.path.join(h2, fn), encoding="utf-8-sig", errors="replace") as _fh:
+                    txt = _fh.read()
             except Exception:
                 continue
             for k in ("set_oob", "oob", "set_air_oob", "air_oob",
@@ -60,7 +61,8 @@ def _diag_oob_not_referenced(root):
             continue
         p = os.path.join(ud, fn)
         try:
-            txt = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                txt = _fh.read()
         except Exception:
             continue
         if not re.search(r'(?m)^\s*(units|air_wings|division_template|fleet)\s*=\s*\{', txt):
@@ -94,7 +96,8 @@ def _gfx_names(root):
             if not fn.lower().endswith(".gfx"):
                 continue
             try:
-                txt = io.open(os.path.join(gd, fn), encoding="utf-8-sig", errors="replace").read()
+                with io.open(os.path.join(gd, fn), encoding="utf-8-sig", errors="replace") as _fh:
+                    txt = _fh.read()
             except Exception:
                 continue
             for m in re.finditer(r'name\s*=\s*"([^"]+)"', txt):
@@ -136,7 +139,8 @@ def _diag_gfx_missing(root):
                 continue
             p = os.path.join(d, fn)
             try:
-                lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+                with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                    lines = _fh.read().splitlines()
             except Exception:
                 continue
             for i, ln in enumerate(lines, 1):
@@ -183,7 +187,8 @@ def _diag_recruit_last_line(root):
             continue
         p = os.path.join(d, fn)
         try:
-            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                lines = _fh.read().splitlines()
         except Exception:
             continue
         # 文档说的是「文件末尾必须至少还有一行，哪怕空行」，
@@ -233,7 +238,8 @@ def _diag_decision_category(root):
             if not fn.endswith(".txt"):
                 continue
             try:
-                txt = io.open(os.path.join(cd, fn), encoding="utf-8-sig", errors="replace").read()
+                with io.open(os.path.join(cd, fn), encoding="utf-8-sig", errors="replace") as _fh:
+                    txt = _fh.read()
             except Exception:
                 continue
             for m in re.finditer(r'(?m)^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=\s*\{', txt):
@@ -244,7 +250,8 @@ def _diag_decision_category(root):
             continue
         p = os.path.join(dd, fn)
         try:
-            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                lines = _fh.read().splitlines()
         except Exception:
             continue
         for i, ln in enumerate(lines, 1):
@@ -283,7 +290,8 @@ def _loc_keys(root):
                 if not fn.lower().endswith(".yml"):
                     continue
                 try:
-                    txt = io.open(os.path.join(cur, fn), encoding="utf-8-sig", errors="replace").read()
+                    with io.open(os.path.join(cur, fn), encoding="utf-8-sig", errors="replace") as _fh:
+                        txt = _fh.read()
                 except Exception:
                     continue
                 for m in line_re.finditer(txt):
@@ -316,7 +324,8 @@ def _diag_character_unrecruited(root):
             continue
         p = os.path.join(cd, fn)
         try:
-            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                lines = _fh.read().splitlines()
         except Exception:
             continue
         # 只取 characters 块的直接子级。块里的 corps_commander / advisor /
@@ -352,7 +361,8 @@ def _diag_character_unrecruited(root):
             if not fn.endswith(".txt"):
                 continue
             try:
-                txt = io.open(os.path.join(hd, fn), encoding="utf-8-sig", errors="replace").read()
+                with io.open(os.path.join(hd, fn), encoding="utf-8-sig", errors="replace") as _fh:
+                    txt = _fh.read()
             except Exception:
                 continue
             for m in re.finditer(r'(?m)^\s*recruit_character\s*=\s*([A-Za-z0-9_]+)', txt):
@@ -394,7 +404,8 @@ def _diag_localisation_missing(root):
         if not os.path.isfile(p):
             return
         try:
-            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                lines = _fh.read().splitlines()
         except Exception:
             return
         for i, ln in enumerate(lines, 1):
@@ -461,7 +472,8 @@ def _diag_tag_def_missing(root):
             if not fn.endswith(".txt"):
                 continue
             try:
-                txt = io.open(os.path.join(td, fn), encoding="utf-8-sig", errors="replace").read()
+                with io.open(os.path.join(td, fn), encoding="utf-8-sig", errors="replace") as _fh:
+                    txt = _fh.read()
             except Exception:
                 continue
             for m in re.finditer(r'(?m)^\s*([A-Z0-9]{3})\s*=\s*"([^"]+)"', txt):
@@ -535,8 +547,9 @@ def _diag_tag_undefined(root):
                 if not fn.endswith(".txt"):
                     continue
                 try:
-                    txt = io.open(os.path.join(td, fn), encoding="utf-8-sig",
-                                  errors="replace").read()
+                    with io.open(os.path.join(td, fn), encoding="utf-8-sig",
+                                 errors="replace") as _fh:
+                        txt = _fh.read()
                 except Exception:
                     continue
                 for m in re.finditer(r'(?m)^\s*([A-Z][A-Z0-9]{2})\s*=', txt):
@@ -577,8 +590,9 @@ def _diag_tag_undefined(root):
             # 原版文件加 vanilla/ 前缀，避免和同名 mod 文件混在一起
             rel = base if layer == top else ("vanilla/" + base)
             try:
-                lines = io.open(p, encoding="utf-8-sig",
-                                errors="replace").read().splitlines()
+                with io.open(p, encoding="utf-8-sig",
+                                errors="replace") as _fh:
+                    lines = _fh.read().splitlines()
             except Exception:
                 continue
             for i, ln in enumerate(lines, 1):
@@ -635,7 +649,8 @@ def _diag_division_template_missing(root):
             continue
         p = os.path.join(ud, fn)
         try:
-            lines = io.open(p, encoding="utf-8-sig", errors="replace").read().splitlines()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                lines = _fh.read().splitlines()
         except Exception:
             continue
         for i, ln in enumerate(lines, 1):
@@ -663,7 +678,8 @@ def _diag_division_template_missing(root):
             if not fn.endswith(".txt"):
                 continue
             try:
-                txt = io.open(os.path.join(d2, fn), encoding="utf-8-sig", errors="replace").read()
+                with io.open(os.path.join(d2, fn), encoding="utf-8-sig", errors="replace") as _fh:
+                    txt = _fh.read()
             except Exception:
                 continue
             for m in re.finditer(r'division_template\s*=\s*\{[^}]*?name\s*=\s*"([^"]+)"', txt, re.S):

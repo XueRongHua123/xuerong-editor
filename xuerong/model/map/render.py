@@ -87,7 +87,8 @@ def _refresh_layer_only(root, dirp, meta_path, only):
     if not os.path.exists(meta_path):
         return None
     try:
-        meta = json.loads(io.open(meta_path, encoding="utf-8").read())
+        with io.open(meta_path, encoding="utf-8") as _f:
+            meta = json.loads(_f.read())
         w, h = int(meta.get("w") or 0), int(meta.get("h") or 0)
     except Exception:
         return None
@@ -107,7 +108,8 @@ def _refresh_layer_only(root, dirp, meta_path, only):
     meta["built"] = time.strftime("%Y-%m-%d %H:%M:%S")
     meta["assets"] = {a: os.path.getsize(os.path.join(dirp, a)) for a in state.map_var("MAP_ASSETS")
                       if os.path.exists(os.path.join(dirp, a))}
-    io.open(meta_path, "w", encoding="utf-8", newline="").write(json.dumps(meta, ensure_ascii=False))
+    with io.open(meta_path, "w", encoding="utf-8", newline="") as _f:
+        _f.write(json.dumps(meta, ensure_ascii=False))
     return {"ok": True, "cached": False, "only": only, "meta": meta}
 
 
@@ -127,9 +129,9 @@ def map_build(force=False, root=None, only=None):
     meta_path = os.path.join(dirp, "meta.json")
     try:
         os.makedirs(state.map_var("MAP_CACHE_DIR"), exist_ok=True)
-        io.open(os.path.join(state.map_var("MAP_CACHE_DIR"), "_last.json"), "w", encoding="utf-8", newline="").write(
-            json.dumps({"root": os.path.abspath(base or ""), "key": key,
-                        "built": time.strftime("%Y-%m-%d %H:%M:%S")}, ensure_ascii=False))
+        with io.open(os.path.join(state.map_var("MAP_CACHE_DIR"), "_last.json"), "w", encoding="utf-8", newline="") as _f:
+            _f.write(json.dumps({"root": os.path.abspath(base or ""), "key": key,
+                                 "built": time.strftime("%Y-%m-%d %H:%M:%S")}, ensure_ascii=False))
     except Exception:
         pass
     if only in ("terrain", "rivers"):
@@ -138,8 +140,8 @@ def map_build(force=False, root=None, only=None):
             return fast
     if not force and os.path.exists(meta_path):
         try:
-            return {"ok": True, "cached": True,
-                    "meta": json.loads(io.open(meta_path, encoding="utf-8").read())}
+            with io.open(meta_path, encoding="utf-8") as _f:
+                return {"ok": True, "cached": True, "meta": json.loads(_f.read())}
         except Exception:
             pass
 
@@ -490,7 +492,8 @@ def _map_build_run(root, dirp, base, bmp, csv, meta_path):
         _dr = ImageDraw.Draw(_img)
         _cent = {}
         try:
-            _cj = io.open(os.path.join(dirp, "centers.json"), encoding="utf-8").read()
+            with io.open(os.path.join(dirp, "centers.json"), encoding="utf-8") as _f:
+                _cj = _f.read()
             _cent = json.loads(_cj) or {}
         except Exception:
             _cent = {}
@@ -557,19 +560,20 @@ def _map_build_run(root, dirp, base, bmp, csv, meta_path):
                            "continent": prov2continent.get(pid, 0), "px": cnt,
                            "rgb": _rgb}
 
-    io.open(os.path.join(dirp, "centers.json"), "w", encoding="utf-8", newline="").write(
-        json.dumps(centers, ensure_ascii=False))
-    io.open(os.path.join(dirp, "prov_index.json"), "w", encoding="utf-8", newline="").write(
-        json.dumps(index, ensure_ascii=False))
-    io.open(os.path.join(dirp, "regions.json"), "w", encoding="utf-8", newline="").write(
-        json.dumps(region_list, ensure_ascii=False))
+    with io.open(os.path.join(dirp, "centers.json"), "w", encoding="utf-8", newline="") as _f:
+        _f.write(json.dumps(centers, ensure_ascii=False))
+    with io.open(os.path.join(dirp, "prov_index.json"), "w", encoding="utf-8", newline="") as _f:
+        _f.write(json.dumps(index, ensure_ascii=False))
+    with io.open(os.path.join(dirp, "regions.json"), "w", encoding="utf-8", newline="") as _f:
+        _f.write(json.dumps(region_list, ensure_ascii=False))
 
     meta = {"w": w, "h": h, "provinces": len(counts), "source": base,
             "ms": int((time.time() - t_all) * 1000), "built": time.strftime("%Y-%m-%d %H:%M:%S"),
             "consistency": consistency,
             "assets": {a: os.path.getsize(os.path.join(dirp, a)) for a in state.map_var("MAP_ASSETS")
                        if os.path.exists(os.path.join(dirp, a))}}
-    io.open(meta_path, "w", encoding="utf-8", newline="").write(json.dumps(meta, ensure_ascii=False))
+    with io.open(meta_path, "w", encoding="utf-8", newline="") as _f:
+        _f.write(json.dumps(meta, ensure_ascii=False))
     return {"ok": True, "cached": False, "meta": meta}
 
 def _strategic_regions(root):
@@ -602,7 +606,8 @@ def _strategic_regions(root):
             continue
         for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
             try:
-                text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8", errors="replace").read())
+                with io.open(os.path.join(d, fn), encoding="utf-8", errors="replace") as _f:
+                    text = strip_comments(_f.read())
             except Exception:
                 continue
             for m in re.finditer(r'strategic_region\s*=\s*\{', text):
@@ -644,8 +649,8 @@ def _terrain_index_map(root):
             continue
         for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
             try:
-                text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig",
-                                              errors="replace").read())
+                with io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace") as _f:
+                    text = strip_comments(_f.read())
             except Exception:
                 continue
             for m in re.finditer(r'(?m)^\s*([A-Za-z_][\w]*)\s*=\s*\{', text):
@@ -847,8 +852,8 @@ def _terrain_colors(root):
             continue
         for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
             try:
-                text = strip_comments(io.open(os.path.join(d, fn), encoding="utf-8-sig",
-                                              errors="replace").read())
+                with io.open(os.path.join(d, fn), encoding="utf-8-sig", errors="replace") as _f:
+                    text = strip_comments(_f.read())
             except Exception:
                 continue
             m = re.search(r'(?m)^categories\s*=\s*\{', text)

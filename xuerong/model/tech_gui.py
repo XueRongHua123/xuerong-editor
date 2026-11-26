@@ -72,7 +72,8 @@ def _ensure_rel_writable(root, rel):
     if not src or not os.path.isfile(src):
         return top, None, "叠加链中找不到文件：" + rel_n
     os.makedirs(os.path.dirname(dst) or top, exist_ok=True)
-    text = io.open(src, encoding="utf-8-sig", errors="replace").read()
+    with io.open(src, encoding="utf-8-sig", errors="replace") as _fh:
+        text = _fh.read()
     _atomic_write(dst, text.encode("utf-8"))
     return top, dst, ""
 
@@ -235,7 +236,8 @@ def load_technology_tags(root=None):
         src = os.path.basename((base or "").rstrip("\\/")) or (base or "")
         fp = os.path.join(d, fn)
         try:
-            text = strip_comments(io.open(fp, encoding="utf-8-sig", errors="replace").read())
+            with io.open(fp, encoding="utf-8-sig", errors="replace") as _fh:
+                text = strip_comments(_fh.read())
         except Exception:
             continue
 
@@ -449,7 +451,8 @@ def load_techtree_gui(root=None):
             "msg": "找不到 interface/countrytechtreeview.gui",
         }
     src = os.path.basename((src_root or "").rstrip("\\/")) or (src_root or "")
-    raw = io.open(gui_path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(gui_path, encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
     clean = _strip_keep_len(raw)
 
     tabs = []
@@ -591,7 +594,8 @@ def _collect_folder_macros(root, folder_techs):
         if not p or not os.path.isfile(p):
             continue
         try:
-            text = strip_comments(io.open(p, encoding="utf-8-sig", errors="replace").read())
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
+                text = strip_comments(_fh.read())
             for mm in re.finditer(r'(?m)^\s*@([A-Za-z0-9_]+)\s*=\s*(-?[0-9.]+)', text):
                 macros[mm.group(1)] = mm.group(2)
         except Exception:
@@ -1203,7 +1207,8 @@ def tech_folder_save(root, fid, fields=None):
     if not tag_path:
         return {"ok": False, "msg": err}
 
-    tag_text = io.open(tag_path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(tag_path, encoding="utf-8-sig", errors="replace") as _fh:
+        tag_text = _fh.read()
     clean_tag = _strip_keep_len(tag_text)
     tf_blocks = find_blocks(clean_tag, "technology_folders")
     if not tf_blocks:
@@ -1246,7 +1251,8 @@ def tech_folder_save(root, fid, fields=None):
     if need_gui:
         _top_g, gui_path, g_err = _ensure_rel_writable(top, _GUI_REL)
         if gui_path and os.path.isfile(gui_path):
-            gui_text = io.open(gui_path, encoding="utf-8-sig", errors="replace").read()
+            with io.open(gui_path, encoding="utf-8-sig", errors="replace") as _fh:
+                gui_text = _fh.read()
             tv = _find_tv_range(gui_text)
             if tv:
                 tv_s, tv_e, tv_is, tv_ie = tv
@@ -1368,7 +1374,8 @@ def tech_folder_delete(root, fid):
     removed_tags = False
     tag_path = os.path.join(top, _TAGS_REL.replace("/", os.sep))
     if os.path.isfile(tag_path):
-        tag_text = io.open(tag_path, encoding="utf-8-sig", errors="replace").read()
+        with io.open(tag_path, encoding="utf-8-sig", errors="replace") as _fh:
+            tag_text = _fh.read()
         clean_tag = _strip_keep_len(tag_text)
         tf_blocks = find_blocks(clean_tag, "technology_folders")
         if tf_blocks:
@@ -1389,7 +1396,8 @@ def tech_folder_delete(root, fid):
     removed_gui = False
     gui_path = os.path.join(top, _GUI_REL.replace("/", os.sep))
     if os.path.isfile(gui_path):
-        gui_text = io.open(gui_path, encoding="utf-8-sig", errors="replace").read()
+        with io.open(gui_path, encoding="utf-8-sig", errors="replace") as _fh:
+            gui_text = _fh.read()
         changed_g = False
         tv = _find_tv_range(gui_text)
         if tv:
@@ -1436,7 +1444,8 @@ def tech_folders_reorder(root, order):
     if not tag_path:
         return {"ok": False, "msg": err}
 
-    tag_text = io.open(tag_path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(tag_path, encoding="utf-8-sig", errors="replace") as _fh:
+        tag_text = _fh.read()
     clean_tag = _strip_keep_len(tag_text)
     tf_blocks = find_blocks(clean_tag, "technology_folders")
     if not tf_blocks:
@@ -1466,7 +1475,8 @@ def tech_folders_reorder(root, order):
     # 同步 folder_tabs 按钮 x 坐标
     _tg, gui_path, _ge = _ensure_rel_writable(top, _GUI_REL)
     if gui_path and os.path.isfile(gui_path):
-        gui_text = io.open(gui_path, encoding="utf-8-sig", errors="replace").read()
+        with io.open(gui_path, encoding="utf-8-sig", errors="replace") as _fh:
+            gui_text = _fh.read()
         tv = _find_tv_range(gui_text)
         if tv:
             ft_pos = _find_tv_child(gui_text, tv[2], tv[3], "folder_tabs")
@@ -1541,7 +1551,8 @@ def _sync_year_macro(root, folder, year_str, macro_val):
         _top, dst, _err = _ensure_rel_writable(root, rel)
         if not dst or not os.path.isfile(dst):
             continue
-        text = io.open(dst, encoding="utf-8-sig", errors="replace").read()
+        with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
+            text = _fh.read()
         pat = re.compile(r'(?m)^([ \t]*)@%s[ \t]*=[ \t]*(-?[0-9.]+)' % re.escape(year_str))
         if pat.search(text):
             new_text = pat.sub(lambda m: "%s@%s = %s" % (m.group(1), year_str, val_s), text, count=1)
@@ -1596,7 +1607,8 @@ def tech_year_save(root, folder, op="update", data=None):
     if not gui_path:
         return {"ok": False, "msg": err}
 
-    gui_text = io.open(gui_path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(gui_path, encoding="utf-8-sig", errors="replace") as _fh:
+        gui_text = _fh.read()
     tv = _find_tv_range(gui_text)
     if not tv:
         return {"ok": False, "msg": "找不到 countrytechtreeview 容器"}
@@ -1696,7 +1708,8 @@ def tech_subtitle_save(root, folder, op="update", data=None):
     if not gui_path:
         return {"ok": False, "msg": err}
 
-    gui_text = io.open(gui_path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(gui_path, encoding="utf-8-sig", errors="replace") as _fh:
+        gui_text = _fh.read()
     tv = _find_tv_range(gui_text)
     if not tv:
         return {"ok": False, "msg": "找不到 countrytechtreeview 容器"}
@@ -1796,7 +1809,8 @@ def tech_gridbox_save(root, folder, op="update", data=None):
     if not gui_path:
         return {"ok": False, "msg": err}
 
-    gui_text = io.open(gui_path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(gui_path, encoding="utf-8-sig", errors="replace") as _fh:
+        gui_text = _fh.read()
     tv = _find_tv_range(gui_text)
     if not tv:
         return {"ok": False, "msg": "找不到 countrytechtreeview 容器"}
@@ -1909,7 +1923,8 @@ def tech_item_style_save(root, folder, fields=None):
     if not gui_path:
         return {"ok": False, "msg": err}
 
-    gui_text = io.open(gui_path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(gui_path, encoding="utf-8-sig", errors="replace") as _fh:
+        gui_text = _fh.read()
     changed = False
 
     w = fields.get("width", fields.get("item_w"))
@@ -1993,7 +2008,8 @@ def tech_category_add(root, cat_id, name_zh=""):
     if not tag_path:
         return {"ok": False, "msg": err}
 
-    tag_text = io.open(tag_path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(tag_path, encoding="utf-8-sig", errors="replace") as _fh:
+        tag_text = _fh.read()
     clean_tag = _strip_keep_len(tag_text)
     cat_blocks = find_blocks(clean_tag, "technology_categories")
     if not cat_blocks:

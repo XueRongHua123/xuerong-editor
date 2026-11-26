@@ -83,8 +83,8 @@ def _gfx_collect(root, layers, include_vanilla=True):
                     continue
                 p = os.path.join(_dp, fn)
                 try:
-                    text = strip_comments(io.open(p, encoding="utf-8-sig",
-                                                  errors="replace").read())
+                    with io.open(p, encoding="utf-8-sig", errors="replace") as _f:
+                        text = strip_comments(_f.read())
                 except Exception:
                     continue
                 # 用 brace 配对取每个 spriteType 块：块内还有 frames/instances 等嵌套，
@@ -144,8 +144,8 @@ def _gfx_refs(root, layers):
                     continue
                 p = os.path.join(_dp, fn)
                 try:
-                    text = strip_comments(io.open(p, encoding="utf-8-sig",
-                                                  errors="replace").read())
+                    with io.open(p, encoding="utf-8-sig", errors="replace") as _f:
+                        text = strip_comments(_f.read())
                 except Exception:
                     continue
                 for pat, where in patterns:
@@ -221,7 +221,8 @@ def _gfx_texture_exists(rel, layers):
 
 
 def parse_gfx_file(path):
-    s = io.open(path, encoding="utf-8-sig", errors="replace").read()
+    with io.open(path, encoding="utf-8-sig", errors="replace") as _f:
+        s = _f.read()
     out = {}
     for m in re.finditer(r'spriteType\s*=\s*\{', s, re.I):
         b = m.end() - 1
@@ -263,7 +264,8 @@ def gfx_registered(root=None, pattern=""):
         if not p.lower().endswith(".gfx"):
             continue
         try:
-            raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+            with io.open(p, encoding="utf-8-sig", errors="replace") as _f:
+                raw = _f.read()
         except Exception:
             continue
         text = _strip_keep_len(raw)
@@ -320,7 +322,8 @@ def gfx_sprite_new(root, name, texturefile, no_of_frames=None):
              '\t}\n'
              '}\n') % (name, tex_norm, frames_line)
     if os.path.exists(p):
-        raw = io.open(p, encoding="utf-8-sig", errors="replace").read()
+        with io.open(p, encoding="utf-8-sig", errors="replace") as _f:
+            raw = _f.read()
         if ('"%s"' % name) in raw:
             SPRITE_MAP.setdefault(name, (tex_norm, nf or 1))
             TECH_ICONS.setdefault(name, "/api/icon?gfx=" + name)
