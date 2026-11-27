@@ -18,7 +18,8 @@ from xuerong import state
 from xuerong.core import paths
 from xuerong.model.diagnose._base import (_finding, _looks_like_scripted,
                                           _map_diag_skip)
-from xuerong.model.diagnose.content import (_diag_character_unrecruited,
+from xuerong.model.diagnose.content import (_diag_bookmarks,
+                                           _diag_character_unrecruited,
                                            _diag_decision_category,
                                            _diag_division_template_missing,
                                            _diag_gfx_missing, _diag_localisation_missing,
@@ -102,6 +103,7 @@ def diagnose(root=None, scope="current"):
         ("replace_path 断链引用", lambda r: _diag_replace_refs(r, own_only=own_only)),
         ("replace_path 空目录", lambda r: _diag_replace_stub(r, own_only=own_only)),
         ("师团模板引用", lambda r: _diag_division_template_missing(r, own_only=own_only)),
+        ("剧本检查", lambda r: _diag_bookmarks(r, own_only=own_only)),
         ("脚本字段校验", _diag_schema_unknown_field),
         ("人物字段校验", _diag_schema_character),
         ("决议字段校验", _diag_schema_decision),

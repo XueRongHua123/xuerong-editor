@@ -1389,13 +1389,14 @@ def _hist_append_top(text, block):
 
 
 def country_variant_add(tag, spec):
-    """新增一个开局变体：spec = {name, type, icon, modules:{slot:module}}"""
+    """新增一个开局变体：spec = {name, type, icon, modules:{slot:module}, upgrades:{key:val}}"""
+    spec = spec or {}
     name = (spec.get("name") or "").strip()
     etype = (spec.get("type") or "").strip()
     if not name:
         return {"ok": False, "msg": "变体名称不能为空"}
-    if not re.match(r'^[A-Za-z0-9_\- ]{1,60}$', name):
-        return {"ok": False, "msg": "名称只能用字母数字、空格、下划线和连字符"}
+    if len(name) > 80 or any(ch in name for ch in ('"', '\r', '\n', '{', '}')):
+        return {"ok": False, "msg": "名称不能超过 80 字，且不能包含引号、换行或花括号"}
     if not etype:
         return {"ok": False, "msg": "请选择底盘（type）"}
     if not re.match(r'^[A-Za-z0-9_]+$', etype):
@@ -1403,8 +1404,17 @@ def country_variant_add(tag, spec):
     if EQUIPMENTS and etype not in EQUIPMENTS:
         return {"ok": False, "msg": "底盘 %s 不在装备列表里" % etype}
     mods = spec.get("modules") or {}
-    if not isinstance(mods, dict) or not mods:
-        return {"ok": False, "msg": "至少要填一个模块（槽位 = 模块）"}
+    upgs = spec.get("upgrades") or {}
+    if not isinstance(mods, dict) or not isinstance(upgs, dict):
+        return {"ok": False, "msg": "modules / upgrades 参数格式不合法"}
+    if not mods and not upgs:
+        return {"ok": False, "msg": "至少要填一个模块（modules）或升级项（upgrades）"}
+    for slot, mod in mods.items():
+        if not re.match(r'^[A-Za-z0-9_]+$', str(slot)) or not re.match(r'^[A-Za-z0-9_]+$', str(mod)):
+            return {"ok": False, "msg": "槽位/模块 id 只能用字母数字下划线：%s = %s" % (slot, mod)}
+    for uk, uv in upgs.items():
+        if not re.match(r'^[A-Za-z0-9_]+$', str(uk)) or not re.match(r'^-?\d+(?:\.\d+)?$', str(uv).strip()):
+            return {"ok": False, "msg": "升级项只能是 标识符 = 数字：%s = %s" % (uk, uv)}
     c, path, rel, tgt, _existed, err = _hist_prepare_write(tag, require_existing=True)
     if not path:
         return {"ok": False, "msg": err or "这个国家没有可写的历史文件"}
@@ -1415,22 +1425,31 @@ def country_variant_add(tag, spec):
     icon = (spec.get("icon") or "").strip()
     if icon:
         lines.append('\ticon = %s' % icon)
-    lines.append('\tmodules = {')
-    for slot, mod in mods.items():
-        if not re.match(r'^[A-Za-z0-9_]+$', str(slot)) or not re.match(r'^[A-Za-z0-9_]+$', str(mod)):
-            return {"ok": False, "msg": "槽位/模块 id 只能用字母数字下划线：%s = %s" % (slot, mod)}
-        lines.append('\t\t%s = %s' % (slot, mod))
-    lines.append('\t}')
+    if mods:
+        lines.append('\tmodules = {')
+        for slot, mod in mods.items():
+            lines.append('\t\t%s = %s' % (slot, mod))
+        lines.append('\t}')
+    if upgs:
+        lines.append('\tupgrades = {')
+        for uk, uv in upgs.items():
+            lines.append('\t\t%s = %s' % (uk, str(uv).strip()))
+        lines.append('\t}')
     lines.append('}')
     block = "\n".join(lines)
     new_text = _hist_append_top(text, block)
     backup(path)
     snapshot(path)
-    _write_bom_text(path, new_text, False)
+    _write_bom_text(path, new_text, _has_bom)
     CHANGED[path] = rel or os.path.relpath(path, tgt)
     reload_data()
     link_countries()
-    return {"ok": True, "msg": "已新增变体 %s（%d 个模块）" % (name, len(mods)),
+    parts = []
+    if mods:
+        parts.append("%d 个模块" % len(mods))
+    if upgs:
+        parts.append("%d 项升级" % len(upgs))
+    return {"ok": True, "msg": "已新增变体 %s（%s）" % (name, "、".join(parts)),
             "variants": _hist_variants(_read_bom_text(path)[0])}
 
 
@@ -3847,20 +3866,14 @@ def load_navy(root=None):
                     tname = _first(tbody, r'(?m)^\s*name\s*=\s*"([^"]*)"')
                     tloc = _first(tbody, r'(?m)^\s*location\s*=\s*(\d+)')
                     ships = []
-                    # 兼容单行与多行 ship = { ... } 块
+                    # 兼容单行与多行 ship = { ... } 块（避免 top_items 吞掉单行其余字段）
                     for _sa, _se, sbody in find_blocks(tbody, "ship"):
-                        snm, sdf = "", ""
-                        for sk, sv, shb in top_items(sbody):
-                            if not shb:
-                                if sk == "name" and not snm:
-                                    snm = sv
-                                elif sk == "definition" and not sdf:
-                                    sdf = sv
+                        snm = _first(sbody, r'\bname\s*=\s*"([^"]*)"')
                         if not snm:
-                            snm = _first(sbody, r'\bname\s*=\s*"([^"]*)"')
-                        if not sdf:
-                            sdf = _first(sbody, r'\bdefinition\s*=\s*([A-Za-z0-9_]+)')
-                        ships.append({"name": snm, "definition": sdf})
+                            snm = _first(sbody, r'\bname\s*=\s*([^\s\}#]+)')
+                        sdf = _first(sbody, r'\bdefinition\s*=\s*"?([A-Za-z0-9_]+)"?')
+                        sexp = _first(sbody, r'\bstart_experience_factor\s*=\s*([\d.]+)')
+                        ships.append({"name": snm, "definition": sdf, "exp": sexp})
                     _tline = fbody.rfind("\n", 0, tstart) + 1
                     tfs.append({"name": tname, "location": int(tloc or 0),
                                 "ships": ships, "ship_count": len(ships),
@@ -3910,6 +3923,9 @@ def load_navy(root=None):
 
 
 
+_BM_NON_COUNTRIES = {"effect", "filters", "label_order", "randomize_weather", "---", "zzz"}
+
+
 def load_bookmarks(root=None):
     """解析 common/bookmarks 里的所有剧本。
 
@@ -3946,12 +3962,38 @@ def load_bookmarks(root=None):
             pass
         for outer_a, outer_b, outer_body in find_blocks(text, "bookmarks"):
             for ba, bb, body in find_blocks(outer_body, "bookmark"):
-                nm = _first(body, r'(?m)^\s*name\s*=\s*"([^"]*)"')
-                ds = _first(body, r'(?m)^\s*desc\s*=\s*"([^"]*)"')
+                nm = unq(_first(body, r'(?m)^\s*name\s*=\s*("[^"]*"|[^\s"#\}]+)'))
+                ds = unq(_first(body, r'(?m)^\s*desc\s*=\s*("[^"]*"|[^\s"#\}]+)'))
                 dt = _first(body, r'(?m)^\s*date\s*=\s*([\d.]+)')
-                pic = _first(body, r'(?m)^\s*picture\s*=\s*"([^"]*)"')
-                dc = _first(body, r'(?m)^\s*default_country\s*=\s*"([A-Z0-9]+)"')
-                countries = re.findall(r'(?m)^[ \t]*"([A-Z0-9_]{2,8})"[ \t]*=\s*\{', body)
+                pic = unq(_first(body, r'(?m)^\s*picture\s*=\s*("[^"]*"|[^\s"#\}]+)'))
+                dc = unq(_first(body, r'(?m)^\s*default_country\s*=\s*("[^"]*"|[^\s"#\}]+)'))
+                countries = []
+                seen_c = set()
+                bi, bn = 0, len(body)
+                while bi < bn:
+                    if body[bi] in " \t\r\n":
+                        bi += 1
+                        continue
+                    bm = re.match(r'"?([A-Za-z0-9_\-]+)"?\s*=\s*', body[bi:])
+                    if not bm:
+                        bi += 1
+                        continue
+                    bk = bm.group(1)
+                    bj = bi + bm.end()
+                    if bj < bn and body[bj] == "{":
+                        bi = brace_match(body, bj)
+                        if (bk.lower() not in _BM_NON_COUNTRIES
+                                and re.match(r'^[A-Z0-9_]{2,8}$', bk)
+                                and bk not in seen_c):
+                            seen_c.add(bk)
+                            countries.append(bk)
+                    else:
+                        if bj < bn and body[bj] == '"':
+                            eq_end = body.find('"', bj + 1)
+                            bi = eq_end + 1 if eq_end >= 0 else bn
+                        else:
+                            sm = re.search(r'\s', body[bj:])
+                            bi = bj + sm.start() + 1 if sm else bn
                 items.append({"i": len(items), "name": nm, "desc": ds, "date": dt,
                               "picture": pic, "default_country": dc,
                               "countries": countries, "country_count": len(countries),
@@ -4026,6 +4068,7 @@ def bookmark_set(root, index, fields):
             break
     if a < 0:
         return {"ok": False, "msg": "重新定位失败（本文件内第 %d 个）" % (local + 1)}
+    fields = fields or {}
     seg = raw[a:b]
     new_seg = seg
     changed = []
@@ -4034,12 +4077,19 @@ def bookmark_set(root, index, fields):
                      ("desc", fields.get("desc")),
                      ("picture", fields.get("picture")),
                      ("default_country", fields.get("default_country"))):
-        if not val:
+        if val is None or str(val).strip() == "":
             continue
-        pat = re.compile(r'(?m)^([ \t]*)' + key + r'\s*=\s*[^\s#\r\n]+')
+        sval = str(val).strip()
+        if key == "date":
+            if not re.match(r'^\d{4}\.\d{1,2}\.\d{1,2}(\.\d+)?$', sval):
+                return {"ok": False, "msg": "date 格式要像 1936.1.1 或 1936.1.1.12"}
+            sval = _bookmark_date(sval)
+        else:
+            sval = sval.replace('"', "")
+        pat = re.compile(r'(?m)^([ \t]*)' + key + r'\s*=\s*(?:"[^"\r\n]*"|[^\s#\r\n]+)')
         if pat.search(new_seg):
-            new_seg = pat.sub(lambda m: (m.group(1) or "") + '%s = %s' % (
-                key, ('"%s"' % val) if key in ("name", "desc", "picture", "default_country") else val),
+            new_seg = pat.sub(lambda m, k=key, v=sval: (m.group(1) or "") + '%s = %s' % (
+                k, ('"%s"' % v) if k in ("name", "desc", "picture", "default_country") else v),
                 new_seg, count=1)
             changed.append(key)
     if new_seg == seg:
@@ -4103,6 +4153,9 @@ def bookmark_delete(root, index):
     if a < 0:
         return {"ok": False, "msg": "重新定位失败（本文件内第 %d 个）" % (local + 1)}
     st = a
+    bm_m = re.search(r'\bbookmark\s*=\s*$', raw[:a])
+    if bm_m:
+        st = bm_m.start()
     while st > 0 and raw[st - 1] in " \t":
         st -= 1
     if st > 0 and raw[st - 1] == "\n":
@@ -4111,7 +4164,7 @@ def bookmark_delete(root, index):
     while en < len(raw) and raw[en] in "\r\n":
         en += 1
     snapshot(p)
-    _atomic_write(p, b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
+    _atomic_write(p, _bom_for(p) + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
     return {"ok": True, "msg": "已删除剧本「%s」" % it["name"]}
 
 
@@ -4702,11 +4755,43 @@ def _insert_before_close(raw, pos, text_to_insert):
     ls = raw.rfind("\n", 0, p) + 1
     return raw[:ls] + text_to_insert + raw[ls:]
 
-def _navy_locate(root, fi=None, ti=None):
-    """重新定位舰队/特遣队在文件里的偏移。
+def _navy_locate_in_file(path, local_fi=0, local_ti=None):
+    """在单个 history/units 文件内按局部序号 (local_fi, local_ti) 定位偏移。
 
-    返回 (目标路径, rel, start, end, raw) 或 (None, "", -1, -1, "")。
-    start/end 直接来自 find_blocks（start 是 { 位置，end 是 } 位置）。
+    返回 (start, end, raw) 或 (-1, -1, "")。
+    """
+    try:
+        with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
+    except Exception:
+        return -1, -1, ""
+    text = _strip_keep_len(raw)
+    idx = -1
+    for um in re.finditer(r'(?m)^[ \t]*units[ \t]*=\s*\{', text):
+        ub = text.find("{", um.end() - 1)
+        ue = brace_match(text, ub)
+        if ue <= ub:
+            continue
+        ubody = text[ub + 1:ue - 1]
+        for fb, fend, fbody in find_blocks(ubody, "fleet"):
+            idx += 1
+            if idx != local_fi:
+                continue
+            if local_ti is None:
+                return ub + 1 + fb, ub + 1 + fend, raw
+            tjdx = -1
+            for tb, tend, tbody in find_blocks(fbody, "task_force"):
+                tjdx += 1
+                if tjdx == local_ti:
+                    return ub + 1 + fb + 1 + tb, ub + 1 + fb + 1 + tend, raw
+            return -1, -1, ""
+    return -1, -1, ""
+
+
+def _navy_find_local(root, fi=None, ti=None):
+    """定位全局第 fi 支舰队（及第 ti 个特遣队），同时返回本文件内的局部序号。
+
+    返回 (目标路径, rel, local_fi, local_ti, start, end, raw)。
     """
     root = _paths._pick(root)
     _base, files = _units_files(root)
@@ -4719,6 +4804,7 @@ def _navy_locate(root, fi=None, ti=None):
             continue
         text = _strip_keep_len(raw)
         rel = os.path.join("history", "units", os.path.basename(p))
+        file_idx = -1
         for um in re.finditer(r'(?m)^[ \t]*units[ \t]*=\s*\{', text):
             ub = text.find("{", um.end() - 1)
             ue = brace_match(text, ub)
@@ -4727,17 +4813,28 @@ def _navy_locate(root, fi=None, ti=None):
             ubody = text[ub + 1:ue - 1]
             for fb, fend, fbody in find_blocks(ubody, "fleet"):
                 idx += 1
+                file_idx += 1
                 if fi is not None and idx != fi:
                     continue
                 if ti is None:
-                    return p, rel, ub + 1 + fb, ub + 1 + fend, raw
+                    return p, rel, file_idx, None, ub + 1 + fb, ub + 1 + fend, raw
                 tjdx = -1
                 for tb, tend, tbody in find_blocks(fbody, "task_force"):
                     tjdx += 1
                     if tjdx == ti:
-                        return p, rel, ub + 1 + fb + 1 + tb, ub + 1 + fb + 1 + tend, raw
-                return None, "", -1, -1, ""
-    return None, "", -1, -1, ""
+                        return p, rel, file_idx, tjdx, ub + 1 + fb + 1 + tb, ub + 1 + fb + 1 + tend, raw
+                return None, "", -1, None, -1, -1, ""
+    return None, "", -1, None, -1, -1, ""
+
+
+def _navy_locate(root, fi=None, ti=None):
+    """重新定位舰队/特遣队在文件里的偏移。
+
+    返回 (目标路径, rel, start, end, raw) 或 (None, "", -1, -1, "")。
+    start/end 直接来自 find_blocks（start 是 { 位置，end 是 } 位置）。
+    """
+    p, rel, _lfi, _lti, st, en, raw = _navy_find_local(root, fi, ti)
+    return p, rel, st, en, raw
 
 
 def _ship_line(name, definition, exp=0.3):
@@ -4793,7 +4890,7 @@ def navy_add_ship(root, fi, ti, name=None, definition="destroyer", exp=0.3, tag=
             return {"ok": False, "msg": "%s 只有 %d 支舰队，没有第 %d 支" % (
                 tag.upper(), len(idxs), fi + 1)}
         fi = idxs[fi]
-    p, rel, st, en, raw = _navy_locate(root, fi, ti)
+    p, rel, lfi, lti, st, en, raw = _navy_find_local(root, fi, ti)
     if not p:
         return {"ok": False, "msg": "找不到第 %d 支舰队的第 %d 个特遣队" % (fi + 1, ti + 1)}
     tgt, err = _units_write_base(root)
@@ -4807,12 +4904,9 @@ def navy_add_ship(root, fi, ti, name=None, definition="destroyer", exp=0.3, tag=
             _sh.copyfile(p, dst)
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
-    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
-        raw2 = _fh.read()
-    text = _strip_keep_len(raw2)
-    # 在目标 task_force 的 } 前插入
-    p2, rel2, st2, en2, _r = _navy_locate(root, fi, ti)
-    if not p2:
+    # COW 后直接按 dst 内局部序号定位，避免 _layer_files 提前导致全局 fi 漂移
+    st2, en2, raw2 = _navy_locate_in_file(dst, lfi, lti)
+    if st2 < 0:
         return {"ok": False, "msg": "重新定位失败"}
     ins = _ship_line(name, definition, exp)
     new_text = _insert_before_close(raw2, en2, ins)
@@ -4843,7 +4937,7 @@ def navy_add_tf(root, fi, name=None, location=None, tag=None):
     f = fleets[fi]
     nm = name or ("新特遣队")
     loc = int(location) if location else f["naval_base"]
-    p, rel, st, en, raw = _navy_locate(root, fi, None)
+    p, rel, lfi, _lti, st, en, raw = _navy_find_local(root, fi, None)
     if not p:
         return {"ok": False, "msg": "找不到第 %d 支舰队" % (fi + 1)}
     tgt, err = _units_write_base(root)
@@ -4857,10 +4951,8 @@ def navy_add_tf(root, fi, name=None, location=None, tag=None):
             _sh.copyfile(p, dst)
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
-    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
-        raw2 = _fh.read()
-    p2, rel2, st2, en2, _r = _navy_locate(root, fi, None)
-    if not p2:
+    st2, en2, raw2 = _navy_locate_in_file(dst, lfi, None)
+    if st2 < 0:
         return {"ok": False, "msg": "重新定位失败"}
     block = ('\t\t\ttask_force = {\n'
              '\t\t\t\tname = "%s"\n'
@@ -4875,6 +4967,7 @@ def navy_add_tf(root, fi, name=None, location=None, tag=None):
 def navy_set_ship(root, fi, ti, si, fields):
     """改一艘船的 name / definition / experience。"""
     root = _paths._pick(root)
+    fields = fields or {}
     try:
         fi, ti, si = int(fi), int(ti), int(si)
     except Exception:
@@ -4893,8 +4986,14 @@ def navy_set_ship(root, fi, ti, si, fields):
     nm = fields.get("name", cur["name"])
     df = fields.get("definition", cur["definition"])
     ex = fields.get("exp")
+    exv = None
+    if ex not in (None, ""):
+        try:
+            exv = "%g" % float(ex)
+        except Exception:
+            return {"ok": False, "msg": "经验值必须是数字"}
 
-    p, rel, st, en, raw = _navy_locate(root, fi, ti)
+    p, rel, lfi, lti, st, en, raw = _navy_find_local(root, fi, ti)
     if not p:
         return {"ok": False, "msg": "定位失败"}
     tgt, err = _units_write_base(root)
@@ -4908,68 +5007,38 @@ def navy_set_ship(root, fi, ti, si, fields):
             _sh.copyfile(p, dst)
         except Exception as e:
             return {"ok": False, "msg": "复制来源失败：%s" % e}
-    with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
-        raw2 = _fh.read()
-    p2, rel2, st2, en2, _r = _navy_locate(root, fi, ti)
-    if not p2:
+    # COW 后直接按 dst 内局部序号定位，避免 _layer_files 提前导致全局 fi 漂移
+    st2, en2, raw2 = _navy_locate_in_file(dst, lfi, lti)
+    if st2 < 0:
         return {"ok": False, "msg": "重新定位失败"}
     seg = raw2[st2:en2]
-    seg2 = seg
-    if nm and nm != cur["name"]:
-        seg2 = re.sub(r'name\s*=\s*"[^"]*"',
-                      lambda m: 'name = "%s"' % nm.replace('"', ""), seg2, count=1)
-    if df and df != cur["definition"]:
-        seg2 = re.sub(r'definition\s*=\s*[A-Za-z0-9_]+',
-                      lambda m: 'definition = %s' % df, seg2, count=1)
-    if ex not in (None, ""):
-        try:
-            exv = "%g" % float(ex)
-        except Exception:
-            return {"ok": False, "msg": "经验值必须是数字"}
-        if re.search(r'start_experience_factor\s*=\s*[\d.]+', seg2):
-            seg2 = re.sub(r'start_experience_factor\s*=\s*[\d.]+',
-                          lambda m: 'start_experience_factor = %s' % exv, seg2, count=1)
-        else:
-            seg2 = re.sub(r'(\bship\s*=\s*\{)',
-                          lambda m: m.group(1) + ' start_experience_factor = %s' % exv,
-                          seg2, count=1)
-    # 只在第 si 艘那一行动手：按 ship 出现次序定位
-    lines = seg2.splitlines(True)
-    cnt = -1
-    out = []
-    for ln in lines:
-        if re.search(r'\bship\s*=\s*\{', ln):
-            cnt += 1
-        out.append(ln)
-    if cnt < si:
+    ship_spans = find_blocks(_strip_keep_len(seg), "ship")
+    if si >= len(ship_spans):
         return {"ok": False, "msg": "重新定位第 %d 艘失败" % (si + 1)}
-    # 用逐行替换实现（简单可靠）
-    idx2 = -1
-    res = []
-    for ln in seg.splitlines(True):
-        if re.search(r'\bship\s*=\s*\{', ln):
-            idx2 += 1
-            if idx2 == si:
-                newln = ln
-                if nm and nm != cur["name"]:
-                    newln = re.sub(r'name\s*=\s*"[^"]*"',
-                                   lambda m: 'name = "%s"' % nm.replace('"', ""), newln, count=1)
-                if df and df != cur["definition"]:
-                    newln = re.sub(r'definition\s*=\s*[A-Za-z0-9_]+',
-                                   lambda m: 'definition = %s' % df, newln, count=1)
-                if ex not in (None, ""):
-                    exv = "%g" % float(ex)
-                    if re.search(r'start_experience_factor\s*=\s*[\d.]+', newln):
-                        newln = re.sub(r'start_experience_factor\s*=\s*[\d.]+',
-                                       lambda m: 'start_experience_factor = %s' % exv, newln, count=1)
-                    else:
-                        newln = re.sub(r'(\bship\s*=\s*\{)',
-                                       lambda m: m.group(1) + ' start_experience_factor = %s' % exv,
-                                       newln, count=1)
-                res.append(newln)
-                continue
-        res.append(ln)
-    new_seg = "".join(res)
+    sa, se, _sb = ship_spans[si]
+    s_chunk = seg[sa:se]
+    new_chunk = s_chunk
+    if nm and nm != cur["name"]:
+        safe_nm = str(nm).replace('"', "")
+        if re.search(r'\bname\s*=\s*"[^"]*"', new_chunk):
+            new_chunk = re.sub(r'\bname\s*=\s*"[^"]*"',
+                               lambda m: 'name = "%s"' % safe_nm, new_chunk, count=1)
+        elif re.search(r'\bname\s*=\s*[^\s\}#]+', new_chunk):
+            new_chunk = re.sub(r'\bname\s*=\s*[^\s\}#]+',
+                               lambda m: 'name = "%s"' % safe_nm, new_chunk, count=1)
+        else:
+            new_chunk = '{ name = "%s"' % safe_nm + new_chunk[1:]
+    if df and df != cur["definition"]:
+        if re.search(r'\bdefinition\s*=\s*"?[A-Za-z0-9_]+"?', new_chunk):
+            new_chunk = re.sub(r'\bdefinition\s*=\s*"?[A-Za-z0-9_]+"?',
+                               lambda m: 'definition = %s' % df, new_chunk, count=1)
+    if exv is not None:
+        if re.search(r'\bstart_experience_factor\s*=\s*[\d.]+', new_chunk):
+            new_chunk = re.sub(r'\bstart_experience_factor\s*=\s*[\d.]+',
+                               lambda m: 'start_experience_factor = %s' % exv, new_chunk, count=1)
+        else:
+            new_chunk = '{ start_experience_factor = %s' % exv + new_chunk[1:]
+    new_seg = seg[:sa] + new_chunk + seg[se:]
     if new_seg == seg:
         return {"ok": True, "msg": "没有改动"}
     new_text = raw2[:st2] + new_seg + raw2[en2:]
@@ -8468,6 +8537,7 @@ def copy_item(kind, item_id, new_id):
         path = os.path.join(dest, "common", "units", "equipment", "zz_focus_editor_copied.txt")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         _append_container(path, "equipments", block)
+        _m_equipment._ensure_script_enum_equipment(dest, new_id)
         rel = os.path.join("common", "units", "equipment", "zz_focus_editor_copied.txt")
         ents.setdefault("simp_chinese", {})[new_id] = src.get("name", new_id)
     elif kind == "tech":
@@ -8528,7 +8598,7 @@ def save_design(archetype, modules, org="", name="", target=""):
     CHANGED[path] = os.path.join("common", "units", "equipment", "zz_focus_editor_designs.txt")
     return True, "设计草稿已保存到模组"
 
-def save_variant(arch, modules, name="", org="", target=""):
+def save_variant(arch, modules, name="", org="", target="", upgrades=None):
     dest = writable_target(target)
     if not dest:
         return False, "没有可写的模组"
@@ -8536,35 +8606,50 @@ def save_variant(arch, modules, name="", org="", target=""):
     if not eq:
         return False, "没有找到底盘 " + str(arch)
     slots = eq.get("slots") or []
-    if not slots:
+    upgs = upgrades or {}
+    mod_lines = []
+    upg_lines = []
+    if slots:
+        missing = []
+        for sl in slots:
+            mid = (modules or {}).get(sl["slot"])
+            if mid:
+                mod_lines.append("\t\t\t\t%s = %s" % (sl["slot"], mid))
+            elif sl.get("required"):
+                missing.append(sl["slot"])
+        if missing and not (not modules and upgs):
+            return False, "必装槽位未选择：%s" % "、".join(missing)
+    elif not upgs:
         return False, "这个底盘没有 module_slots 定义，无法生成变体"
-    lines = []
-    missing = []
-    for sl in slots:
-        mid = (modules or {}).get(sl["slot"])
-        if mid:
-            lines.append("\t\t\t\t%s = %s" % (sl["slot"], mid))
-        elif sl.get("required"):
-            missing.append(sl["slot"])
-    if missing:
-        return False, "必装槽位未选择：%s" % "、".join(missing)
-    if not lines:
+    if upgs:
+        if not isinstance(upgs, dict):
+            return False, "upgrades 参数格式不合法"
+        for uk, uv in upgs.items():
+            if not re.match(r'^[A-Za-z0-9_]+$', str(uk)) or not re.match(r'^-?\d+(?:\.\d+)?$', str(uv).strip()):
+                return False, "升级项只能是 标识符 = 数字：%s = %s" % (uk, uv)
+            upg_lines.append("\t\t\t\t%s = %s" % (uk, str(uv).strip()))
+    if not mod_lines and not upg_lines:
         return False, "至少选择一个模块"
     nm = re.sub(r'[^A-Za-z0-9_]', '', (name or arch))[:40] or "design"
     effect_id = "zzfe_variant_" + nm
-    effect = ("%s = {\n"
-              "\tcreate_equipment_variant = {\n"
-              "\t\tname = \"%s\"\n"
-              "\t\ttype = %s\n"
-              "\t\tparent_version = 0\n"
-              "\t\tallow_without_tech = yes\n"
-              "\t\tmodules = {\n%s\n\t\t}\n"
-              "\t}\n}\n") % (effect_id, (name or arch).replace('"', ""), arch, "\n".join(lines))
+    inner = [
+        '\t\tname = "%s"' % (name or arch).replace('"', ""),
+        '\t\ttype = %s' % arch,
+        '\t\tparent_version = 0',
+        '\t\tallow_without_tech = yes',
+    ]
+    if mod_lines:
+        inner.append("\t\tmodules = {\n%s\n\t\t}" % "\n".join(mod_lines))
+    if upg_lines:
+        inner.append("\t\tupgrades = {\n%s\n\t\t}" % "\n".join(upg_lines))
+    effect = ("%s = {\n\tcreate_equipment_variant = {\n%s\n\t}\n}\n"
+              % (effect_id, "\n".join(inner)))
     d = os.path.join(dest, "common", "scripted_effects")
     os.makedirs(d, exist_ok=True)
-    path = os.path.join(d, "zz_focus_editor_variants.txt")
+    fn = unique_editor_filename(dest, "common/scripted_effects", "zz_focus_editor_variants.txt")
+    path = os.path.join(d, fn)
     if os.path.exists(path):
-        with io.open(path, encoding="utf-8", errors="replace", newline="") as _fh:
+        with io.open(path, encoding="utf-8-sig", errors="replace", newline="") as _fh:
             old = _fh.read()
     else:
         old = ""
@@ -8576,9 +8661,9 @@ def save_variant(arch, modules, name="", org="", target=""):
     else:
         newtext = old.rstrip() + ("\n\n" if old.strip() else "") + effect
     snapshot(path)
-    with io.open(path, "w", encoding="utf-8", newline="") as _fh:
-        _fh.write(newtext)
-    CHANGED[path] = os.path.join("common", "scripted_effects", "zz_focus_editor_variants.txt")
+    _atomic_write(path, _bom_for(path) + newtext.encode("utf-8"))
+    CHANGED[path] = os.path.join("common", "scripted_effects", fn)
+    reload_data()
     return True, "已生成装备变体效果（%s），可插入国策/事件或直接调用" % effect_id
 
 

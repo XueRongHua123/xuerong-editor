@@ -6,7 +6,11 @@ import os
 import re
 
 from xuerong import state
-from xuerong.core.paths import _replace_owner, _top_mod, is_under_game, mod_layers
+from xuerong.core.ideologies import load_ideology_names
+from xuerong.core.paths import (_replace_owner, _top_mod,
+                                effective_layer_files, is_under_game,
+                                mod_layers)
+from xuerong.core.text import _strip_keep_len, brace_match
 from xuerong.model.diagnose._base import _finding
 
 
@@ -468,10 +472,15 @@ def _diag_localisation_missing(root, own_only=True):
             cands.append((_layer_rel(top, base_dir, rel), i, ln.strip(), what, k))
 
     for base_dir in targets:
-        # 剧本
-        collect(base_dir, "common/bookmarks/zz_editor_bookmarks.txt",
-                "common/bookmarks/zz_editor_bookmarks.txt",
-                r'^\s*(?:name|desc)\s*=\s*"?([A-Za-z_][A-Za-z0-9_.\-]*)"?', "剧本名/描述")
+        # 剧本（扫描目录下所有 .txt，兼容 unique_editor_filename 派生名）
+        bd = os.path.join(base_dir, "common", "bookmarks")
+        if os.path.isdir(bd):
+            for fn in sorted(os.listdir(bd)):
+                if fn.lower().endswith(".txt"):
+                    collect(base_dir, "common/bookmarks/" + fn,
+                            "common/bookmarks/" + fn,
+                            r'^\s*(?:name|desc)\s*=\s*"?([A-Za-z_][A-Za-z0-9_.\-]*)"?',
+                            "剧本名/描述")
         # 人物
         cd = os.path.join(base_dir, "common", "characters")
         if os.path.isdir(cd):
@@ -555,6 +564,38 @@ _TAG_NOT_A_TAG = {
 _TAG_SKIP_DIRS = ("common/names", "common/units/names", "common/units/codenames")
 
 
+def _collect_effective_tags(top):
+    """收集当前叠加链实际生效的国家 tag 与别名集合（尊重 replace_path）。"""
+    known = set()
+    layers = mod_layers(top) or [top] or []
+    for sub in ("common/country_tags", "common/country_tag_aliases"):
+        srcs = layers
+        owner = _replace_owner(top, sub)
+        if owner and owner in layers:
+            # 只剩接管层及以上有效
+            srcs = layers[layers.index(owner):]
+        for layer in srcs:
+            td = os.path.join(layer, *sub.split("/"))
+            if not os.path.isdir(td):
+                continue
+            try:
+                fns = os.listdir(td)
+            except Exception:
+                continue
+            for fn in fns:
+                if not fn.endswith(".txt"):
+                    continue
+                try:
+                    with io.open(os.path.join(td, fn), encoding="utf-8-sig",
+                                 errors="replace") as _fh:
+                        txt = _fh.read()
+                except Exception:
+                    continue
+                for m in re.finditer(r'(?m)^\s*([A-Z][A-Z0-9]{2})\s*=', txt):
+                    known.add(m.group(1))
+    return known
+
+
 def _diag_tag_undefined(root, own_only=True):
     """引用了不存在的国家 tag。
 
@@ -587,33 +628,7 @@ def _diag_tag_undefined(root, own_only=True):
         return out
 
     # 1) 收集「实际能生效」的 tag。
-    known = set()
-    layers = mod_layers(top) or [top] or []
-    for sub in ("common/country_tags", "common/country_tag_aliases"):
-        srcs = layers
-        owner = _replace_owner(top, sub)
-        if owner and owner in layers:
-            # 只剩接管层及以上有效
-            srcs = layers[layers.index(owner):]
-        for layer in srcs:
-            td = os.path.join(layer, *sub.split("/"))
-            if not os.path.isdir(td):
-                continue
-            try:
-                fns = os.listdir(td)
-            except Exception:
-                continue
-            for fn in fns:
-                if not fn.endswith(".txt"):
-                    continue
-                try:
-                    with io.open(os.path.join(td, fn), encoding="utf-8-sig",
-                                 errors="replace") as _fh:
-                        txt = _fh.read()
-                except Exception:
-                    continue
-                for m in re.finditer(r'(?m)^\s*([A-Z][A-Z0-9]{2})\s*=', txt):
-                    known.add(m.group(1))
+    known = _collect_effective_tags(top)
     if not known:
         return out
 
@@ -729,4 +744,382 @@ def _diag_division_template_missing(root, own_only=True):
             % (fn, i, tname),
             rel, i, raw,
             '补一个 division_template = { name = "%s" ... }，或改成已存在的模板名' % tname))
+    return out
+
+
+_BOOKMARK_NON_TAG_BLOCKS = {
+    "filters", "label_order", "effect", "---", "zzz",
+    "available", "ideas", "focuses", "label", "required_dlc", "randomize_weather",
+}
+
+
+def _bm_brace_error(text):
+    """检查去注释文本的花括号与引号配平，返回 (ok, err_line, detail)。"""
+    line = 1
+    depth = 0
+    instr = False
+    open_line = 1
+    str_line = 1
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\n":
+            line += 1
+        elif ch == '"' and not (i > 0 and text[i - 1] == "\\"):
+            if not instr:
+                str_line = line
+            instr = not instr
+        elif not instr:
+            if ch == "{":
+                if depth == 0:
+                    open_line = line
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth < 0:
+                    return False, line, "多余的右花括号 '}'"
+        i += 1
+    if instr:
+        return False, str_line, "存在未闭合的双引号字符串"
+    if depth != 0:
+        return False, open_line, "存在 %d 个未闭合的 '{'" % depth
+    return True, 0, ""
+
+
+def _bm_top_entries(src):
+    """解析块直接子级条目：[(key, is_quoted, is_block, val_or_body, key_pos, inner_offset)]。"""
+    out = []
+    i = 0
+    n = len(src)
+    while i < n:
+        while i < n and src[i] in " \t\r\n":
+            i += 1
+        if i >= n:
+            break
+        key_pos = i
+        if src[i] == '"':
+            i += 1
+            buf = []
+            while i < n:
+                ch = src[i]
+                if ch == "\\" and i + 1 < n:
+                    buf.append(src[i + 1])
+                    i += 2
+                    continue
+                if ch == '"':
+                    i += 1
+                    break
+                buf.append(ch)
+                i += 1
+            key = "".join(buf)
+            is_quoted = True
+        else:
+            m = re.match(r'[A-Za-z0-9_.\-:]+', src[i:])
+            if not m:
+                i += 1
+                continue
+            key = m.group(0)
+            i += m.end()
+            is_quoted = False
+
+        while i < n and src[i] in " \t\r\n":
+            i += 1
+        if i >= n or src[i] != "=":
+            continue
+        i += 1
+        while i < n and src[i] in " \t\r\n":
+            i += 1
+        if i >= n:
+            break
+
+        if src[i] == "{":
+            end = brace_match(src, i)
+            out.append((key, is_quoted, True, src[i + 1:end - 1], key_pos, i + 1))
+            i = end
+        elif src[i] == '"':
+            val_pos = i + 1
+            i += 1
+            buf = []
+            while i < n:
+                ch = src[i]
+                if ch == "\\" and i + 1 < n:
+                    buf.append(src[i + 1])
+                    i += 2
+                    continue
+                if ch == '"':
+                    i += 1
+                    break
+                buf.append(ch)
+                i += 1
+            out.append((key, is_quoted, False, "".join(buf), key_pos, val_pos))
+        else:
+            val_pos = i
+            while i < n and src[i] not in " \t\r\n{}":
+                i += 1
+            out.append((key, is_quoted, False, src[val_pos:i], key_pos, val_pos))
+    return out
+
+
+def _diag_bookmarks(root, own_only=True):
+    """书签 L2 静态检查（BOM / 花括号 / 结构 / 四段日期 / tag / 意识形态 / default / loc / gfx）。"""
+    out = []
+    top, targets = _scan_targets(root, own_only)
+    if not targets:
+        return out
+
+    target_set = {os.path.normcase(os.path.abspath(t)) for t in targets}
+    bm_files = []
+    if own_only:
+        bd = os.path.join(top, "common", "bookmarks")
+        if os.path.isdir(bd):
+            for fn in sorted(os.listdir(bd)):
+                if fn.lower().endswith(".txt"):
+                    fp = os.path.join(bd, fn)
+                    if os.path.isfile(fp):
+                        bm_files.append((top, fp, fn))
+    else:
+        for base_dir, d, fn in effective_layer_files("common/bookmarks", top):
+            if os.path.normcase(os.path.abspath(base_dir)) in target_set:
+                bm_files.append((base_dir, os.path.join(d, fn), fn))
+
+    if not bm_files:
+        return out
+
+    known_tags = _collect_effective_tags(top)
+    valid_ides = set(load_ideology_names(top))
+    loc_keys = _loc_keys(top)
+    known_gfx = _gfx_names(top)
+
+    def _line_str(raw_lines, ln_no):
+        if 1 <= ln_no <= len(raw_lines):
+            return raw_lines[ln_no - 1].strip()
+        return ""
+
+    for base_dir, fp, fn in bm_files:
+        rel = _layer_rel(top, base_dir, "common/bookmarks/" + fn)
+        try:
+            with io.open(fp, "rb") as _fh:
+                raw_bytes = _fh.read()
+        except Exception:
+            continue
+
+        # 1) BOM 检查
+        if raw_bytes.startswith(b"\xef\xbb\xbf"):
+            out.append(_finding(
+                "bookmark.bom", "error",
+                "%s 带有 UTF-8 BOM，HOI4 读取 common/bookmarks/*.txt 会把 BOM 吃进首个键名导致解析失败" % fn,
+                rel, 1, "",
+                "用无 BOM UTF-8 重新保存该文件"))
+
+        raw = raw_bytes.decode("utf-8-sig", "replace")
+        raw_lines = raw.splitlines()
+        text = _strip_keep_len(raw)
+
+        # 2) 花括号配平
+        b_ok, b_line, b_msg = _bm_brace_error(text)
+        if not b_ok:
+            out.append(_finding(
+                "bookmark.braces", "error",
+                "%s 第 %d 行花括号或引号未配平：%s" % (fn, b_line, b_msg),
+                rel, b_line, _line_str(raw_lines, b_line),
+                "补齐或删去多余的 '{' / '}' / '\"'"))
+            continue
+
+        # 3) 结构检查（放行纯空或纯注释覆写占位文件，如 MD 的 the_gathering_storm.txt）
+        if not text.strip():
+            continue
+        bm_containers = [e for e in _bm_top_entries(text) if e[2] and e[0] == "bookmarks"]
+        if not bm_containers:
+            first_ln = next((idx for idx, ln in enumerate(raw_lines, 1)
+                             if ln.strip() and not ln.strip().startswith("#")), 1)
+            out.append(_finding(
+                "bookmark.structure", "error",
+                "%s 非空但缺少顶层 bookmarks = { ... } 块" % fn,
+                rel, first_ln, _line_str(raw_lines, first_ln),
+                "用 bookmarks = { bookmark = { ... } } 包裹剧本定义"))
+            continue
+
+        bm_blocks = []
+        for _k, _q, _ib, ob_src, _kp, ob_off in bm_containers:
+            for k2, _q2, ib2, b_src, kp2, b_off in _bm_top_entries(ob_src):
+                if ib2 and k2 == "bookmark":
+                    bm_blocks.append((b_src, ob_off + b_off, ob_off + kp2))
+        if not bm_blocks:
+            ln0 = text[:bm_containers[0][4]].count("\n") + 1
+            out.append(_finding(
+                "bookmark.structure", "warning",
+                "%s 的 bookmarks = { } 块内没有任何 bookmark = { ... } 剧本" % fn,
+                rel, ln0, _line_str(raw_lines, ln0),
+                "至少添加一个 bookmark = { ... } 剧本块"))
+            continue
+
+        for b_src, b_off, bm_hdr_pos in bm_blocks:
+            bm_hdr_line = text[:bm_hdr_pos].count("\n") + 1
+            bm_name = None
+            bm_desc = None
+            bm_date = None
+            bm_pic = None
+            bm_dc = None
+            country_blocks = []
+
+            for k, _q, is_blk, val, kp, inner_off in _bm_top_entries(b_src):
+                ln_no = text[:b_off + kp].count("\n") + 1
+                if is_blk:
+                    if k.lower() not in _BOOKMARK_NON_TAG_BLOCKS:
+                        country_blocks.append((k, ln_no, val, b_off + inner_off))
+                    continue
+                if k == "name":
+                    bm_name = (val.strip(), ln_no)
+                elif k == "desc":
+                    bm_desc = (val.strip(), ln_no)
+                elif k == "date":
+                    bm_date = (val.strip(), ln_no)
+                elif k == "picture":
+                    bm_pic = (val.strip(), ln_no)
+                elif k == "default_country":
+                    bm_dc = (val.strip(), ln_no)
+
+            # 4) 四段日期校验 YYYY.M.D.H
+            if bm_date is None:
+                out.append(_finding(
+                    "bookmark.date", "error",
+                    "%s 第 %d 行的 bookmark 缺少 date 字段" % (fn, bm_hdr_line),
+                    rel, bm_hdr_line, _line_str(raw_lines, bm_hdr_line),
+                    "补充四段日期，例如 date = 1936.1.1.12"))
+            else:
+                dt_val, dt_ln = bm_date
+                m_dt = re.match(r'^(\d{4})\.(\d{1,2})\.(\d{1,2})\.(\d{1,2})$', dt_val)
+                date_ok = False
+                if m_dt:
+                    _y, mo, da, hr = (int(m_dt.group(1)), int(m_dt.group(2)),
+                                      int(m_dt.group(3)), int(m_dt.group(4)))
+                    date_ok = (1 <= mo <= 12) and (1 <= da <= 31) and (0 <= hr <= 24)
+                if not date_ok:
+                    out.append(_finding(
+                        "bookmark.date", "error",
+                        "%s 第 %d 行剧本日期 %s 非法（必须为 YYYY.M.D.H，月 1-12、日 1-31、时 0-24）"
+                        % (fn, dt_ln, dt_val),
+                        rel, dt_ln, _line_str(raw_lines, dt_ln),
+                        "改为合法四段日期（如 1936.1.1.12）"))
+
+            # 7a) default_country 校验（允许如 TNO 仅含 date 的占位第二书签缺省，其余书签缺或无效报 error）
+            if bm_dc is not None:
+                if not bm_dc[0]:
+                    out.append(_finding(
+                        "bookmark.default_country", "error",
+                        "%s 第 %d 行的 default_country 为空" % (fn, bm_dc[1]),
+                        rel, bm_dc[1], _line_str(raw_lines, bm_dc[1]),
+                        '补充合法的国家 tag，例如 default_country = "GER"'))
+                elif known_tags and bm_dc[0] not in known_tags:
+                    dc_val, dc_ln = bm_dc
+                    out.append(_finding(
+                        "bookmark.default_country", "error",
+                        "%s 第 %d 行的 default_country = %s 不在当前生效 country_tags 中"
+                        % (fn, dc_ln, dc_val),
+                        rel, dc_ln, _line_str(raw_lines, dc_ln),
+                        "改为当前 mod 已定义的国家 tag"))
+            elif country_blocks or bm_name:
+                out.append(_finding(
+                    "bookmark.default_country", "error",
+                    "%s 第 %d 行的 bookmark 缺少 default_country" % (fn, bm_hdr_line),
+                    rel, bm_hdr_line, _line_str(raw_lines, bm_hdr_line),
+                    '补充合法的国家 tag，例如 default_country = "GER"'))
+
+            # 8) 本地化键与贴图校验
+            if loc_keys:
+                for lbl, item in (("剧本名 name", bm_name), ("剧本描述 desc", bm_desc)):
+                    if item and item[0] and item[0] not in loc_keys:
+                        out.append(_finding(
+                            "bookmark.loc", "info",
+                            "%s 第 %d 行的%s引用键 %s，但 localisation 里未找到该键"
+                            % (fn, item[1], lbl, item[0]),
+                            rel, item[1], _line_str(raw_lines, item[1]),
+                            '在 localisation/<lang>/ 下补一条 %s:0 "显示文本"' % item[0]))
+            if known_gfx and bm_pic and bm_pic[0] and bm_pic[0] not in known_gfx:
+                pic_val, pic_ln = bm_pic
+                out.append(_finding(
+                    "bookmark.picture", "warning",
+                    "%s 第 %d 行的 picture = %s 在 interface/*.gfx 中找不到"
+                    % (fn, pic_ln, pic_val),
+                    rel, pic_ln, _line_str(raw_lines, pic_ln),
+                    "确认该 GFX_ 贴图已在 interface/*.gfx 中定义"))
+
+            # 5) 国家 tag 校验 & 6) ideology 校验
+            for tag_key, c_ln, c_src, c_off in country_blocks:
+                if known_tags:
+                    if tag_key not in known_tags:
+                        out.append(_finding(
+                            "bookmark.tag", "error",
+                            "%s 第 %d 行的国家块 %s 不在当前生效 country_tags / aliases 中"
+                            % (fn, c_ln, tag_key),
+                            rel, c_ln, _line_str(raw_lines, c_ln),
+                            "确认该国家 tag 已在 common/country_tags 中定义"))
+                elif not re.match(r'^[A-Z][A-Z0-9]{2}$', tag_key):
+                    out.append(_finding(
+                        "bookmark.tag", "warning",
+                        "%s 第 %d 行的国家块 %s 不符合 3 位大写 tag 格式"
+                        % (fn, c_ln, tag_key),
+                        rel, c_ln, _line_str(raw_lines, c_ln),
+                        "使用 3 位大写字母/数字组成合法国家 tag"))
+
+                for ck, _cq, c_is_blk, c_val, c_kp, _c_ioff in _bm_top_entries(c_src):
+                    if c_is_blk:
+                        continue
+                    if ck == "ideology":
+                        ide_val = c_val.strip()
+                        ide_ln = text[:c_off + c_kp].count("\n") + 1
+                        if ide_val not in valid_ides:
+                            sample = ", ".join(sorted(valid_ides)[:4])
+                            out.append(_finding(
+                                "bookmark.ideology", "error",
+                                "%s 第 %d 行国家 %s 的 ideology = %s 不在当前 mod 意识形态列表（%s...）中"
+                                % (fn, ide_ln, tag_key, ide_val, sample),
+                                rel, ide_ln, _line_str(raw_lines, ide_ln),
+                                "改为当前 mod common/ideologies/ 下定义的合法意识形态名"))
+
+    # 7b) 全链生效书签 multi_default 检查
+    default_hits = []
+    for base_dir, d, fn in effective_layer_files("common/bookmarks", top):
+        fp = os.path.join(d, fn)
+        try:
+            with io.open(fp, encoding="utf-8-sig", errors="replace") as _fh:
+                raw = _fh.read()
+        except Exception:
+            continue
+        raw_lines = raw.splitlines()
+        text = _strip_keep_len(raw)
+        if not text.strip():
+            continue
+        ok_b, _bl, _bm = _bm_brace_error(text)
+        if not ok_b:
+            continue
+        rel = _layer_rel(top, base_dir, "common/bookmarks/" + fn)
+        for _k, _q, is_blk, ob_src, _kp, ob_off in _bm_top_entries(text):
+            if not is_blk or _k != "bookmarks":
+                continue
+            for k2, _q2, ib2, b_src, _kp2, b_off in _bm_top_entries(ob_src):
+                if not ib2 or k2 != "bookmark":
+                    continue
+                for bk, _bq, b_is_blk, b_val, b_kp, _bio in _bm_top_entries(b_src):
+                    if not b_is_blk and bk == "default" and b_val.strip().lower() == "yes":
+                        ln_no = text[:ob_off + b_off + b_kp].count("\n") + 1
+                        default_hits.append((base_dir, fn, rel, ln_no, _line_str(raw_lines, ln_no)))
+
+    if len(default_hits) > 1:
+        ab_top = os.path.normcase(os.path.abspath(top))
+        if own_only:
+            top_hits = [h for h in default_hits
+                        if os.path.normcase(os.path.abspath(h[0])) == ab_top]
+            emit_hits = top_hits[1:] if len(top_hits) > 1 else top_hits
+        else:
+            emit_hits = [h for h in default_hits[1:] if not is_under_game(h[0])]
+        for _bd, fn, rel, ln_no, excerpt in emit_hits:
+            out.append(_finding(
+                "bookmark.multi_default", "warning",
+                "%s 第 %d 行设置了 default = yes，但当前生效剧本中已有 %d 个 default = yes（存在默认剧本冲突）"
+                % (fn, ln_no, len(default_hits)),
+                rel, ln_no, excerpt,
+                "非主剧本建议移除 default = yes，只保留一个默认选中剧本"))
+
     return out

@@ -117,7 +117,7 @@ def load_units(root=None, force=False):
     templates, divisions = [], []
     seen_tpl = {}
     seen_div = 0
-    for p in (files or []):
+    for p in reversed(files or []):
         fn = os.path.basename(p)
         rel = os.path.join("history", "units", fn)
         src = ""

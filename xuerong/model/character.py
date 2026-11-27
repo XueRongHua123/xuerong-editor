@@ -23,8 +23,9 @@ import os
 import re
 
 from xuerong import state
-from xuerong.core.paths import (_layer_files, _replace_owner, is_under_game,
-                                mod_layers, unique_editor_filename, write_base)
+from xuerong.core.paths import (_layer_files, _replace_owner, effective_layer_files,
+                                is_under_game, mod_layers, unique_editor_filename,
+                                write_base)
 from xuerong.core.text import (_atomic_write, _bom_for, _first, _strip_keep_len, brace_depth_at,
                                brace_match, date_block_spans, find_blocks,
                                insert_before_date_or_end)
@@ -336,12 +337,12 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
         # 所以先把原版那份复制过来，再往里面追加。
         if not os.path.exists(p):
             src = None
-            for b in reversed(mod_layers(tgt) or []):
-                if not b:
-                    continue
-                cand = os.path.join(b, "common", "characters", country + ".txt")
-                if os.path.isfile(cand):
-                    src = cand
+            target_fn = (country + ".txt").lower()
+            for _b, d_eff, fn_eff in reversed(effective_layer_files("common/characters", tgt)):
+                if fn_eff.lower() == target_fn:
+                    cand = os.path.join(d_eff, fn_eff)
+                    if os.path.isfile(cand):
+                        src = cand
                     break
             if src:
                 try:
@@ -446,17 +447,9 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
     if country:
         try:
             hist = None
-            for b in reversed(mod_layers(tgt) or []):
-                if not b:
-                    continue
-                hd = os.path.join(b, "history", "countries")
-                if not os.path.isdir(hd):
-                    continue
-                for fn in os.listdir(hd):
-                    if fn.upper().startswith(country + " ") and fn.endswith(".txt"):
-                        hist = os.path.join(hd, fn)
-                        break
-                if hist:
+            for _b, hd, fn in reversed(effective_layer_files("history/countries", tgt)):
+                if fn.upper().startswith(country + " ") and fn.lower().endswith(".txt"):
+                    hist = os.path.join(hd, fn)
                     break
             if hist:
                 _hp, _hwhy = ensure_file_writable(tgt, "history/countries",

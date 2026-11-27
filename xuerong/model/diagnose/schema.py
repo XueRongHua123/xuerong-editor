@@ -166,6 +166,10 @@ def _diag_schema_unknown_field(root):
                 continue
             # 在目标块里，只看直接子级（深度等于进入时的深度）
             if depth == base_depth:
+                # 剧本里的国家块可能是裸 tag（如 GER = {），属动态内容键不是字段名
+                if schema_name == "bookmark" and re.match(r'^[A-Z][A-Z0-9]{2}\s*=\s*\{', st):
+                    depth += opens - closes
+                    continue
                 m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*[=<>]', st)
                 if m:
                     f = m.group(1)
@@ -187,8 +191,12 @@ def _diag_schema_unknown_field(root):
         for fn in sorted(os.listdir(ud)):
             if fn.endswith(".txt"):
                 scan("history/units/" + fn, "division", "oob")
-    # common/bookmarks：bookmark 块
-    scan("common/bookmarks/zz_editor_bookmarks.txt", "bookmark", "bookmark")
+    # common/bookmarks：bookmark 块（支持 unique_editor_filename 派生名与已有剧本文件）
+    bd = os.path.join(top, "common", "bookmarks")
+    if os.path.isdir(bd):
+        for fn in sorted(os.listdir(bd)):
+            if fn.endswith(".txt"):
+                scan("common/bookmarks/" + fn, "bookmark", "bookmark")
 
     return out
 

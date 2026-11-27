@@ -18,9 +18,9 @@ from xuerong.core import paths
 from xuerong.core.paths import (_layer_dirs, _top_mod, effective_layer_files,
                                 ensure_writable_file, is_readonly_mod, is_under_game,
                                 mod_layers, unique_editor_filename)
-from xuerong.core.text import (_atomic_write, _bom_for, _strip_keep_len, brace_match,
-                               braces_balanced, find_blocks, set_raw_block, set_scalar,
-                               strip_comments, top_items)
+from xuerong.core.text import (_atomic_write, _bom_for, _strip_keep_len, brace_depth_at,
+                               brace_match, braces_balanced, find_blocks, set_raw_block,
+                               set_scalar, strip_comments, top_items)
 from xuerong.model.history import snapshot
 from xuerong.model.loc import save_loc
 
@@ -37,6 +37,53 @@ def _reload():
         _RELOAD()
 
 
+def _parse_module_slots(clean_text):
+    """从去注释脚本文本中提取 module_slots 列表。"""
+    slots = []
+    for sm in re.finditer(r'module_slots\s*=\s*\{', clean_text):
+        sb = clean_text.find('{', sm.start())
+        se = brace_match(clean_text, sb)
+        if se <= sb:
+            continue
+        sbody = clean_text[sb + 1:se - 1]
+        for sk, sv, sbb in top_items(sbody):
+            if not sbb:
+                continue
+            req = re.search(r'(?m)^\s*required\s*=\s*(\w+)', sv)
+            cats = []
+            cmm = re.search(r'allowed_module_categories\s*=\s*\{', sv)
+            if cmm:
+                cb = sv.find('{', cmm.start())
+                ce = brace_match(sv, cb)
+                if ce > cb:
+                    cats = re.findall(r'[A-Za-z0-9_]+', sv[cb + 1:ce - 1])
+            slots.append({"slot": sk,
+                          "required": (req.group(1).lower() == "yes") if req else False,
+                          "categories": cats})
+    return slots
+
+
+def _fill_inherited_slots(eid, entry, equips):
+    """若装备自身未定义 module_slots，沿 archetype 链向上继承非空槽位（防环）。"""
+    if not entry or entry.get("slots"):
+        return
+    arch = (entry.get("props") or {}).get("archetype")
+    seen = {eid}
+    while arch and arch not in seen:
+        seen.add(arch)
+        parent = equips.get(arch)
+        if not parent:
+            break
+        pslots = parent.get("slots") or []
+        if pslots:
+            entry["slots"] = [
+                dict(s, categories=list(s.get("categories") or []))
+                for s in pslots
+            ]
+            break
+        arch = (parent.get("props") or {}).get("archetype")
+
+
 def _build_equip_entry(eid, inner_body, rel, src):
     clean = strip_comments(inner_body or "")
     yr = re.search(r'(?m)^\s*year\s*=\s*(\d+)', clean)
@@ -50,24 +97,7 @@ def _build_equip_entry(eid, inner_body, rel, src):
         m2 = re.search(r'(?m)^\s*%s\s*=\s*([^\s#]+)' % pk, clean)
         if m2 and not m2.group(1).startswith("{"):
             props[pk] = m2.group(1)
-    slots = []
-    for sm in re.finditer(r'module_slots\s*=\s*\{', clean):
-        sb = clean.find('{', sm.start())
-        se = brace_match(clean, sb)
-        sbody = clean[sb + 1:se - 1]
-        for sk, sv, sbb in top_items(sbody):
-            if not sbb:
-                continue
-            req = re.search(r'(?m)^\s*required\s*=\s*(\w+)', sv)
-            cats = []
-            cmm = re.search(r'allowed_module_categories\s*=\s*\{', sv)
-            if cmm:
-                cb = sv.find('{', cmm.start())
-                ce = brace_match(sv, cb)
-                cats = re.findall(r'[A-Za-z0-9_]+', sv[cb + 1:ce - 1])
-            slots.append({"slot": sk,
-                          "required": (req.group(1).lower() == "yes") if req else False,
-                          "categories": cats})
+    slots = _parse_module_slots(clean)
     return {
         "id": eid,
         "file": rel,
@@ -96,6 +126,7 @@ def equip_view(eid):
 def load_equipment(root):
     # 按 HOI4 实机规则读（respect replace_path 与同名文件整文件覆写，底层 → 顶层）。
     n = 0
+    equips = state.equipments()
     for base, d, fn in effective_layer_files("common/units/equipment", root):
         name = os.path.basename(base.rstrip("\\/")) or base
         rel = os.path.join("common", "units", "equipment", fn)
@@ -108,10 +139,35 @@ def load_equipment(root):
             for k, v, b in top_items(body):
                 if not b:
                     continue
-                state.equipments()[k] = _build_equip_entry(k, v, rel, name)
+                equips[k] = _build_equip_entry(k, v, rel, name)
                 n += 1
+    for eid, entry in equips.items():
+        _fill_inherited_slots(eid, entry, equips)
     return n
 
+
+def _equip_locate_in_file(path, eid):
+    """在单个文件里定位指定装备块，返回 (block_start, block_end, raw_body)。"""
+    try:
+        with io.open(path, encoding="utf-8-sig", errors="replace") as f:
+            raw = f.read()
+    except Exception:
+        return None, None, None
+    # 必须用保长版本：算出的偏移直接切 raw，保留原文注释。
+    text = _strip_keep_len(raw)
+    pat = re.compile(r'(?m)^[ \t]*' + re.escape(eid) + r'[ \t]*=[ \t]*\{')
+    for _s, _e, body in find_blocks(text, "equipments"):
+        body_start = _s + 1
+        for m in pat.finditer(body):
+            if brace_depth_at(body, m.start()) != 0:
+                continue
+            rel_b = m.end() - 1
+            b_abs = body_start + rel_b
+            e_abs = brace_match(text, b_abs)
+            if e_abs <= b_abs:
+                continue
+            return b_abs, e_abs, raw[b_abs + 1:e_abs - 1]
+    return None, None, None
 
 
 def _equip_locate(root, eid):
@@ -121,29 +177,9 @@ def _equip_locate(root, eid):
     返回 (base, path, block_start, block_end, block_body)"""
     for base, d, fn in reversed(effective_layer_files("common/units/equipment", root)):
         p = os.path.join(d, fn)
-        try:
-            with io.open(p, encoding="utf-8-sig", errors="replace") as f:
-                raw = f.read()
-        except Exception:
-            continue
-        # 必须用保长版本：下面算出的偏移要能直接切 raw
-        text = _strip_keep_len(raw)
-        for _s, _e, body in find_blocks(text, "equipments"):
-            # top_items 的第三项是「有没有 {} 块」的布尔值，不是偏移，
-            # 所以这里自己按 key 在 body 里定位 '{'，再换算到 text 坐标系。
-            for k, _v, has_body in top_items(body):
-                if k != eid or not has_body:
-                    continue
-                m = re.search(r'(?m)^[ \t]*' + re.escape(eid) + r'[ \t]*=[ \t]*\{', body)
-                if not m:
-                    continue
-                rel_b = m.end() - 1                       # body 内 '{' 的位置
-                body_start = text.find("{", _s) + 1       # body 在 text 中的起点
-                b_abs = body_start + rel_b
-                e_abs = brace_match(text, b_abs)
-                if e_abs <= b_abs:
-                    continue
-                return base, p, b_abs, e_abs, text[b_abs + 1:e_abs - 1]
+        b_abs, e_abs, body = _equip_locate_in_file(p, eid)
+        if b_abs is not None:
+            return base, p, b_abs, e_abs, body
     return None, None, None, None, None
 
 
@@ -187,32 +223,44 @@ def equipment_detail(eid, root=None):
     readonly = not bool(top)
     src_name = os.path.basename((base or "").rstrip("\\/")) or (base or "")
 
-    # 标量属性（跳过块）
+    clean_body = _strip_keep_len(body)
+    # 标量属性（跳过块与注释）
     scalars = {}
-    for m in re.finditer(r'(?m)^[ \t]*([a-z_0-9]+)[ \t]*=[ \t]*([^\s{#]+)', body):
+    for m in re.finditer(r'(?m)^[ \t]*([a-z_0-9]+)[ \t]*=[ \t]*([^\s{#]+)', clean_body):
+        if brace_depth_at(clean_body, m.start()) != 0:
+            continue
         k, v = m.group(1), m.group(2)
         scalars[k] = v
 
-    # 模块槽
-    slots = []
-    for sm in re.finditer(r'module_slots\s*=\s*\{', body):
-        sb = body.find("{", sm.end() - 1)
-        se = brace_match(body, sb)
-        if se <= sb:
-            continue
-        for sk, sv, sbb in top_items(body[sb + 1:se - 1]):
-            if not sbb:
-                continue
-            req = re.search(r'(?m)^\s*required\s*=\s*(\w+)', sv)
-            cats = []
-            cm = re.search(r'allowed_module_categories\s*=\s*\{', sv)
-            if cm:
-                cb = sv.find("{", cm.end() - 1)
-                ce = brace_match(sv, cb)
-                cats = re.findall(r'[A-Za-z0-9_]+', sv[cb + 1:ce - 1])
-            slots.append({"slot": sk,
-                          "required": (req.group(1).lower() == "yes") if req else False,
-                          "categories": cats})
+    # 模块槽（自身为空时沿 archetype 链继承）
+    slots = _parse_module_slots(clean_body)
+    if not slots:
+        arch = scalars.get("archetype", "")
+        seen_arch = {eid}
+        equips = state.equipments()
+        while arch and arch not in seen_arch:
+            seen_arch.add(arch)
+            parent = equips.get(arch)
+            if parent and parent.get("slots"):
+                slots = [
+                    dict(s, categories=list(s.get("categories") or []))
+                    for s in parent["slots"]
+                ]
+                break
+            _, _, _, _, abody = _equip_locate(root, arch)
+            if not abody:
+                break
+            aclean = _strip_keep_len(abody)
+            aslots = _parse_module_slots(aclean)
+            if aslots:
+                slots = aslots
+                break
+            next_arch = ""
+            for am in re.finditer(r'(?m)^[ \t]*archetype[ \t]*=[ \t]*([^\s{#]+)', aclean):
+                if brace_depth_at(aclean, am.start()) == 0:
+                    next_arch = am.group(1)
+                    break
+            arch = next_arch
 
     # 该 id 出现在哪些地方（引用）
     refs = []
@@ -272,28 +320,6 @@ def equipment_edit(eid, props, root=None):
     if not top:
         return {"ok": False, "msg": "这个装备来自只读层，且没有可写的 submod 目录"}
 
-    new_body = body
-    changed = []
-    for k, v in props.items():
-        k = str(k).strip()
-        v = str(v).strip()
-        if not v:
-            continue
-        pat = re.compile(r'(?m)^([ \t]*)%s([ \t]*=[ \t]*)([^\s{#\n]+)' % re.escape(k))
-        m = pat.search(new_body)
-        if m:
-            if m.group(3) == v:
-                continue
-            new_body = new_body[:m.start(3)] + v + new_body[m.end(3):]
-            changed.append("%s %s→%s" % (k, m.group(3), v))
-        else:
-            # 插到 body 末尾（前一个缩进对齐）
-            indent = "\t\t"
-            new_body = new_body.rstrip() + "\n" + indent + "%s = %s\n" % (k, v)
-            changed.append("%s=%s（新增）" % (k, v))
-    if not changed:
-        return {"ok": True, "changed": [], "msg": "没有实际改动"}
-
     need_adopt = (
         is_under_game(path)
         or is_readonly_mod(path)
@@ -305,6 +331,40 @@ def equipment_edit(eid, props, root=None):
         if not dst:
             return {"ok": False, "msg": err or "接管只读文件失败"}
         path = dst
+        b, e, body = _equip_locate_in_file(path, eid)
+        if b is None:
+            return {"ok": False, "msg": "接管后在目标文件中找不到装备 %s" % eid}
+
+    new_body = body
+    changed = []
+    for k, v in props.items():
+        k = str(k).strip()
+        v = str(v).strip()
+        if not v:
+            continue
+        clean_body = _strip_keep_len(new_body)
+        pat = re.compile(r'(?m)^([ \t]*)%s([ \t]*=[ \t]*)([^\s{#\r\n]+)' % re.escape(k))
+        m = None
+        for cand_m in pat.finditer(clean_body):
+            if brace_depth_at(clean_body, cand_m.start()) == 0:
+                m = cand_m
+                break
+        if m:
+            if m.group(3) == v:
+                continue
+            new_body = new_body[:m.start(3)] + v + new_body[m.end(3):]
+            changed.append("%s %s→%s" % (k, m.group(3), v))
+        else:
+            # 插到 body 末尾（保留闭合 '}' 前的缩进）
+            indent = "\t\t"
+            last_nl = new_body.rfind("\n")
+            trail_indent = (new_body[last_nl + 1:]
+                            if last_nl >= 0 and not new_body[last_nl + 1:].strip()
+                            else "\t")
+            new_body = new_body.rstrip() + "\n" + indent + ("%s = %s\n" % (k, v)) + trail_indent
+            changed.append("%s=%s（新增）" % (k, v))
+    if not changed:
+        return {"ok": True, "changed": [], "msg": "没有实际改动"}
 
     with io.open(path, encoding="utf-8-sig", errors="replace") as f:
         raw = f.read()
@@ -375,21 +435,14 @@ def save_equipment(root, rel, eid, raw, name="", desc="", name_ja="", desc_ja=""
                    name_en="", desc_en="", picture=""):
     if not rel or not eid:
         return False, "参数不完整：缺少文件或装备 id"
-    top = None
-    for r in (state.roots() or []):
-        lay = mod_layers(r) or [r]
-        cand = lay[-1] if lay else r
-        if cand and not is_readonly_mod(cand):
-            top = cand
-    if not top and root:
-        cand = _top_mod(root)
-        if cand and not is_readonly_mod(cand):
-            top = cand
+    top = _writable_top_for(root)
+    if not top:
+        return False, "找不到可写的 mod 目录（当前层或依赖层只读）"
     need_adopt = (
         not root
         or is_under_game(root)
         or is_readonly_mod(root)
-        or (bool(top) and os.path.normcase(os.path.abspath(top)) != os.path.normcase(os.path.abspath(root)))
+        or os.path.normcase(os.path.abspath(top)) != os.path.normcase(os.path.abspath(root))
     )
     path = os.path.join(root, rel) if root else ""
     if need_adopt or not path or not os.path.isfile(path):
@@ -478,24 +531,45 @@ def _ensure_script_enum_equipment(root, eid):
 def add_equipment(root, eid):
     if not re.match(r'^[A-Za-z0-9_]+$', eid or ""):
         return False, "id 只能字母数字下划线"
+    explicit_root = root
+    root = paths._pick(root)
+    top = _writable_top_for(explicit_root or root)
+    if not top:
+        return False, "找不到可写的 mod 目录（当前层或依赖层只读）"
+    chain_root = (top if (explicit_root and os.path.normcase(os.path.abspath(top)) != os.path.normcase(os.path.abspath(explicit_root)))
+                  else root)
+    owner = paths._replace_owner(chain_root, "common/units/equipment")
+    if owner and os.path.normcase(os.path.abspath(owner)) != os.path.normcase(os.path.abspath(top)):
+        chain = [os.path.normcase(os.path.abspath(x)) for x in (mod_layers(chain_root) or []) if x]
+        ab_top = os.path.normcase(os.path.abspath(top))
+        ab_own = os.path.normcase(os.path.abspath(owner))
+        if ab_own in chain and ab_top in chain and chain.index(ab_own) > chain.index(ab_top):
+            nm = os.path.basename(owner.rstrip("\\/")) or owner
+            return False, ("common/units/equipment 被 %s 的 replace_path 独占，"
+                           "请先在「诊断 → 目录写入目标」里接管该目录" % nm)
+    root = top
     d = os.path.join(root, "common", "units", "equipment")
     os.makedirs(d, exist_ok=True)
     fn = unique_editor_filename(root, "common/units/equipment", "zz_focus_editor_equipment.txt")
     path = os.path.join(d, fn)
     if os.path.exists(path):
-        with io.open(path, encoding="utf-8", errors="replace", newline="") as f:
+        with io.open(path, encoding="utf-8-sig", errors="replace", newline="") as f:
             text = f.read()
     else:
         text = "equipments = {\n}\n"
-    if re.search(r'(?m)^\s*%s\s*=\s*\{' % re.escape(eid), text):
+    if re.search(r'(?m)^\s*%s\s*=\s*\{' % re.escape(eid), _strip_keep_len(text)):
         return False, "装备已存在"
-    brace = text.find('{', text.find("equipments"))
+    eq_idx = text.find("equipments")
+    brace = text.find('{', eq_idx) if eq_idx >= 0 else -1
+    if brace < 0:
+        text = text.rstrip() + "\nequipments = {\n}\n"
+        brace = text.find('{', text.find("equipments"))
     end = brace_match(text, brace)
     block = ("\n\t%s = {\n\t\tyear = 1936\n\t\tis_buildable = yes\n\t\ttype = infantry\n"
              "\t\tbuild_cost_ic = 1.0\n\t}\n" % eid)
     snapshot(path)
-    with io.open(path, "w", encoding="utf-8", newline="") as f:
-        f.write(text[:end - 1] + block + text[end - 1:])
+    new_text = text[:end - 1] + block + text[end - 1:]
+    _atomic_write(path, _bom_for(path) + new_text.encode("utf-8"))
     rel = os.path.join("common", "units", "equipment", fn)
     state.changed()[path] = rel
     _ensure_script_enum_equipment(root, eid)
