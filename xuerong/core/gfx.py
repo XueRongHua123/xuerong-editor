@@ -23,6 +23,7 @@ import hashlib
 import io
 import os
 import re
+import struct
 
 from xuerong import state
 from xuerong.core.paths import (_chain_layers, _layer_files, is_under_game,
@@ -492,6 +493,36 @@ def all_goal_icons():
     return sorted(out)
 
 
+def _decode_dx10_dds(path):
+    """纯 Python/Pillow 兜底解码 DX10 无压缩 32bpp DDS（如 DXGI 91/87/93/88/28/29）。"""
+    try:
+        with io.open(path, "rb") as _fh:
+            data = _fh.read()
+    except Exception:
+        return None
+    if len(data) < 148 or data[:4] != b"DDS ":
+        return None
+    hdr = data[:148]
+    height, width = struct.unpack("<II", hdr[12:20])
+    if hdr[84:88] != b"DX10":
+        return None
+    dxgi_format = struct.unpack("<I", hdr[128:132])[0]
+    payload = data[148:]
+    need = width * height * 4
+    if width <= 0 or height <= 0 or len(payload) < need:
+        return None
+    from PIL import Image
+    buf = payload[:need]
+    if dxgi_format in (91, 87, 93, 88):
+        im = Image.frombytes("RGBA", (width, height), buf, "raw", "BGRA")
+        if dxgi_format in (93, 88):
+            im.putalpha(255)
+        return im
+    if dxgi_format in (28, 29):
+        return Image.frombytes("RGBA", (width, height), buf, "raw", "RGBA")
+    return None
+
+
 def icon_png(gfx, full=False):
     ent = SPRITE_MAP.get(gfx)
     if not ent:
@@ -530,7 +561,16 @@ def icon_png(gfx, full=False):
     try:
         if not os.path.exists(png):
             from PIL import Image
-            im = Image.open(src)
+            try:
+                im = Image.open(src)
+                im.load()
+            except Exception:
+                if src.lower().endswith(".dds"):
+                    im = _decode_dx10_dds(src)
+                    if im is None:
+                        raise
+                else:
+                    raise
             if frames > 1:
                 w, h = im.size
                 im = im.crop((0, 0, w // frames, h))
@@ -611,7 +651,15 @@ def build_icons(roots, game):
     EQUIP_ICONS.clear()
     for gfx, (tex, frames) in sprite_map.items():
         tl = tex.lower().replace("\\", "/")
-        if "/interface/equipment/" in tl:
+        gl = gfx.lower()
+        if ("/interface/equipment/" in tl
+                or "/equipment/" in tl
+                or "/equipments/" in tl
+                or "/equipmentdesigner/" in tl
+                or ("/interface/technologies/" in tl and (
+                    "_equipment" in gl or "_chassis" in gl or "_hull" in gl or "/0_modules/" in tl
+                ))
+                or (gl.startswith("gfx_") and "_equipment" in gl)):
             EQUIP_ICONS[gfx] = "/api/icon?gfx=" + gfx
     print("equip icons:", len(EQUIP_ICONS))
     TECH_ICONS.clear()

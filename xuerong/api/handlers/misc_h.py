@@ -66,12 +66,16 @@ def r_api_orphan_tags(h, path_only):
 
 @get("/api/strategic_regions")
 def r_api_strategic_regions(h, path_only):
-    h._send(LG.strategic_regions_list(_map_pick(None)))
+    _q = parse_qs(urlparse(h.path).query)
+    _rt = _q.get("root", [""])[0] or None
+    h._send(LG.strategic_regions_list(_map_pick(_rt)))
 
 
 @get("/api/supply_areas")
 def r_api_supply_areas(h, path_only):
-    h._send(LG.supply_areas(_map_pick(None)))
+    _q = parse_qs(urlparse(h.path).query)
+    _rt = _q.get("root", [""])[0] or None
+    h._send(LG.supply_areas(_map_pick(_rt)))
 
 
 @get("/api/railways")

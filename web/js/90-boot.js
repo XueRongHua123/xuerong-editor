@@ -261,7 +261,15 @@ function updateSourceBox(){
     if(!roots.length){
       st.textContent = '还没有加载 mod；先「添加 mod」或加载原版参考';
     } else {
-      let txt = roots.map(r => (r.name || r.path) + (r.readonly ? '（原版·只读）' : '')).join(' ＋ ') + ' 已加载';
+      const gamePath = (gameLayer && gameLayer.path) || (DATA && DATA.game_dir) || '';
+      let txt = roots.map(r => {
+        let suffix = '';
+        if(r.readonly){
+          const isGame = !!(r.is_game || r.reason === 'game' || (gamePath && r.path === gamePath));
+          suffix = isGame ? '（原版·只读）' : '（工坊·只读）';
+        }
+        return (r.name || r.path) + suffix;
+      }).join(' ＋ ') + ' 已加载';
       // 只挂了一个非原版 mod：综合检查多个静态域是否有自有条目，并区分依赖继承链与纯原版空壳
       if(roots.length === 1 && !roots[0].readonly){
         const topName = roots[0].name;

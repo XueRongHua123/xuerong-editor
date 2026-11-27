@@ -1387,6 +1387,9 @@ function techFolderNames(){
         || (x.name || '').toLowerCase().indexOf(q) >= 0;
     }) : ALL;
     if(!list.length){ box.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:2px">没有匹配</div>'; return; }
+    const tailHint = list.length > 200
+      ? '<div style="font-size:10px;color:var(--muted);padding:4px 2px;text-align:center;border-top:1px dashed var(--line);margin-top:3px">已显示前 200 / 共 ' + list.length + ' 条，请输入关键词过滤</div>'
+      : '';
     box.innerHTML = list.slice(0, 200).map(function(x){
       const sk = (x.skills || {}).skill;
       return '<div class="ch-row" data-id="' + x.id + '" style="display:flex;gap:4px;'
@@ -1396,7 +1399,7 @@ function techFolderNames(){
         + (sk != null ? '<span style="color:var(--t3);width:16px;text-align:right">' + sk + '</span>' : '')
         + '<button class="btn ch-del" data-id="' + x.id + '" style="height:15px;font-size:8px;padding:0 3px">删</button>'
         + '</div>';
-    }).join('');
+    }).join('') + tailHint;
     box.querySelectorAll('.ch-row').forEach(function(row){
       row.onclick = function(e){
         if(e.target.classList && e.target.classList.contains('ch-del')) return;
@@ -1455,12 +1458,21 @@ function techFolderNames(){
       if(e && e.value !== '') fields[p[1]] = Number(e.value);
     });
     if(!Object.keys(fields).length){ msg('没有改动', true); return; }
+    const btn = document.getElementById('chSave');
+    if(btn && btn.disabled) return;
+    if(btn) btn.disabled = true;
     msg('写入中…');
-    const r = await (await fetch('/api/character_set', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id: CUR.id, fields: fields})})).json();
-    msg(r.msg || '', !r.ok);
-    if(r.ok){ status(r.msg); await load(); }
+    try {
+      const r = await (await fetch('/api/character_set', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({id: CUR.id, fields: fields})})).json();
+      msg(r.msg || '', !r.ok);
+      if(r.ok){ status(r.msg); await load(); }
+    } catch(e) {
+      msg('写入失败：' + (e && e.message ? e.message : e), true);
+    } finally {
+      if(btn) btn.disabled = false;
+    }
   }
 
   function bind(){
@@ -1494,6 +1506,9 @@ function techFolderNames(){
       return x.id.toLowerCase().indexOf(q) >= 0 || (x.cat||'').toLowerCase().indexOf(q) >= 0;
     }) : ALL;
     if(!list.length){ box.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:2px">没有匹配</div>'; return; }
+    const tailHint = list.length > 200
+      ? '<div style="font-size:10px;color:var(--muted);padding:4px 2px;text-align:center;border-top:1px dashed var(--line);margin-top:3px">已显示前 200 / 共 ' + list.length + ' 条，请输入关键词过滤</div>'
+      : '';
     box.innerHTML = list.slice(0, 200).map(function(x){
       const f = x.fields || {};
       const tip = 'cost=' + (f.cost || '-') + ' days=' + (f.days_remove || '-');
@@ -1504,7 +1519,7 @@ function techFolderNames(){
         + x.id + ' <span style="color:var(--t3)">' + x.cat + '</span></span>'
         + '<button class="btn dec-del" data-id="' + x.id + '" style="height:15px;font-size:8px;padding:0 3px">删</button>'
         + '</div>';
-    }).join('');
+    }).join('') + tailHint;
     box.querySelectorAll('.dec-row').forEach(function(row){
       row.onclick = function(e){
         if(e.target.classList && e.target.classList.contains('dec-del')) return;
@@ -1551,12 +1566,21 @@ function techFolderNames(){
     const d = v('decDays'); if(d !== null) fields.days_remove = d;
     const p = v('decPrio'); if(p !== null) fields.priority = p;
     if(!Object.keys(fields).length){ msg('没有改动', true); return; }
+    const btn = document.getElementById('decSave');
+    if(btn && btn.disabled) return;
+    if(btn) btn.disabled = true;
     msg('写入中…');
-    const r = await (await fetch('/api/decision_set', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id: CUR.id, fields: fields})})).json();
-    msg(r.msg || '', !r.ok);
-    if(r.ok){ status(r.msg); await load(); }
+    try {
+      const r = await (await fetch('/api/decision_set', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({id: CUR.id, fields: fields})})).json();
+      msg(r.msg || '', !r.ok);
+      if(r.ok){ status(r.msg); await load(); }
+    } catch(e) {
+      msg('写入失败：' + (e && e.message ? e.message : e), true);
+    } finally {
+      if(btn) btn.disabled = false;
+    }
   }
 
   function bind(){
@@ -1593,19 +1617,28 @@ function techFolderNames(){
     if(!id){ msg('填 id', true); return; }
     if(!name){ msg('填名字', true); return; }
     if(!country){ msg('填国家 TAG（决定写进哪个文件）', true); return; }
+    const btn = document.getElementById('chAddBtn');
+    if(btn && btn.disabled) return;
+    if(btn) btn.disabled = true;
     msg(psrc ? '新建并导入头像中…' : '新建中…');
-    const r = await (await fetch('/api/character_add', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id: id, name: name, type: type, skill: skill,
-                            country: country,
-                            portrait_src: psrc || null,
-                            attack: skill, defense: skill, planning: skill,
-                            logistics: skill})})).json();
-    msg(r.msg || '', !r.ok);
-    if(r.ok){
-      status(r.msg);
-      const load = document.getElementById('chLoad');
-      if(load) load.click();
+    try {
+      const r = await (await fetch('/api/character_add', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({id: id, name: name, type: type, skill: skill,
+                              country: country,
+                              portrait_src: psrc || null,
+                              attack: skill, defense: skill, planning: skill,
+                              logistics: skill})})).json();
+      msg(r.msg || '', !r.ok);
+      if(r.ok){
+        status(r.msg);
+        const load = document.getElementById('chLoad');
+        if(load) load.click();
+      }
+    } catch(e) {
+      msg('新建失败：' + (e && e.message ? e.message : e), true);
+    } finally {
+      if(btn) btn.disabled = false;
     }
   }
 
@@ -1618,16 +1651,25 @@ function techFolderNames(){
     const eff = ((document.getElementById('decNewEff')||{}).value || 'add_political_power = 50').trim();
     if(!id){ msg('填决议 id', true); return; }
     if(!cat){ msg('填类别 id', true); return; }
+    const btn = document.getElementById('decAddBtn');
+    if(btn && btn.disabled) return;
+    if(btn) btn.disabled = true;
     msg('新建中…');
-    const r = await (await fetch('/api/decision_add', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id: id, category: cat, icon: icon, cost: cost,
-                            effect: eff})})).json();
-    msg(r.msg || '', !r.ok);
-    if(r.ok){
-      status(r.msg);
-      const load = document.getElementById('decLoad');
-      if(load) load.click();
+    try {
+      const r = await (await fetch('/api/decision_add', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({id: id, category: cat, icon: icon, cost: cost,
+                              effect: eff})})).json();
+      msg(r.msg || '', !r.ok);
+      if(r.ok){
+        status(r.msg);
+        const load = document.getElementById('decLoad');
+        if(load) load.click();
+      }
+    } catch(e) {
+      msg('新建失败：' + (e && e.message ? e.message : e), true);
+    } finally {
+      if(btn) btn.disabled = false;
     }
   }
 
@@ -2467,22 +2509,59 @@ async function deleteVariant(name){
 
 
 
+const _HIST_PARTY_ZH = {
+  democratic: 'democratic（民主）',
+  fascism: 'fascism（法西斯）',
+  communism: 'communism（共产）',
+  neutrality: 'neutrality（中立）'
+};
+
 async function loadHistoryIntoForm(){
   const tag = histTag;
   const fileEl = document.getElementById('histFile');
   const diffEl = document.getElementById('histDiff');
+  const warnEl = document.getElementById('histWarn');
   diffEl.innerHTML = '';
-  document.getElementById('histWarn').textContent = '';
+  if(warnEl) warnEl.textContent = '';
   fileEl.textContent = '读取中…';
   let d;
   try { d = await (await fetch('/api/country_history?tag=' + encodeURIComponent(tag))).json(); }
   catch(e){ fileEl.textContent = '读取失败：' + e.message; return; }
   if(!d.ok){ fileEl.textContent = d.msg || '读取失败'; return; }
+  const isWritable = d.writable !== false;
   fileEl.textContent = (d.exists ? '' : '（还没有 history 文件，保存时会新建）') +
-    (d.file || '') + (d.writable ? '' : ' · 只读来源，不能保存');
+    (d.file || '') + (isWritable ? '' : ' · 只读来源，不能保存');
+  if(!isWritable && warnEl){
+    warnEl.textContent = '当前国家历史文件来自只读来源，无法直接写入；请先添加或切换为可写 submod。';
+  }
   const f = d.fields || {};
   document.getElementById('histCapital').value = f.capital || '';
-  document.getElementById('histParty').value = f.ruling_party || '';
+  const partySel = document.getElementById('histParty');
+  if(partySel){
+    const ideoList = (Array.isArray(d.ideologies) && d.ideologies.length)
+      ? d.ideologies
+      : ['democratic', 'fascism', 'communism', 'neutrality'];
+    const seen = new Set();
+    const opts = ['<option value="">（不改）</option>'];
+    const locZh = (DATA && DATA.loc && DATA.loc.simp_chinese) || {};
+    ideoList.forEach(item => {
+      const k = typeof item === 'string'
+        ? item
+        : ((item && (item.id || item.key || item.name)) || '');
+      if(!k || seen.has(k)) return;
+      seen.add(k);
+      const customLbl = (item && typeof item === 'object') ? (item.label || item.name_zh || item.name || '') : '';
+      const lbl = (customLbl && customLbl !== k)
+        ? (k + '（' + customLbl + '）')
+        : (_HIST_PARTY_ZH[k] || (locZh[k] ? (k + '（' + locZh[k] + '）') : k));
+      opts.push('<option value="' + escapeHtml(k) + '">' + escapeHtml(lbl) + '</option>');
+    });
+    if(f.ruling_party && !seen.has(f.ruling_party)){
+      opts.push('<option value="' + escapeHtml(f.ruling_party) + '">' + escapeHtml(f.ruling_party) + '</option>');
+    }
+    partySel.innerHTML = opts.join('');
+    partySel.value = f.ruling_party || '';
+  }
   document.getElementById('histPP').value = f.political_power || '';
   document.getElementById('histStab').value = f.stability || '';
   document.getElementById('histWS').value = f.war_support || '';
@@ -2503,7 +2582,11 @@ async function loadHistoryIntoForm(){
   renderHistVariants(f.variants || []);
   document.getElementById('histOpinions').value =
     (f.opinions || []).map(p=>p[0] + ' ' + p[1]).join('\n');
-  document.getElementById('histSave').disabled = !d.writable;
+  const saveBtn = document.getElementById('histSave');
+  if(saveBtn){
+    saveBtn.disabled = !isWritable;
+    saveBtn.title = isWritable ? '' : '只读来源，不能保存';
+  }
 }
 
 
@@ -2937,6 +3020,8 @@ async function toggleObjectDetail(btn, objKey){
 
 async function loadObjectDiff(opts){
   const o = opts || {};
+  const list = document.getElementById('odList');
+  if(list) list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px">正在扫描叠加链对象，大 mod 约需 10–30 秒…</div>';
   const qEl = document.getElementById('odQuery');
   const cEl = document.getElementById('odCat');
   const sEl = document.getElementById('odStatus');
@@ -2951,8 +3036,7 @@ async function loadObjectDiff(opts){
     const j = await r.json();
     renderObjectDiff(j);
   }catch(e){
-    const list = document.getElementById('odList');
-    if(list) list.innerHTML = '<div style="padding:16px;color:#ff7b7b">加载对象覆盖失败：' + escapeHtml(e.message) + '</div>';
+    if(list) list.innerHTML = '<div style="padding:16px;color:var(--danger)">加载对象覆盖失败：' + escapeHtml(e.message) + '</div>';
   }
 }
 

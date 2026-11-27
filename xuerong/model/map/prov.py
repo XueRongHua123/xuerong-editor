@@ -7,15 +7,19 @@ import re
 import time
 
 from xuerong import state
-from xuerong.core.paths import (_layers_find, _read_bom_text, _write_bom_text,
-                                is_under_game, mod_layers)
-from xuerong.core.text import _atomic_write, strip_comments
+from xuerong.core.paths import (_layers_find, _out_path, _out_read_path,
+                                _read_bom_text, _write_bom_text,
+                                effective_layer_files, ensure_writable_file,
+                                is_readonly_mod, is_under_game, mod_layers)
+from xuerong.core.text import _atomic_write, _strip_keep_len, brace_match, strip_comments
 from xuerong.model.history import snapshot
 from xuerong.model.map._inj import (_parse_state_provinces, _set_state_provinces,
                                    _state_locate)
-from xuerong.model.map.io import (_csv_path_for, _ensure_prov_rgb, _map_dir,
-                                 _map_ids_from_cache, _map_pick, bmp_info,
-                                 bmp_read_rect, bmp_write_rect)
+from xuerong.model.map.io import (_csv_path_for, _ensure_map_writable,
+                                 _ensure_prov_rgb, _map_dir,
+                                 _map_ids_from_cache, _map_pick,
+                                 _writable_map_top, bmp_info, bmp_read_rect,
+                                 bmp_write_rect)
 from xuerong.model.map.render import _strategic_regions
 
 
@@ -94,17 +98,16 @@ def _scan_cross(allpx, w, h):
                 out.append((x, y, a, b))
     return out
 
-def map_repair_cross(root=None, apply_fix=False, limit=2000):
+def map_repair_cross(root=None, apply=False, adopt=False, limit=2000, **kw):
     """修十字交叉像素：把 2x2 的 `A B / B A` 解成 `A A / B B` 或 `A B / A B`。
     选择依据：看 A 在上方还是左方的邻域更多，优先保持那个方向的连通。"""
+    apply_fix = bool(apply or kw.get("apply_fix"))
     root = _map_pick(root)
     layers = mod_layers(root)
     bmp, prov = _layers_find("map/provinces.bmp", layers)
     if not bmp:
         return {"ok": False, "msg": "找不到 provinces.bmp"}
-    if apply_fix and is_under_game(bmp):
-        return {"ok": False, "msg": "provinces.bmp 来自原版，只读"}
-    info = bmp_info(bmp)
+    info = bmp_info(_out_read_path(bmp))
     if not info or info["bpp"] != 24:
         return {"ok": False, "msg": "只支持 24 位 BMP"}
     w, h = info["w"], info["h"]
@@ -144,6 +147,10 @@ def map_repair_cross(root=None, apply_fix=False, limit=2000):
         result["sample"] = [{"x": x, "y": y} for (x, y, _c) in changes[:20]]
         return result
 
+    bmp, _prov, berr = _ensure_map_writable("provinces.bmp", root=root, adopt=adopt)
+    if not bmp:
+        return berr
+
     # 应用：点级备份（散布改动用包围盒会备份整幅图，30+ MB，实际只改几百个像素）
     # 多轮迭代只记「第一次遇到该像素时的原值」，最后统一存成一个 undo 条目，
     # 否则撤销只能退回到上一轮，而不是修复前的状态。
@@ -164,7 +171,8 @@ def map_repair_cross(root=None, apply_fix=False, limit=2000):
             if gi not in orig_vals:
                 orig_vals[gi] = tuple(before[o])
             after[o] = rgb
-    bmp_write_rect(bmp, x0, y0, bw, bh, after)
+    if not bmp_write_rect(bmp, x0, y0, bw, bh, after):
+        return {"ok": False, "msg": "provinces.bmp 写入失败（仅支持 24 位无压缩 BMP）"}
     result["applied"] = len(changes)
 
     # 改像素会产生新的交叉，迭代几轮直到不再减少
@@ -198,7 +206,8 @@ def map_repair_cross(root=None, apply_fix=False, limit=2000):
                 if gi2 not in orig_vals:
                     orig_vals[gi2] = tuple(bef2[_i])
                 aft2[_i] = rgb
-        bmp_write_rect(bmp, ax0, ay0, aw, ah, aft2)
+        if not bmp_write_rect(bmp, ax0, ay0, aw, ah, aft2):
+            break
         result["applied"] += len(ch2)
         rounds += 1
 
@@ -211,8 +220,14 @@ def map_repair_cross(root=None, apply_fix=False, limit=2000):
 
     result["rounds"] = rounds
     result["remaining"] = prev
-    result["msg"] = "已修复 %d 处十字交叉（%d 轮），剩余约 %d 处（图层需要重建）" % (
+    msg = "已修复 %d 处十字交叉（%d 轮），剩余约 %d 处（图层需要重建）" % (
         result["applied"], rounds, prev)
+    if berr and berr.get("adopted"):
+        adopt_msg = berr.get("adopt_msg") or "已单文件接管 map/provinces.bmp"
+        result["adopted"] = True
+        result["adopt_msg"] = adopt_msg
+        msg = adopt_msg + "；" + msg
+    result["msg"] = msg
     return result
 
 def map_repair_preview(root=None):
@@ -240,7 +255,7 @@ def map_repair_preview(root=None):
     ghost = []
     total = 0
     try:
-        with io.open(csvp, encoding="utf-8", errors="replace") as _f:
+        with io.open(_out_read_path(csvp), encoding="utf-8-sig", errors="replace") as _f:
             for line in _f:
                 parts = line.strip().split(";")
                 if len(parts) < 4 or not parts[0].isdigit():
@@ -257,48 +272,104 @@ def map_repair_preview(root=None):
             "ghost": sorted(ghost)[:500], "ghost_count": len(ghost),
             "repairable": {"ghost": len(ghost)}}
 
-def map_repair_ghost(root=None):
-    """删除 definition.csv 里在地图上没有像素的省（省 0 保留）。
-    改的是链顶 mod 的 csv；原版只读时拒绝。"""
-    pv = map_repair_preview(root)
-    if not pv.get("ok"):
-        return pv
-    csvp = pv["csv"]
-    if is_under_game(csvp):
-        return {"ok": False, "msg": "definition.csv 来自原版，只读，不能修"}
-    ghost = set(pv["ghost"])
-    if not ghost:
-        return {"ok": True, "removed": 0, "msg": "没有幽灵省，不需要修"}
+def map_repair_ghost(root=None, adopt=False):
+    """删除 definition.csv 末尾连续段的幽灵省（省 0 与中间省号段全部保留，防止断号）。"""
+    root = _map_pick(root)
+    dirp, _key, _base = _map_dir(root)
+    idx_path = os.path.join(dirp or "", "prov_index.json")
+    if not os.path.exists(idx_path):
+        return {"ok": False, "msg": "请先构建图层"}
     try:
-        with io.open(csvp, "rb") as _f:
-            raw = _f.read()
-        has_bom = raw[:3] == bytes((0xEF, 0xBB, 0xBF))
-        text = raw.decode("utf-8-sig", errors="replace")
+        with io.open(idx_path, encoding="utf-8") as _f:
+            idx = json.loads(_f.read())
+    except Exception as e:
+        return {"ok": False, "msg": "读取索引失败：%s" % e}
+    have = set()
+    for k, v in idx.items():
+        try:
+            if int(v.get("px") or 0) > 0:
+                have.add(int(k))
+        except Exception:
+            continue
+
+    csv_src, _prov = _csv_path_for(root)
+    if not csv_src:
+        return {"ok": False, "msg": "找不到 definition.csv"}
+    try:
+        with io.open(_out_read_path(csv_src), encoding="utf-8-sig", errors="replace") as _f:
+            text_pre = _f.read()
+    except Exception as e:
+        return {"ok": False, "msg": "读 csv 失败：%s" % e}
+
+    all_pids = []
+    ghost_pids = set()
+    for line in text_pre.splitlines():
+        parts = line.strip().split(";")
+        if len(parts) >= 4 and parts[0].isdigit():
+            pid = int(parts[0])
+            all_pids.append(pid)
+            if pid > 0 and pid not in have:
+                ghost_pids.add(pid)
+    if not ghost_pids:
+        return {"ok": True, "removed": 0, "skipped": 0, "msg": "没有幽灵省，不需要修"}
+
+    # 严格只删位于最高有效省号之后末尾段的幽灵省，中间段保留以防省号断号
+    max_active = max((pid for pid in all_pids if pid == 0 or pid in have), default=0)
+    removable = {pid for pid in ghost_pids if pid > max_active}
+    skipped = sorted(pid for pid in ghost_pids if pid <= max_active)
+    if not removable:
+        return {"ok": True, "removed": 0, "skipped": len(skipped),
+                "skipped_ids": skipped[:30], "csv": csv_src,
+                "msg": "发现 %d 个幽灵省，但均位于中间省号段（为防断号已全部跳过，未改动）" % len(skipped)}
+
+    csvp, cbase, cerr = _ensure_map_writable("definition.csv", root=root, adopt=adopt)
+    if not csvp:
+        return cerr
+
+    try:
+        with io.open(_out_read_path(csvp), encoding="utf-8-sig", errors="replace", newline="") as _f:
+            text = _f.read()
     except Exception as e:
         return {"ok": False, "msg": "读 csv 失败：%s" % e}
     keep = []
     removed = []
-    for line in text.splitlines():
-        parts = line.strip().split(";")
+    for line in text.splitlines(True):
+        parts = line.rstrip("\r\n").split(";")
         if len(parts) >= 4 and parts[0].isdigit():
             pid = int(parts[0])
-            if pid in ghost:
+            if pid in removable:
                 removed.append(pid)
                 continue
         keep.append(line)
-    new_text = chr(10).join(keep)
-    if text.endswith(chr(10)):
-        new_text += chr(10)
+    new_text = "".join(keep)
     snapshot(csvp)
+    target_csv = _out_path(csvp)
     try:
-        with io.open(csvp, "w", encoding="utf-8-sig" if has_bom else "utf-8", newline="") as f:
-            f.write(new_text)
+        _atomic_write(target_csv, new_text.encode("utf-8"))
     except Exception as e:
         return {"ok": False, "msg": "写 csv 失败：%s" % e}
-    state.changed()[csvp] = os.path.relpath(csvp, os.path.dirname(os.path.dirname(csvp)))
+    try:
+        state.changed()[target_csv] = os.path.relpath(csvp, cbase or os.path.dirname(os.path.dirname(csvp)))
+    except Exception:
+        pass
     state.map_var("PROV_RGB").clear()
-    return {"ok": True, "removed": len(removed), "ids": removed[:30], "csv": csvp,
-            "msg": "已删除 %d 个幽灵省，图层需要重建" % len(removed)}
+    state.map_var("_PROV_RGB_CACHE").clear()
+    try:
+        state.map_var("_REFINE_IDS_CACHE").pop("cur", None)
+    except Exception:
+        pass
+    msg = "已删除末尾连续幽灵省 %d 个" % len(removed)
+    if skipped:
+        msg += "（跳过中间断号风险幽灵省 %d 个）" % len(skipped)
+    msg += "，图层需要重建"
+    out = {"ok": True, "removed": len(removed), "skipped": len(skipped),
+           "ids": removed[:30], "skipped_ids": skipped[:30], "csv": target_csv, "msg": msg}
+    if cerr and cerr.get("adopted"):
+        adopt_msg = cerr.get("adopt_msg") or "已单文件接管 map/definition.csv"
+        out["adopted"] = True
+        out["adopt_msg"] = adopt_msg
+        out["msg"] = adopt_msg + "；" + msg
+    return out
 
 def map_analysis(root=None, limit=60, min_px=800, only_land=True):
 
@@ -388,7 +459,9 @@ def map_edit_commit(bmp_path=None):
     pend = state.map_var("MAP_EDIT").get("pending") or []
     if not bmp_path or not pend:
         return {"ok": False, "msg": "没有待写入的像素"}
-    info = bmp_info(bmp_path)
+    if is_readonly_mod(bmp_path):
+        return {"ok": False, "msg": "原版或工坊只读目录，不能直接提交涂色"}
+    info = bmp_info(_out_read_path(bmp_path))
     if not info:
         return {"ok": False, "msg": "读不到 bmp 头"}
     xs = [p[0] for p in pend]
@@ -404,7 +477,8 @@ def map_edit_commit(bmp_path=None):
     after = list(before)
     for (gx, gy), rgb in grid.items():
         after[gy * w + gx] = rgb
-    bmp_write_rect(bmp_path, x0, y0, w, h, after)
+    if not bmp_write_rect(bmp_path, x0, y0, w, h, after):
+        return {"ok": False, "msg": "provinces.bmp 写入失败（仅支持 24 位无压缩 BMP）"}
     # 存撤销区块。
     # 包围盒备份的代价是 w*h*3 字节——一次改散布在图两头的几百个像素，
     # 包围盒能覆盖整张 5632x2048 的图，单次 33MB。密度低于 35% 时改存点级
@@ -526,21 +600,194 @@ def map_merge_preview(src, dst, root=None):
             "states": states_hit, "states_empty_after": empty_after,
             "regions": region_hit, "bmp": bmp, "w": info["w"], "h": info["h"]}
 
-def map_merge_apply(src, dst, root=None):
-    """合并：把 src 的所有像素涂成 dst 的颜色，并把 src 从州列表里改成 dst"""
+def _ensure_layer_file_writable(fpath, rel_path, src_base, root, adopt=False):
+    """检查州/战略区等文本文件可写性，来自下层或只读层时按需单文件接管。"""
+    rel_n = (rel_path or "").replace("\\", "/").lstrip("/")
+    layers = mod_layers(root) if root else []
+    top = _writable_map_top(root, layers)
+    ab_top = os.path.abspath(top) if top else ""
+    if ab_top and rel_n:
+        top_cand = os.path.join(ab_top, rel_n.replace("/", os.sep))
+        if os.path.isfile(top_cand):
+            return top_cand, None
+    if fpath and not is_readonly_mod(fpath) and ab_top:
+        ab_fp = os.path.abspath(fpath)
+        if ab_fp.startswith(ab_top + os.sep):
+            return fpath, None
+    ab_src = os.path.abspath(src_base or "") if src_base else ""
+    if not is_readonly_mod(src_base or fpath) and (not ab_top or (ab_src and ab_src == ab_top)):
+        return fpath, None
+    if not top:
+        return None, {
+            "ok": False, "readonly": True,
+            "msg": "%s 来自只读目录（%s），不能直接改；请先新建或加载可写 submod"
+                   % (rel_n or os.path.basename(fpath or ""), os.path.basename(ab_src) or "原版"),
+        }
+    if not adopt:
+        return None, {
+            "ok": False, "need_adopt": True,
+            "rel": rel_n or os.path.basename(fpath or ""),
+            "from": os.path.basename(ab_src) or "父层",
+            "to": os.path.basename(ab_top) or "当前 mod",
+            "msg": "%s 来自%s（只读或下层），需先单文件复制到 %s 再编辑"
+                   % (rel_n or os.path.basename(fpath or ""), os.path.basename(ab_src) or "父层",
+                      os.path.basename(ab_top) or "当前 mod"),
+        }
+    if not rel_n:
+        return None, {"ok": False, "msg": "无法确定相对路径，不能接管文件"}
+    sub_dir = os.path.dirname(rel_n).replace("\\", "/").strip("/")
+    basename = os.path.basename(rel_n)
+    dst, msg = ensure_writable_file(root, sub_dir, basename)
+    if not dst:
+        return None, {"ok": False, "msg": msg}
+    return dst, {"adopted": True, "adopt_msg": msg}
+
+
+def _sr_remove_province(sr_text, pid):
+    """在战略区原文里精确移除省号 pid（按 _strip_keep_len 偏移，保留注释与格式）。"""
+    clean = _strip_keep_len(sr_text)
+    spans = []
+    for m in re.finditer(r'\bstrategic_region\s*=\s*\{', clean):
+        b = clean.find("{", m.end() - 1)
+        e = brace_match(clean, b)
+        if e <= b:
+            continue
+        body_clean = clean[b + 1:e - 1]
+        pm = re.search(r'\bprovinces\s*=\s*\{', body_clean)
+        if not pm:
+            continue
+        pb_rel = body_clean.find("{", pm.end() - 1)
+        pe_rel = brace_match(body_clean, pb_rel)
+        if pe_rel <= pb_rel:
+            continue
+        pb_abs = b + 1 + pb_rel
+        pe_abs = b + 1 + pe_rel
+        inner_clean = clean[pb_abs + 1:pe_abs - 1]
+        for mt in re.finditer(r'(?<!\d)%d(?!\d)' % pid, inner_clean):
+            s = pb_abs + 1 + mt.start()
+            t = pb_abs + 1 + mt.end()
+            if t < pe_abs - 1 and clean[t] in (' ', '\t'):
+                t += 1
+            elif s > pb_abs + 1 and clean[s - 1] in (' ', '\t'):
+                s -= 1
+            spans.append((s, t))
+    if not spans:
+        return sr_text, False
+    out = sr_text
+    prev_s = len(out) + 1
+    for s, t in sorted(spans, reverse=True):
+        t = min(t, prev_s)
+        if s < t:
+            out = out[:s] + out[t:]
+        prev_s = s
+    return out, True
+
+
+def map_merge_apply(src, dst, root=None, adopt=False):
+    """合并：把 src 的所有像素涂成 dst 的颜色，并同步更新州与战略区（跨州合并只移出 src 不造一省多州）"""
     pv = map_merge_preview(src, dst, root)
     if not pv.get("ok"):
         return pv
     src, dst = pv["src"], pv["dst"]
     root = _map_pick(root)
-    layers = mod_layers(root)
-    bmp = pv["bmp"]
-    if is_under_game(bmp):
-        return {"ok": False, "msg": "原版目录只读"}
+
+    # 先校验跨州合并：仅当 dst 尚无任何所属州时才移入 src 原州；否则只从 src 原州移除 src
+    dst_states = []
+    for _sid, _st in state.states().items():
+        if dst in (_st.get("provinces") or []):
+            dst_states.append(_sid)
+    add_dst_to_src_state = (len(dst_states) == 0)
+
+    state_targets = []
+    for sid in pv["states"]:
+        st = state.states().get(sid) or {}
+        old_provs = list(st.get("provinces") or [])
+        new_provs = [p for p in old_provs if p != src]
+        if add_dst_to_src_state and dst not in new_provs:
+            new_provs.append(dst)
+        if not new_provs:
+            return {"ok": False,
+                    "msg": "跨州合并会令州 %s 的省份为空（目标省 %d 已属其他州），拒绝操作以防空州报错" % (sid, dst)}
+        st_root = st.get("root") or ""
+        st_file = st.get("file") or ""
+        fpath = st.get("path") or os.path.join(st_root, st_file)
+        if not fpath or not os.path.exists(_out_read_path(fpath)):
+            continue
+        rel_hint = st_file.replace("\\", "/").lstrip("/")
+        if not rel_hint and st_root and fpath:
+            try:
+                rel_hint = os.path.relpath(fpath, st_root).replace("\\", "/").lstrip("/")
+            except Exception:
+                rel_hint = ""
+        state_targets.append((sid, st, fpath, rel_hint, st_root))
+
+    # 扫描包含 src 的战略区文件
+    sr_targets = []
+    for sr_base, sr_dir, sr_fn in effective_layer_files("map/strategicregions", root):
+        sr_path = os.path.join(sr_dir, sr_fn)
+        try:
+            with io.open(_out_read_path(sr_path), encoding="utf-8-sig", errors="replace") as _f:
+                sr_raw = _f.read()
+        except Exception:
+            continue
+        _sr_test, changed_sr = _sr_remove_province(sr_raw, src)
+        if changed_sr:
+            sr_rel = "map/strategicregions/" + sr_fn
+            sr_targets.append((sr_base, sr_path, sr_rel))
+
+    # 写盘前先对所有目标（provinces.bmp / 州 / 战略区）做可写与接管预检，避免写半截
+    bmp, _bbase, berr = _ensure_map_writable("provinces.bmp", root=root, adopt=False)
+    if not bmp and not adopt:
+        return berr
+    if not bmp and berr and not berr.get("need_adopt"):
+        return berr
+
+    for _sid, _st, fpath, rel_hint, st_root in state_targets:
+        _tf, _terr = _ensure_layer_file_writable(fpath, rel_hint, st_root, root, adopt=False)
+        if not _tf and not adopt:
+            return _terr
+        if not _tf and _terr and not _terr.get("need_adopt"):
+            return _terr
+
+    for sr_base, sr_path, sr_rel in sr_targets:
+        _sf, _serr = _ensure_layer_file_writable(sr_path, sr_rel, sr_base, root, adopt=False)
+        if not _sf and not adopt:
+            return _serr
+        if not _sf and _serr and not _serr.get("need_adopt"):
+            return _serr
+
+    adopt_msgs = []
+    if adopt:
+        bmp, _bbase, berr = _ensure_map_writable("provinces.bmp", root=root, adopt=True)
+        if not bmp:
+            return berr
+        if berr and berr.get("adopted"):
+            adopt_msgs.append(berr.get("adopt_msg") or "已单文件接管 map/provinces.bmp")
+
+    resolved_states = []
+    for sid, st, fpath, rel_hint, st_root in state_targets:
+        target_st, st_err = _ensure_layer_file_writable(fpath, rel_hint, st_root, root, adopt=adopt)
+        if not target_st:
+            return st_err
+        if st_err and st_err.get("adopted"):
+            adopt_msgs.append(st_err.get("adopt_msg") or ("已单文件接管 %s" % (rel_hint or os.path.basename(fpath))))
+        resolved_states.append((sid, st, target_st, rel_hint))
+
+    resolved_srs = []
+    for sr_base, sr_path, sr_rel in sr_targets:
+        target_sr, sr_err = _ensure_layer_file_writable(sr_path, sr_rel, sr_base, root, adopt=adopt)
+        if not target_sr:
+            return sr_err
+        if sr_err and sr_err.get("adopted"):
+            adopt_msgs.append(sr_err.get("adopt_msg") or ("已单文件接管 %s" % sr_rel))
+        resolved_srs.append((target_sr, sr_rel))
+
     src_rgb = tuple(pv["src_rgb"])
     dst_rgb = tuple(pv["dst_rgb"])
     w, h = pv["w"], pv["h"]
     allpx = bmp_read_rect(bmp, 0, 0, w, h)
+    if allpx is None:
+        return {"ok": False, "msg": "读取 provinces.bmp 失败（仅支持 24 位 BMP）"}
     changed = 0
     newpx = list(allpx)
     for i, px in enumerate(allpx):
@@ -556,16 +803,15 @@ def map_merge_apply(src, dst, root=None):
     with open(fn, "wb") as f:
         for (r, g, b) in allpx:
             f.write(bytes((r, g, b)))
-    bmp_write_rect(bmp, 0, 0, w, h, newpx)
-    # 州：src → dst
+    if not bmp_write_rect(bmp, 0, 0, w, h, newpx):
+        return {"ok": False, "msg": "provinces.bmp 写入失败（仅支持 24 位无压缩 BMP）"}
+
+    # 州：按规则更新磁盘与内存
+    top_writable = _writable_map_top(root, mod_layers(root))
     touched_states = []
-    for sid in pv["states"]:
-        st = state.states().get(sid) or {}
-        fpath = st.get("path") or st.get("file")
-        if not fpath or not os.path.exists(fpath):
-            continue
+    for sid, st, target_st, rel_hint in resolved_states:
         try:
-            _text, _bom = _read_bom_text(fpath)
+            _text, _bom = _read_bom_text(target_st)
             _loc = _state_locate(_text)
             if not _loc:
                 continue
@@ -573,31 +819,63 @@ def map_merge_apply(src, dst, root=None):
             _body = _text[_b + 1:_e - 1]
             _old = _parse_state_provinces(_body)
             _new = [p for p in _old if p != src]
-            if dst not in _new:
+            if add_dst_to_src_state and dst not in _new:
                 _new.append(dst)
             _new_text = _text[:_b + 1] + _set_state_provinces(_body, _new) + _text[_e - 1:]
-            snapshot(fpath)
-            _write_bom_text(fpath, _new_text, _bom)
-            state.changed()[fpath] = os.path.relpath(fpath, root)
-            touched_states.append(os.path.relpath(fpath, root))
+            snapshot(target_st)
+            _write_bom_text(target_st, _new_text, _bom)
+            rel_show = rel_hint or os.path.relpath(target_st, top_writable or root or os.path.dirname(target_st))
+            state.changed()[_out_path(target_st)] = rel_show
+            touched_states.append(rel_show)
+            if top_writable and os.path.abspath(target_st).startswith(os.path.abspath(top_writable) + os.sep):
+                st["root"] = top_writable
+                if "path" in st:
+                    st["path"] = target_st
         except Exception as _e2:
-            print("合并时写州失败:", fpath, _e2)
+            print("合并时写州失败:", target_st, _e2)
     # 内存里的 state.states() 也更新
     for sid in pv["states"]:
         st = state.states().get(sid)
         if not st:
             continue
         lst = [p for p in (st.get("provinces") or []) if p != src]
-        if dst not in lst:
+        if add_dst_to_src_state and dst not in lst:
             lst.append(dst)
         st["provinces"] = sorted(lst)
+
+    # 战略区：从对应战略区移除 src（无 BOM、原文精准替换）
+    touched_regions = []
+    for target_sr, sr_rel in resolved_srs:
+        try:
+            with io.open(_out_read_path(target_sr), encoding="utf-8-sig", errors="replace") as _f:
+                sr_raw = _f.read()
+            new_sr_text, sr_changed = _sr_remove_province(sr_raw, src)
+            if sr_changed:
+                snapshot(target_sr)
+                out_sr = _out_path(target_sr)
+                _atomic_write(out_sr, new_sr_text.encode("utf-8"))
+                state.changed()[out_sr] = sr_rel
+                touched_regions.append(sr_rel)
+        except Exception as _e3:
+            print("合并时写战略区失败:", target_sr, _e3)
+    if touched_regions:
+        try:
+            state.map_var("_REGION_CACHE").clear()
+        except Exception:
+            pass
+
     state.map_var("MAP_EDIT")["undo"].append({"file": fn, "bmp": bmp, "x": 0, "y": 0, "w": w, "h": h,
                              "count": changed, "kind": "merge", "src": src, "dst": dst,
-                             "states": touched_states})
+                             "states": touched_states, "regions": touched_regions})
     state.map_var("MAP_EDIT")["redo"] = []
-    return {"ok": True, "src": src, "dst": dst, "pixels": changed,
-            "states": touched_states, "undo_depth": len(state.map_var("MAP_EDIT")["undo"]),
-            "note": "definition.csv 未改动（省 %d 仍保留定义，可后续手工清理或用「删除省」）" % src}
+    out = {"ok": True, "src": src, "dst": dst, "pixels": changed,
+           "states": touched_states, "regions": touched_regions,
+           "undo_depth": len(state.map_var("MAP_EDIT")["undo"]),
+           "note": "definition.csv 未改动（省 %d 仍保留定义，可后续手工清理或用「删除省」）" % src}
+    if adopt_msgs:
+        out["adopted"] = True
+        out["adopt_msg"] = "；".join(dict.fromkeys(adopt_msgs))
+    return out
 
 def map_prov_neighbors(pid, root=None):
     """返回某省的相邻省（按共享边像素数排序）。整幅扫描约 5 秒，按 bmp mtime 缓存结果。"""
@@ -785,22 +1063,43 @@ def map_integrity(root=None, limit=200):
     # 铁路
     rail_bad = 0
     rail_check = 0
-    rp = None
-    for b in (root, state.game()):
-        cand = os.path.join(b or "", "map", "railways.txt")
-        if os.path.exists(cand):
-            rp = cand
-            break
+    rp, _ = _layers_find("map/railways.txt", mod_layers(root))
     if rp:
         try:
-            with io.open(rp, encoding="utf-8", errors="replace") as _f:
+            with io.open(_out_read_path(rp), encoding="utf-8-sig", errors="replace") as _f:
                 text = strip_comments(_f.read())
-            for m in re.finditer(r'railway\s*=\s*\{([^{}]*)\}', text):
-                body = m.group(1)
-                pm = re.search(r'provinces\s*=\s*\{([^}]*)\}', body)
-                if not pm:
+            chains = []
+            for m in re.finditer(r'(?m)^\s*railway\s*=\s*\{', text):
+                b = text.find("{", m.end() - 1)
+                e = brace_match(text, b)
+                if e <= b:
                     continue
-                chain = [int(x) for x in re.findall(r'\d+', pm.group(1))]
+                body = text[b + 1:e - 1]
+                pm = re.search(r'provinces\s*=\s*\{([^}]*)\}', body)
+                if pm:
+                    provs = [int(x) for x in re.findall(r'\d+', pm.group(1))]
+                    if provs:
+                        chains.append(provs)
+            for ln in text.splitlines():
+                s = ln.strip()
+                if not s or s.startswith("#"):
+                    continue
+                parts = s.split()
+                if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
+                    continue
+                try:
+                    n_cnt = int(parts[1])
+                except Exception:
+                    continue
+                provs = []
+                for tok in parts[2:2 + n_cnt]:
+                    try:
+                        provs.append(int(tok))
+                    except Exception:
+                        break
+                if len(provs) == n_cnt and provs:
+                    chains.append(provs)
+            for chain in chains:
                 for a, b2 in zip(chain, chain[1:]):
                     rail_check += 1
                     if b2 not in adj.get(a, set()):

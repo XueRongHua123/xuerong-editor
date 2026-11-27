@@ -199,17 +199,30 @@ def load_characters(root=None):
                 if ce <= cb:
                     continue
                 body = outer_body[cb + 1:ce - 1]
-                nm = _first(body, r'(?m)^\s*name\s*=\s*"([^"]*)"')
+                m_nm = re.search(r'(?m)^\s*name\s*=\s*"([^"]*)"', body)
+                if m_nm:
+                    nm = m_nm.group(1)
+                    nm_quoted = True
+                else:
+                    m_nm2 = re.search(r'(?m)^\s*name\s*=\s*([A-Za-z0-9_.\-]+)', body)
+                    if m_nm2:
+                        nm = m_nm2.group(1)
+                        nm_quoted = False
+                    else:
+                        nm = ""
+                        nm_quoted = True
                 if not nm:
                     continue
                 if cid in seen:
                     continue
                 seen.add(cid)
-                ctype = ""
-                for t in CHAR_TYPES:
-                    if re.search(r'(?m)^[ \t]*' + t + r'[ \t]*=\s*\{', body):
-                        ctype = t
-                        break
+                loc_map = state.loc() or {}
+                name_zh = loc_map.get(nm, "") or ""
+                roles = [
+                    t for t in CHAR_TYPES
+                    if re.search(r'(?m)^[ \t]*' + t + r'[ \t]*=\s*\{', body)
+                ]
+                ctype = roles[0] if roles else ""
                 big = _first(body, r'(?m)^\s*large\s*=\s*"?([^"\s#]+)"?')
                 small = _first(body, r'(?m)^\s*small\s*=\s*"([^"]*)"')
                 traits = []
@@ -224,11 +237,13 @@ def load_characters(root=None):
                                 traits.append(ln)
                 sk = {}
                 for k in ("skill", "attack_skill", "defense_skill", "planning_skill",
-                          "logistics_skill"):
+                          "logistics_skill", "maneuvering_skill", "coordination_skill"):
                     v = _first(body, r'(?m)^\s*' + k + r'\s*=\s*(-?\d+)')
                     if v:
                         sk[k] = int(v)
-                items.append({"id": cid, "name": nm, "type": ctype,
+                items.append({"id": cid, "name": nm, "name_zh": name_zh,
+                              "name_quoted": nm_quoted,
+                              "type": ctype, "roles": roles,
                               "portrait_large": big, "portrait_small": small,
                               "traits": traits, "skills": sk,
                               "file": rel, "source": src,
@@ -266,7 +281,8 @@ def _char_write_base(root):
 def character_add(root, cid, name, ctype="corps_commander", skill=3,
                   attack=3, defense=3, planning=3, logistics=3,
                   portrait_large="", portrait_small="", country=None,
-                  portrait_src=None, portrait_overwrite=False):
+                  portrait_src=None, portrait_overwrite=False,
+                  slot=None, idea_token=None):
     """新建人物。
 
     写进 common/characters/zz_editor_characters.txt（不覆盖别人已有的文件）。
@@ -354,19 +370,46 @@ def character_add(root, cid, name, ctype="corps_commander", skill=3,
     body = ['\t%s = {' % cid,
             '		name = "%s"' % name.replace('"', "")]
     if portrait_large or portrait_small:
+        p_group = "navy" if ctype == "navy_leader" else (
+            "civilian" if ctype in ("country_leader", "advisor", "scientist") else "army"
+        )
         body.append('\t\tportraits = {')
-        body.append('\t\t\tarmy = {')
+        body.append('\t\t\t%s = {' % p_group)
         if portrait_large:
             body.append('\t\t\t\tlarge = %s' % portrait_large)
         if portrait_small:
             body.append('\t\t\t\tsmall = "%s"' % portrait_small)
         body.append('\t\t\t}')
         body.append('\t\t}')
-    body.append('\t\t%s = {' % ctype)
-    for k in ("skill", "attack_skill", "defense_skill", "planning_skill",
-              "logistics_skill"):
-        body.append('\t\t\t%s = %d' % (k, sk[k]))
-    body.append('\t\t}')
+    if ctype == "advisor":
+        adv_slot = (slot or "political_advisor").strip()
+        adv_token = (idea_token or cid).strip()
+        body.append('\t\tadvisor = {')
+        body.append('\t\t\tslot = %s' % adv_slot)
+        body.append('\t\t\tidea_token = %s' % adv_token)
+        body.append('\t\t\ttraits = { }')
+        body.append('\t\t}')
+    elif ctype == "navy_leader":
+        body.append('\t\tnavy_leader = {')
+        body.append('\t\t\tskill = %d' % sk["skill"])
+        body.append('\t\t\tattack_skill = %d' % sk["attack_skill"])
+        body.append('\t\t\tdefense_skill = %d' % sk["defense_skill"])
+        body.append('\t\t\tmaneuvering_skill = %d' % sk["planning_skill"])
+        body.append('\t\t\tcoordination_skill = %d' % sk["logistics_skill"])
+        body.append('\t\t}')
+    elif ctype == "scientist":
+        body.append('\t\tscientist = {')
+        body.append('\t\t\ttraits = { }')
+        body.append('\t\t\tskills = {')
+        body.append('\t\t\t\tspecialization_land = %d' % max(1, min(5, sk["skill"])))
+        body.append('\t\t\t}')
+        body.append('\t\t}')
+    else:
+        body.append('\t\t%s = {' % ctype)
+        for k in ("skill", "attack_skill", "defense_skill", "planning_skill",
+                  "logistics_skill"):
+            body.append('\t\t\t%s = %d' % (k, sk[k]))
+        body.append('\t\t}')
     body.append('\t}')
     block = "\n".join(body) + "\n"
 
@@ -500,11 +543,18 @@ def character_set(root, cid, fields):
     changed = []
     nm = fields.get("name")
     if nm:
-        pat = re.compile(r'(?m)^([ \t]*)name\s*=\s*"[^"]*"')
+        nm_clean = str(nm).replace('"', "").strip()
+        pat = re.compile(r'(?m)^([ \t]*)name\s*=\s*(?:"[^"]*"|[A-Za-z0-9_.\-]+)')
         if pat.search(new_seg):
-            new_seg = pat.sub(lambda m: (m.group(1) or "") + 'name = "%s"' % nm.replace('"', ""), new_seg, count=1)
+            use_unquoted = (
+                not it.get("name_quoted", True)
+                and bool(re.match(r'^[A-Za-z0-9_.\-]+$', nm_clean))
+            )
+            rep_val = nm_clean if use_unquoted else ('"%s"' % nm_clean)
+            new_seg = pat.sub(lambda m: (m.group(1) or "") + "name = %s" % rep_val, new_seg, count=1)
             changed.append("name")
-    for k in ("skill", "attack_skill", "defense_skill", "planning_skill", "logistics_skill"):
+    for k in ("skill", "attack_skill", "defense_skill", "planning_skill",
+              "logistics_skill", "maneuvering_skill", "coordination_skill"):
         v = fields.get(k)
         if v in (None, ""):
             continue

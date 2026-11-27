@@ -102,26 +102,33 @@ def event_graph(ns="", root=None):
     """某个事件命名空间的树。ns 为空时返回所有命名空间概览。"""
     root = paths._pick(root)
     ns = (ns or "").strip()
-    key = (os.path.abspath(root or ""), ns)
+    eff_files = effective_layer_files("events", root)
+    layers_sig = tuple(os.path.abspath(x) for x in (_chain_layers(root) or []) if x)
+    max_mt = 0
+    for _ab, d, fn in eff_files:
+        try:
+            mt = int(os.path.getmtime(os.path.join(d, fn)))
+            if mt > max_mt:
+                max_mt = mt
+        except Exception:
+            pass
+    key = (os.path.abspath(root or ""), layers_sig, len(eff_files), max_mt, ns)
     hit = _EVENT_GRAPH_CACHE.get(key)
     if hit:
         return hit
 
     events = {}
-    d = os.path.join(root or "", "events")
-    if os.path.isdir(d):
-        for _dp, _dn, files in os.walk(d):
-            for fn in sorted(files):
-                if not fn.endswith(".txt"):
-                    continue
-                try:
-                    with io.open(os.path.join(_dp, fn), encoding="utf-8-sig", errors="replace") as f:
-                        text = strip_comments(f.read())
-                except Exception:
-                    continue
-                for eid, body, kind in _event_block(text, "event"):
-                    events[eid] = {"id": eid, "kind": kind, "body": body,
-                                   "file": os.path.relpath(os.path.join(_dp, fn), root)}
+    for base, d, fn in eff_files:
+        fp = os.path.join(d, fn)
+        try:
+            with io.open(fp, encoding="utf-8-sig", errors="replace") as f:
+                text = strip_comments(f.read())
+        except Exception:
+            continue
+        rel_f = os.path.relpath(fp, base)
+        for eid, body, kind in _event_block(text, "event"):
+            events[eid] = {"id": eid, "kind": kind, "body": body,
+                           "file": rel_f}
 
     # 命名空间：优先 ns 前缀（X.1 里的 X），没有点号的按整个 id 算
     spaces = {}
@@ -573,9 +580,33 @@ def _adopt_rel_to_top(root, rel):
     if not src:
         return None, "找不到文件：" + rel
     os.makedirs(os.path.dirname(dst) or top, exist_ok=True)
-    import shutil as _sh
-    _sh.copyfile(src, dst)
+    if not norm_rel.lower().endswith(".yml"):
+        with io.open(src, "rb") as _rf:
+            data = _rf.read()
+        if data.startswith(b"\xef\xbb\xbf"):
+            data = data[3:]
+        _atomic_write(dst, data)
+    else:
+        import shutil as _sh
+        _sh.copyfile(src, dst)
     return dst, ""
+
+
+def _resolve_event_source(root, rel):
+    """只读定位事件源文件，供保存前合法性校验使用（不提前写入 submod）。"""
+    top = _writable_mod_top(root)
+    if top:
+        dst = os.path.join(top, rel)
+        if os.path.isfile(dst):
+            return dst
+    norm_rel = rel.replace("\\", "/")
+    cands = []
+    if root:
+        cands.append(os.path.join(root, rel))
+    for b in reversed(paths.mod_layers(top or root) or []):
+        if b:
+            cands.append(os.path.join(b, norm_rel.replace("/", os.sep)))
+    return next((c for c in cands if os.path.isfile(c)), None)
 
 
 # ---------------- 事件 ----------------
@@ -583,6 +614,22 @@ def save_event(root, rel, eid, raw, title="", desc="", title_ja="", desc_ja="",
                title_en="", desc_en="", options=None, trigger_raw="", immediate_raw="", picture=""):
     if not rel or not eid:
         return False, "参数不完整：缺少文件或事件 id"
+
+    if trigger_raw:
+        raw = set_raw_block(raw, "trigger", trigger_raw)
+    if immediate_raw:
+        raw = set_raw_block(raw, "immediate", immediate_raw)
+    if picture:
+        raw = set_scalar(raw, "picture", picture)
+
+    if not braces_balanced(raw):
+        return False, "花括号不匹配，未保存"
+    clean_raw = strip_comments(raw)
+    is_hidden = bool(re.search(r'(?m)^\s*hidden\s*=\s*yes\b', clean_raw))
+    has_option = bool(re.search(r'\boption\s*=\s*\{', clean_raw))
+    if not is_hidden and not has_option:
+        return False, "事件至少需要一个 option"
+
     explicit = {os.path.abspath(r) for r in (state.roots() or []) if r}
     need_adopt = (
         not root
@@ -591,21 +638,13 @@ def save_event(root, rel, eid, raw, title="", desc="", title_ja="", desc_ja="",
         or (bool(explicit) and os.path.abspath(root) not in explicit)
     )
     path = os.path.join(root, rel) if root else ""
-    if need_adopt or not path or not os.path.isfile(path):
-        path, err = _adopt_rel_to_top(root, rel)
-        if not path:
-            return False, err
-        root = _writable_mod_top(root) or root
-    with io.open(path, "rb") as f:
+    src_path = path if (not need_adopt and path and os.path.isfile(path)) else _resolve_event_source(root, rel)
+    if not src_path or not os.path.isfile(src_path):
+        return False, "找不到文件：" + rel
+
+    with io.open(src_path, "rb") as f:
         raw_bytes = f.read()
     text = raw_bytes.decode("utf-8-sig" if raw_bytes.startswith(b"\xef\xbb\xbf") else "utf-8", errors="replace")
-
-    if trigger_raw:
-        raw = set_raw_block(raw, "trigger", trigger_raw)
-    if immediate_raw:
-        raw = set_raw_block(raw, "immediate", immediate_raw)
-    if picture:
-        raw = set_scalar(raw, "picture", picture)
 
     # 精确匹配包含该 id 的完整 *_event = { ... } 块，避免残余前缀（原 text[:brace-1] 会残留 country_event =）
     ev_span = None
@@ -621,15 +660,35 @@ def save_event(root, rel, eid, raw, title="", desc="", title_ja="", desc_ja="",
     if not ev_span:
         return False, "未找到事件 " + eid
     ev_start, e = ev_span
-    if not braces_balanced(raw):
-        return False, "花括号不匹配，未保存"
     all_ns = re.findall(r'(?m)^\s*add_namespace\s*=\s*(\w+)', text)
     if all_ns and "." in eid:
         ev_ns = eid.split(".", 1)[0]
         if ev_ns not in all_ns:
             return False, "事件 id 前缀「%s」不在文件声明的 add_namespace（%s）中" % (ev_ns, ", ".join(all_ns))
-    if "option" not in raw:
-        return False, "事件至少需要一个 option"
+
+    if need_adopt or not path or not os.path.isfile(path):
+        path, err = _adopt_rel_to_top(root, rel)
+        if not path:
+            return False, err
+        root = _writable_mod_top(root) or root
+        if os.path.abspath(path) != os.path.abspath(src_path):
+            with io.open(path, "rb") as f:
+                raw_bytes = f.read()
+            text = raw_bytes.decode("utf-8-sig" if raw_bytes.startswith(b"\xef\xbb\xbf") else "utf-8", errors="replace")
+            ev_span = None
+            for em in re.finditer(r'(?m)^[ \t]*[A-Za-z_]*_event[ \t]*=\s*\{', text):
+                eb = text.find("{", em.end() - 1)
+                ee = brace_match(text, eb)
+                if ee <= eb:
+                    continue
+                ebody = text[eb + 1:ee - 1]
+                if re.search(r'(?m)^[ \t]*id\s*=\s*"?%s"?' % re.escape(eid), ebody):
+                    ev_span = (em.start(), ee)
+                    break
+            if not ev_span:
+                return False, "未找到事件 " + eid
+            ev_start, e = ev_span
+
     snapshot(path)
     new_text = text[:ev_start] + raw.strip() + "\n" + text[e:]
     _atomic_write(path, _bom_for(path) + new_text.encode("utf-8"))

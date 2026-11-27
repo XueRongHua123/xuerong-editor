@@ -9,8 +9,8 @@ import os
 import re
 
 from xuerong.core.paths import _layer_files, _pick, mod_layers, write_base
-from xuerong.core.text import (_atomic_write, _bom_for, _first, _strip_keep_len, brace_match,
-                               find_blocks, top_items)
+from xuerong.core.text import (_atomic_write, _bom_for, _first, _strip_keep_len, brace_depth_at,
+                               brace_match, find_blocks, top_items)
 from xuerong.model.history import snapshot
 from xuerong.model.world._write_guard import world_write_base
 
@@ -66,10 +66,10 @@ def _parse_division_template(body, rel, src):
             for k, v, b in top_items(body[rb + 1:re_ - 1]):
                 if not b:
                     continue
-                x = _first(v, r'(?m)^\s*x\s*=\s*(-?\d+)', "0")
-                y = _first(v, r'(?m)^\s*y\s*=\s*(-?\d+)', "0")
+                x = _first(v, r'\bx\s*=\s*(-?\d+)', "0")
+                y = _first(v, r'\by\s*=\s*(-?\d+)', "0")
                 regs.append({"unit": k, "x": int(x), "y": int(y)})
-    sm = re.search(r'support\s*=\s*\{', body)
+    sm = re.search(r'(?m)^\s*support\s*=\s*\{', body)
     if sm:
         sb = body.find("{", sm.end() - 1)
         se = brace_match(body, sb)
@@ -77,8 +77,8 @@ def _parse_division_template(body, rel, src):
             for k, v, b in top_items(body[sb + 1:se - 1]):
                 if not b:
                     continue
-                x = _first(v, r'(?m)^\s*x\s*=\s*(-?\d+)', "0")
-                y = _first(v, r'(?m)^\s*y\s*=\s*(-?\d+)', "0")
+                x = _first(v, r'\bx\s*=\s*(-?\d+)', "0")
+                y = _first(v, r'\by\s*=\s*(-?\d+)', "0")
                 sup.append({"unit": k, "x": int(x), "y": int(y)})
     return {"name": name, "locked": locked, "regiments": regs, "support": sup,
             "file": rel, "source": src,
@@ -249,6 +249,112 @@ def _tpl_render(name, regs, sup, locked, indent="\t", with_key=True):
         out.append("%s}\n" % indent)
     out.append("}\n")
     return "".join(out)
+
+
+def _render_unit_subblock(key, items, indent="\t"):
+    lines = ["%s%s = {\n" % (indent, key)]
+    for r in (items or []):
+        lines.append("%s\t%s = { x = %d y = %d }\n" % (
+            indent, r["unit"], int(r.get("x") or 0), int(r.get("y") or 0)))
+    lines.append("%s}" % indent)
+    return "".join(lines)
+
+
+def patch_division_template_block(raw_block, name, regiments, support, locked=None):
+    """在原 division_template 块上原地更新 name / regiments / 顶层 support。
+
+    完整保留 regimental_support、override_model、obsolete、priority、
+    division_names_group 及全部注释；支持带或不带 `division_template =` 前缀的块文本。
+    """
+    out = raw_block or ""
+    text = _strip_keep_len(out)
+    first_brace = text.find("{")
+    if first_brace < 0:
+        return _tpl_render(name, regiments or [], support or [], bool(locked))
+
+    m_ind = re.search(r'\n([ \t]+)\S', text[first_brace:])
+    inner_indent = m_ind.group(1) if m_ind else "\t"
+    safe_name = (name or "").replace('"', "").strip()
+
+    name_hit = None
+    for m in re.finditer(r'(?m)^([ \t]*)name\s*=\s*"[^"]*"', text):
+        if brace_depth_at(text, m.start()) == 1:
+            name_hit = m
+            break
+    if name_hit:
+        out = (out[:name_hit.start()]
+               + (name_hit.group(1) or "") + ('name = "%s"' % safe_name)
+               + out[name_hit.end():])
+    else:
+        nl = out.find("\n", first_brace)
+        if nl >= 0:
+            out = out[:nl + 1] + '%sname = "%s"\n' % (inner_indent, safe_name) + out[nl + 1:]
+
+    if locked is not None:
+        text = _strip_keep_len(out)
+        lock_hit = None
+        for m in re.finditer(r'(?m)^([ \t]*)is_locked\s*=\s*(?:yes|no)\b', text):
+            if brace_depth_at(text, m.start()) == 1:
+                lock_hit = m
+                break
+        val = "yes" if locked else "no"
+        if lock_hit:
+            out = (out[:lock_hit.start()]
+                   + (lock_hit.group(1) or "") + ("is_locked = %s" % val)
+                   + out[lock_hit.end():])
+        elif locked:
+            m_nm = re.search(r'(?m)^([ \t]*)name\s*=\s*"[^"]*"[^\n]*\n', text)
+            if m_nm:
+                ind = m_nm.group(1) or inner_indent
+                out = out[:m_nm.end()] + "%sis_locked = yes\n" % ind + out[m_nm.end():]
+
+    def _find_top_subblock(src_text, key):
+        for m in re.finditer(r'(?m)^([ \t]*)' + re.escape(key) + r'\s*=\s*\{', src_text):
+            if brace_depth_at(src_text, m.start()) == 1:
+                sb = src_text.find("{", m.end() - 1)
+                se = brace_match(src_text, sb)
+                if se > sb:
+                    return m.start(), se, (m.group(1) or inner_indent)
+        return -1, -1, inner_indent
+
+    def _insert_before_end(src_out, snippet):
+        src_text = _strip_keep_len(src_out)
+        fb = src_text.find("{")
+        fe = brace_match(src_text, fb)
+        if fe <= fb:
+            return src_out.rstrip() + "\n" + snippet
+        close_idx = fe - 1
+        ls = src_out.rfind("\n", 0, close_idx)
+        pos = (ls + 1) if ls >= 0 else close_idx
+        prefix = src_out[:pos]
+        if prefix and not prefix.endswith("\n"):
+            prefix += "\n"
+        return prefix + snippet + src_out[pos:]
+
+    text = _strip_keep_len(out)
+    rs, re_, rind = _find_top_subblock(text, "regiments")
+    if rs >= 0:
+        out = out[:rs] + _render_unit_subblock("regiments", regiments, rind) + out[re_:]
+    elif regiments:
+        out = _insert_before_end(out, _render_unit_subblock("regiments", regiments, inner_indent) + "\n")
+
+    sup_list = list(support or [])
+    text = _strip_keep_len(out)
+    ss, se, sind = _find_top_subblock(text, "support")
+    if ss >= 0:
+        out = out[:ss] + _render_unit_subblock("support", sup_list, sind) + out[se:]
+    elif sup_list:
+        rs2, re2, rind2 = _find_top_subblock(text, "regiments")
+        if re2 > rs2:
+            nl = out.find("\n", re2)
+            pos = (nl + 1) if nl >= 0 else re2
+            prefix = out[:pos]
+            if prefix and not prefix.endswith("\n"):
+                prefix += "\n"
+            out = prefix + _render_unit_subblock("support", sup_list, rind2) + "\n" + out[pos:]
+        else:
+            out = _insert_before_end(out, _render_unit_subblock("support", sup_list, inner_indent) + "\n")
+    return out
 
 
 def template_add(name, unit, x=0, y=0, root=None, tag=None):

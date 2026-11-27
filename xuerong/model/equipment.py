@@ -148,13 +148,44 @@ def _equip_locate(root, eid):
 
 
 
+def _writable_top_for(root=None):
+    """找当前解析链顶的可写 mod 目录（跳过原版与工坊只读目录）。"""
+    if root:
+        ab_exp = os.path.abspath(root)
+        for r in reversed(state.roots() or []):
+            lay = mod_layers(r) or [r]
+            ab_lay = [os.path.abspath(x) for x in lay if x]
+            if ab_exp in ab_lay:
+                for cand in reversed(lay):
+                    if cand and not is_readonly_mod(cand):
+                        return cand
+        for cand in reversed(mod_layers(root) or [root]):
+            if cand and not is_readonly_mod(cand):
+                return cand
+    for r in reversed(state.roots() or []):
+        lay = mod_layers(r) or [r]
+        for cand in reversed(lay):
+            if cand and not is_readonly_mod(cand):
+                return cand
+    if root:
+        cand = _top_mod(root)
+        if cand and not is_readonly_mod(cand):
+            return cand
+    return None
+
+
 def equipment_detail(eid, root=None):
     """某个装备的完整信息：属性、模块槽、来源文件、是否可编辑"""
+    explicit_root = root
     root = paths._pick(root)
     base, path, b, e, body = _equip_locate(root, eid)
     if not path:
         return {"ok": False, "msg": "找不到装备 %s" % eid}
-    readonly = os.path.abspath(base) == os.path.abspath(state.game() or "")
+    top = _writable_top_for(explicit_root or root)
+    same_top = bool(top and base and os.path.normcase(os.path.abspath(base)) == os.path.normcase(os.path.abspath(top)))
+    from_parent = bool(not same_top)
+    readonly = not bool(top)
+    src_name = os.path.basename((base or "").rstrip("\\/")) or (base or "")
 
     # 标量属性（跳过块）
     scalars = {}
@@ -185,34 +216,38 @@ def equipment_detail(eid, root=None):
 
     # 该 id 出现在哪些地方（引用）
     refs = []
-    for rel_dir in ("common", "history", "events"):
-        d = os.path.join(root, rel_dir)
-        if not os.path.isdir(d):
-            continue
-        for dp, _dn, fs in os.walk(d):
-            for f in fs:
-                if not f.endswith(".txt"):
-                    continue
-                p2 = os.path.join(dp, f)
-                try:
-                    with io.open(p2, encoding="utf-8-sig", errors="replace") as fh:
-                        t2 = fh.read()
-                except Exception:
-                    continue
-                if re.search(r'\b%s\b' % re.escape(eid), t2):
-                    refs.append(os.path.relpath(p2, root))
-                    if len(refs) >= 20:
-                        break
+    if root:
+        for rel_dir in ("common", "history", "events"):
+            d = os.path.join(root, rel_dir)
+            if not os.path.isdir(d):
+                continue
+            for dp, _dn, fs in os.walk(d):
+                for f in fs:
+                    if not f.endswith(".txt"):
+                        continue
+                    p2 = os.path.join(dp, f)
+                    try:
+                        with io.open(p2, encoding="utf-8-sig", errors="replace") as fh:
+                            t2 = fh.read()
+                    except Exception:
+                        continue
+                    if re.search(r'\b%s\b' % re.escape(eid), t2):
+                        refs.append(os.path.relpath(p2, root))
+                        if len(refs) >= 20:
+                            break
 
+    src_note = ("，来自 " + src_name) if (from_parent and src_name) else ""
     return {"ok": True, "id": eid,
             "file": os.path.relpath(path, base) if base else path,
             "readonly": readonly,
+            "from_parent": from_parent,
+            "source": src_name,
             "archetype": scalars.get("archetype", ""),
             "year": scalars.get("year", ""),
             "buildable": scalars.get("is_buildable", ""),
             "name": state.loc().get(eid, eid),
             "scalars": scalars, "slots": slots, "refs": refs,
-            "msg": "%s（%d 个属性，%d 个槽）" % (eid, len(scalars), len(slots))}
+            "msg": "%s（%d 个属性，%d 个槽%s）" % (eid, len(scalars), len(slots), src_note)}
 
 
 
@@ -221,24 +256,27 @@ def equipment_edit(eid, props, root=None):
 
     props: {key: value}。key 已存在就改值，不存在就插入。
     块结构（module_slots / resources 等）不在这个接口的范围内，避免把嵌套写坏。"""
+    explicit_root = root
     root = paths._pick(root)
     if not isinstance(props, dict) or not props:
         return {"ok": False, "msg": "没有要改的属性"}
+    for k in props:
+        ks = str(k).strip()
+        if not re.match(r'^[a-z_0-9]+$', ks):
+            return {"ok": False, "msg": "属性名不合法：%s" % ks}
+
     base, path, b, e, body = _equip_locate(root, eid)
     if not path:
         return {"ok": False, "msg": "找不到装备 %s" % eid}
-    if os.path.abspath(base) == os.path.abspath(state.game() or ""):
-        return {"ok": False, "msg": "这个装备来自原版，只读"}
+    top = _writable_top_for(explicit_root or root)
+    if not top:
+        return {"ok": False, "msg": "这个装备来自只读层，且没有可写的 submod 目录"}
 
-    with io.open(path, encoding="utf-8-sig", errors="replace") as f:
-        raw = f.read()
     new_body = body
     changed = []
     for k, v in props.items():
         k = str(k).strip()
         v = str(v).strip()
-        if not re.match(r'^[a-z_0-9]+$', k):
-            return {"ok": False, "msg": "属性名不合法：%s" % k}
         if not v:
             continue
         pat = re.compile(r'(?m)^([ \t]*)%s([ \t]*=[ \t]*)([^\s{#\n]+)' % re.escape(k))
@@ -256,6 +294,20 @@ def equipment_edit(eid, props, root=None):
     if not changed:
         return {"ok": True, "changed": [], "msg": "没有实际改动"}
 
+    need_adopt = (
+        is_under_game(path)
+        or is_readonly_mod(path)
+        or not base
+        or os.path.normcase(os.path.abspath(base)) != os.path.normcase(os.path.abspath(top))
+    )
+    if need_adopt:
+        dst, err = ensure_writable_file(explicit_root or root, "common/units/equipment", os.path.basename(path))
+        if not dst:
+            return {"ok": False, "msg": err or "接管只读文件失败"}
+        path = dst
+
+    with io.open(path, encoding="utf-8-sig", errors="replace") as f:
+        raw = f.read()
     new_raw = raw[:b + 1] + new_body + raw[e - 1:]
     snapshot(path)
     _atomic_write(path, _bom_for(path) + new_raw.encode("utf-8"))
@@ -267,12 +319,19 @@ def equipment_edit(eid, props, root=None):
 
 def equipment_delete(eid, root=None):
     """删除一个装备定义（摘掉整个块）"""
+    explicit_root = root
     root = paths._pick(root)
     base, path, b, e, body = _equip_locate(root, eid)
     if not path:
         return {"ok": False, "msg": "找不到装备 %s" % eid}
-    if os.path.abspath(base) == os.path.abspath(state.game() or ""):
-        return {"ok": False, "msg": "这个装备来自原版，只读"}
+    top = _writable_top_for(explicit_root or root)
+    if (is_under_game(path)
+            or is_readonly_mod(path)
+            or not top
+            or not base
+            or os.path.normcase(os.path.abspath(base)) != os.path.normcase(os.path.abspath(top))):
+        src_name = os.path.basename((base or "").rstrip("\\/")) or (base or "")
+        return {"ok": False, "msg": "装备 %s 来自只读层或下层父 mod（%s），不能直接删除" % (eid, src_name)}
     # 引用检查：还有别的地方用就不让删
     det = equipment_detail(eid, root)
     refs = [r for r in (det.get("refs") or []) if not r.endswith(os.path.basename(path))]

@@ -691,8 +691,16 @@ def load_countries(root):
             cur["history_display"] = m.group(2).strip() if m else tag
             cur["capital"] = _first(text, r'(?m)^\s*capital\s*=\s*(\d+)')
             cur["political_power"] = _first(text, r'(?m)^\s*add_political_power\s*=\s*(-?[\d.]+)')
-            cur["stability"] = _first(text, r'(?m)^\s*add_stability\s*=\s*(-?[\d.]+)')
-            cur["war_support"] = _first(text, r'(?m)^\s*add_war_support\s*=\s*(-?[\d.]+)')
+            cur["stability"] = (
+                _first(text, r'(?m)^\s*set_stability\s*=\s*(-?[\d.]+)')
+                or _first(text, r'(?m)^\s*base_stability\s*=\s*(-?[\d.]+)')
+                or _first(text, r'(?m)^\s*add_stability\s*=\s*(-?[\d.]+)')
+            )
+            cur["war_support"] = (
+                _first(text, r'(?m)^\s*set_war_support\s*=\s*(-?[\d.]+)')
+                or _first(text, r'(?m)^\s*base_war_support\s*=\s*(-?[\d.]+)')
+                or _first(text, r'(?m)^\s*add_war_support\s*=\s*(-?[\d.]+)')
+            )
             cur["ruling_party"] = _first(text, r'ruling_party\s*=\s*(\w+)')
             cur["oob"] = _first(text, r'(?m)^\s*oob\s*=\s*"?([^"\n]+)"?')
 
@@ -1075,6 +1083,78 @@ def country_detail(tag):
 
 # ---------------- 国家历史写回（v0.56） ----------------
 PARTIES = ("democratic", "fascism", "communism", "neutrality")
+_IDEOLOGIES_CACHE = {"key": None, "items": list(PARTIES)}
+
+
+def _load_ideologies(root=None):
+    """从叠加链 common/ideologies/*.txt 读取顶层意识形态键名列表；缺失时兜底 PARTIES。"""
+    cand_roots = []
+    if root:
+        cand_roots.append(root)
+    else:
+        picked = _paths._pick(None)
+        if picked:
+            cand_roots.append(picked)
+        for rr in reversed(ROOTS or []):
+            if rr and rr not in cand_roots:
+                cand_roots.append(rr)
+        if not cand_roots and GAME and os.path.isdir(GAME):
+            cand_roots.append(GAME)
+    if not cand_roots:
+        return list(PARTIES)
+
+    pairs = []
+    seen_fn = set()
+    for cr in cand_roots:
+        try:
+            got = list(effective_layer_files("common/ideologies", cr))
+        except Exception:
+            got = []
+        # effective_layer_files 返回底层→顶层；多 root 汇总时先取顶层 root 同名文件
+        for _b, d, fn in reversed(got):
+            fk = fn.lower()
+            if fk in seen_fn:
+                continue
+            seen_fn.add(fk)
+            pairs.append((_b, d, fn))
+    pairs.reverse()
+    if not pairs:
+        return list(PARTIES)
+
+    sig = []
+    for _b, d, fn in pairs:
+        fp = os.path.join(d, fn)
+        try:
+            mt = os.path.getmtime(fp)
+        except Exception:
+            mt = 0
+        sig.append((os.path.abspath(fp), mt))
+    key = tuple(sig)
+    if _IDEOLOGIES_CACHE.get("key") == key:
+        return list(_IDEOLOGIES_CACHE["items"])
+
+    ides = []
+    seen = set()
+    for _b, d, fn in pairs:
+        fp = os.path.join(d, fn)
+        try:
+            text = _read_text(fp)
+        except Exception:
+            continue
+        for _a, _e, ibody in find_blocks(text, "ideologies"):
+            for k, _v, hb in top_items(ibody):
+                if not hb:
+                    continue
+                kl = k.strip()
+                if kl and kl.lower() not in seen:
+                    seen.add(kl.lower())
+                    ides.append(kl)
+    if not ides:
+        ides = list(PARTIES)
+    _IDEOLOGIES_CACHE["key"] = key
+    _IDEOLOGIES_CACHE["items"] = list(ides)
+    return list(ides)
+
 
 HIST_KEYS = {
     "capital": "capital",
@@ -1092,6 +1172,91 @@ def _hist_path(tag):
     rel = c.get("history_file") or ""
     p = os.path.join(root, rel) if rel else ""
     return c, root, p
+
+
+def _hist_resolve_io(tag):
+    """解析国家历史文件的读取路径、目标写入基目录与 COW 可写性。
+
+    返回 (c, src_path, rel, write_base, writable, err_msg)。
+    """
+    c, root, p = _hist_path(tag)
+    if not c:
+        return None, "", "", None, False, "没有这个国家 tag"
+    rel = (c.get("history_file") or "").strip()
+    src_path = ""
+    if p and os.path.isfile(_out_read_path(p)):
+        src_path = p
+    else:
+        probe_root = root or _paths._pick(None)
+        if rel and probe_root:
+            for base in reversed(mod_layers(probe_root) or [probe_root]):
+                if not base:
+                    continue
+                cand = os.path.join(base, rel)
+                if os.path.isfile(_out_read_path(cand)):
+                    src_path = cand
+                    break
+        if not src_path:
+            fp, frel = _country_hist_file(probe_root, tag)
+            if not fp:
+                for rr in reversed(ROOTS or []):
+                    fp, frel = _country_hist_file(rr, tag)
+                    if fp:
+                        break
+            if fp:
+                src_path = fp
+                if not rel:
+                    rel = frel
+
+    probe_w = None
+    if root and not is_under_game(root) and not is_readonly_mod(root):
+        probe_w = root
+        ab_root = os.path.abspath(root)
+        for rr in reversed(ROOTS or []):
+            lay = mod_layers(rr) or [rr]
+            ab_lay = [os.path.abspath(x) for x in lay if x]
+            if ab_root in ab_lay:
+                for cand in reversed(lay):
+                    if cand and not is_under_game(cand) and not is_readonly_mod(cand):
+                        probe_w = cand
+                        break
+                break
+    tgt, werr = _country_hist_write_base(probe_w)
+    if tgt and (is_under_game(tgt) or is_readonly_mod(tgt)):
+        tgt, werr = None, "原版/只读目录不可写：请先加载自己的可写模组"
+    writable = bool(tgt)
+    return c, src_path, rel, tgt, writable, (werr or "")
+
+
+def _hist_prepare_write(tag, require_existing=False):
+    """确保国家历史写回落入顶层可写层，必要时从叠加链单文件 COW 接管。
+
+    返回 (c, dst, rel, tgt, existed, err_msg)。
+    """
+    c, src_path, rel, tgt, writable, werr = _hist_resolve_io(tag)
+    if not c:
+        return None, None, "", None, False, werr
+    if not writable or not tgt:
+        return c, None, rel, None, False, (werr or "原版/只读目录不可写：请先加载自己的可写模组")
+    if is_under_game(tgt) or is_readonly_mod(tgt):
+        return c, None, rel, None, False, "只读目录不可写"
+
+    existed = bool(src_path) and os.path.isfile(_out_read_path(src_path))
+    if require_existing and not existed:
+        return c, None, rel, tgt, False, "这个国家没有可写的历史文件"
+    if not rel:
+        name = c.get("history_display") or tag
+        rel = os.path.join("history", "countries", "%s - %s.txt" % (tag, name))
+    dst = os.path.join(tgt, rel)
+    if existed and not os.path.exists(dst):
+        os.makedirs(os.path.dirname(dst) or tgt, exist_ok=True)
+        try:
+            text_src, _ = _read_bom_text(src_path)
+            _write_bom_text(dst, text_src, False)
+            invalidate_chain_cache()
+        except Exception as e:
+            return c, None, rel, tgt, existed, "接管复制失败：%s" % e
+    return c, dst, rel, tgt, existed, ""
 
 
 
@@ -1240,10 +1405,10 @@ def country_variant_add(tag, spec):
     mods = spec.get("modules") or {}
     if not isinstance(mods, dict) or not mods:
         return {"ok": False, "msg": "至少要填一个模块（槽位 = 模块）"}
-    c, root, path = _hist_path(tag)
-    if not path or is_under_game(root):
-        return {"ok": False, "msg": "这个国家没有可写的历史文件"}
-    text, has_bom = _read_bom_text(path)
+    c, path, rel, tgt, _existed, err = _hist_prepare_write(tag, require_existing=True)
+    if not path:
+        return {"ok": False, "msg": err or "这个国家没有可写的历史文件"}
+    text, _has_bom = _read_bom_text(path)
     if any(n == name for (_, _, n, _) in _variant_blocks(text)):
         return {"ok": False, "msg": "已经有同名变体 %s" % name}
     lines = ['create_equipment_variant = {', '\tname = "%s"' % name, '\ttype = %s' % etype]
@@ -1259,9 +1424,10 @@ def country_variant_add(tag, spec):
     lines.append('}')
     block = "\n".join(lines)
     new_text = _hist_append_top(text, block)
+    backup(path)
     snapshot(path)
-    _write_bom_text(path, new_text, has_bom)
-    CHANGED[path] = os.path.relpath(path, root)
+    _write_bom_text(path, new_text, False)
+    CHANGED[path] = rel or os.path.relpath(path, tgt)
     reload_data()
     link_countries()
     return {"ok": True, "msg": "已新增变体 %s（%d 个模块）" % (name, len(mods)),
@@ -1273,10 +1439,10 @@ def country_variant_del(tag, name):
     name = (name or "").strip()
     if not name:
         return {"ok": False, "msg": "缺少变体名称"}
-    c, root, path = _hist_path(tag)
-    if not path or is_under_game(root):
-        return {"ok": False, "msg": "这个国家没有可写的历史文件"}
-    text, has_bom = _read_bom_text(path)
+    c, path, rel, tgt, _existed, err = _hist_prepare_write(tag, require_existing=True)
+    if not path:
+        return {"ok": False, "msg": err or "这个国家没有可写的历史文件"}
+    text, _has_bom = _read_bom_text(path)
     target = None
     for (s, e, nm, body) in _variant_blocks(text):
         if nm == name:
@@ -1289,9 +1455,10 @@ def country_variant_del(tag, name):
     if line_start < 0:
         line_start = 0
     new_text = text[:line_start] + text[e:]
+    backup(path)
     snapshot(path)
-    _write_bom_text(path, new_text, has_bom)
-    CHANGED[path] = os.path.relpath(path, root)
+    _write_bom_text(path, new_text, False)
+    CHANGED[path] = rel or os.path.relpath(path, tgt)
     reload_data()
     link_countries()
     return {"ok": True, "msg": "已删除变体 %s" % name,
@@ -1299,14 +1466,17 @@ def country_variant_del(tag, name):
 
 
 def country_history_raw(tag):
-    c, root, p = _hist_path(tag)
+    c, src_path, rel, tgt, writable, werr = _hist_resolve_io(tag)
     if not c:
         return {"ok": False, "msg": "没有这个国家 tag"}
-    writable = bool(root) and not is_under_game(root)
-    if not p or not os.path.exists(p):
-        return {"ok": True, "exists": False, "writable": writable, "file": c.get("history_file", ""),
-                "root": root, "text": "", "fields": {}}
-    text, _ = _read_bom_text(p)
+    ides = _load_ideologies(tgt or c.get("root"))
+    if not src_path or not os.path.exists(_out_read_path(src_path)):
+        return {"ok": True, "exists": False, "writable": writable,
+                "write_root": tgt or "", "write_msg": werr,
+                "ideologies": ides,
+                "file": rel or c.get("history_file", ""),
+                "root": c.get("root", ""), "text": "", "fields": {}}
+    text, _ = _read_bom_text(src_path)
     body = strip_comments(text)
 
     def top_val(pat):
@@ -1317,8 +1487,16 @@ def country_history_raw(tag):
         "capital": top_val(r'(?m)^[ 	]*capital\s*=\s*(\d+)'),
         "ruling_party": _hist_party_of(body),
         "political_power": top_val(r'(?m)^[ 	]*add_political_power\s*=\s*(-?[\d.]+)'),
-        "stability": top_val(r'(?m)^[ 	]*add_stability\s*=\s*(-?[\d.]+)'),
-        "war_support": top_val(r'(?m)^[ 	]*add_war_support\s*=\s*(-?[\d.]+)'),
+        "stability": (
+            top_val(r'(?m)^[ 	]*set_stability\s*=\s*(-?[\d.]+)')
+            or top_val(r'(?m)^[ 	]*base_stability\s*=\s*(-?[\d.]+)')
+            or top_val(r'(?m)^[ 	]*add_stability\s*=\s*(-?[\d.]+)')
+        ),
+        "war_support": (
+            top_val(r'(?m)^[ 	]*set_war_support\s*=\s*(-?[\d.]+)')
+            or top_val(r'(?m)^[ 	]*base_war_support\s*=\s*(-?[\d.]+)')
+            or top_val(r'(?m)^[ 	]*add_war_support\s*=\s*(-?[\d.]+)')
+        ),
         "ideas": (COUNTRIES.get(tag) or {}).get("ideas", []),
         "focus_tree": ((COUNTRIES.get(tag) or {}).get("focus_trees") or [""])[0],
         "oob": top_val(r'(?m)^[ \t]*oob\s*=\s*"([^"]+)"'),
@@ -1327,8 +1505,11 @@ def country_history_raw(tag):
         "opinions": _hist_opinions(body),
         "variants": _hist_variants(body),
     }
-    return {"ok": True, "exists": True, "writable": writable, "file": c.get("history_file", ""),
-            "root": root, "text": text[:60000], "fields": fields}
+    return {"ok": True, "exists": True, "writable": writable,
+            "write_root": tgt or "", "write_msg": werr,
+            "ideologies": ides,
+            "file": rel or c.get("history_file", ""),
+            "root": c.get("root", ""), "text": text[:60000], "fields": fields}
 
 
 def _hist_depths(text):
@@ -1420,19 +1601,20 @@ def _hist_set_party(text, party):
 
 
 def country_history_save(tag, fields):
-    """只改 fields 里给出的键，其余原文一律保留；写前 snapshot()"""
-    c, root, p = _hist_path(tag)
+    """只改 fields 里给出的键，其余原文一律保留；写前 backup() + snapshot()"""
+    c, dst, rel, tgt, exists, err = _hist_prepare_write(tag, require_existing=False)
     if not c:
-        return {"ok": False, "msg": "没有这个国家 tag"}
-    if not root:
-        return {"ok": False, "msg": "这个国家没有来源目录"}
-    if is_under_game(root):
-        return {"ok": False, "msg": "原版目录只读：请先复制到自己的模组再修改"}
+        return {"ok": False, "msg": err or "没有这个国家 tag"}
+    if not dst:
+        return {"ok": False, "msg": err or "原版/只读目录不可写：请先加载自己的可写模组"}
 
     warnings = []
-    party = (fields.get("ruling_party") or "").strip().lower()
-    if party and party not in PARTIES:
-        return {"ok": False, "msg": "执政党只能是 " + " / ".join(PARTIES)}
+    ides = _load_ideologies(tgt or c.get("root"))
+    ides_lower = {x.lower(): x for x in ides}
+    party_raw = (fields.get("ruling_party") or "").strip()
+    party = ides_lower.get(party_raw.lower(), "") if party_raw else ""
+    if party_raw and not party:
+        return {"ok": False, "msg": "执政党只能是 " + " / ".join(ides)}
     capital = (fields.get("capital") or "").strip()
     if capital and not capital.isdigit():
         return {"ok": False, "msg": "首都必须是州数字 id"}
@@ -1446,20 +1628,35 @@ def country_history_save(tag, fields):
         warnings.append("国策树 %s 目前不存在" % tree)
 
     diff = []
-    exists = bool(p) and os.path.exists(p)
     if exists:
-        text, has_bom = _read_bom_text(p)
+        text, _has_bom = _read_bom_text(dst)
         before = strip_comments(text)
+
         def top_old(pat):
             m = _hist_find_top(before, re.compile(pat))
             return m.group(1).strip() if m else ""
+
+        def _pick_hist_key(candidates, default_key):
+            for ck in candidates:
+                if _hist_find_top(before, re.compile(r'(?m)^[ \t]*%s\s*=' % re.escape(ck))):
+                    return ck
+            return default_key
+
+        stab_key = _pick_hist_key(("set_stability", "base_stability", "add_stability"), "add_stability")
+        ws_key = _pick_hist_key(("set_war_support", "base_war_support", "add_war_support"), "add_war_support")
+        hist_keys = {
+            "capital": "capital",
+            "political_power": "add_political_power",
+            "stability": stab_key,
+            "war_support": ws_key,
+        }
 
         old = {
             "capital": top_old(r'(?m)^[ 	]*capital\s*=\s*(\d+)'),
             "ruling_party": _hist_party_of(before),
             "political_power": top_old(r'(?m)^[ 	]*add_political_power\s*=\s*(-?[\d.]+)'),
-            "stability": top_old(r'(?m)^[ 	]*add_stability\s*=\s*(-?[\d.]+)'),
-            "war_support": top_old(r'(?m)^[ 	]*add_war_support\s*=\s*(-?[\d.]+)'),
+            "stability": top_old(r'(?m)^[ 	]*%s\s*=\s*(-?[\d.]+)' % re.escape(stab_key)),
+            "war_support": top_old(r'(?m)^[ 	]*%s\s*=\s*(-?[\d.]+)' % re.escape(ws_key)),
             "ideas": ",".join(c.get("ideas", [])),
             "focus_tree": (c.get("focus_trees") or [""])[0],
             "techs": ",".join(c.get("techs", [])),
@@ -1469,7 +1666,7 @@ def country_history_save(tag, fields):
             "opinions": ",".join("%s:%d" % (t4, v4) for t4, v4 in _hist_opinions(before)),
         }
         new = dict(old)
-        for key, mlkey in HIST_KEYS.items():
+        for key, mlkey in hist_keys.items():
             val = (fields.get(key) or "").strip()
             if not val:
                 continue
@@ -1510,15 +1707,17 @@ def country_history_save(tag, fields):
         if fields.get("popularities") is not None:
             pops = {}
             for k, v in (fields.get("popularities") or {}).items():
-                if k in PARTIES and str(v).strip():
+                kl = ides_lower.get(str(k).strip().lower())
+                if kl and str(v).strip():
                     try:
-                        pops[k] = int(float(v))
+                        pops[kl] = int(float(v))
                     except Exception:
                         pass
             if pops:
+                pop_order = [k for k in ides if k in pops]
                 text = _hist_put_block(text, "set_popularities",
-                                       ["%s = %d" % (k, pops[k]) for k in PARTIES if k in pops])
-                new["popularities"] = ",".join("%s=%d" % (k, pops[k]) for k in PARTIES if k in pops)
+                                       ["%s = %d" % (k, pops[k]) for k in pop_order])
+                new["popularities"] = ",".join("%s=%d" % (k, pops[k]) for k in pop_order)
         shown = {"capital": "首都", "ruling_party": "执政党", "political_power": "政治点",
                  "stability": "稳定度修正", "war_support": "战争支持修正", "ideas": "开局精神",
                  "focus_tree": "国策树", "techs": "开局科技", "oob": "部队编成 oob",
@@ -1528,13 +1727,11 @@ def country_history_save(tag, fields):
                 diff.append({"key": k, "label": label, "old": old.get(k, ""), "new": new.get(k, "")})
         if not diff:
             return {"ok": True, "msg": "没有改动", "diff": [], "warnings": warnings}
-        snapshot(p)
-        _write_bom_text(p, text, has_bom)
+        backup(dst)
+        snapshot(dst)
+        _write_bom_text(dst, text, False)
     else:
-        name = c.get("history_display") or tag
-        rel = os.path.join("history", "countries", "%s - %s.txt" % (tag, name))
-        path = os.path.join(root, rel)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
         lines = []
         if capital:
             lines.append("capital = " + capital)
@@ -1553,13 +1750,15 @@ def country_history_save(tag, fields):
         if not lines:
             return {"ok": False, "msg": "没有任何要写入的字段"}
         text = "\n".join(lines) + "\n"
-        with io.open(path, "w", encoding="utf-8", newline="\r\n") as _fh:
-            _fh.write(text)
+        backup(dst)
+        snapshot(dst)
+        _write_bom_text(dst, text, False)
         diff = [{"key": "create", "label": "新建文件", "old": "", "new": rel}]
 
+    CHANGED[dst] = rel
     reload_data()
     link_countries()
-    return {"ok": True, "msg": "已写入 " + (c.get("history_file") or tag), "diff": diff, "warnings": warnings}
+    return {"ok": True, "msg": "已写入 " + (rel or c.get("history_file") or tag), "diff": diff, "warnings": warnings}
 
 
 # ---------- v1.23.48 附庸 / 外交状态 ----------
@@ -3648,13 +3847,20 @@ def load_navy(root=None):
                     tname = _first(tbody, r'(?m)^\s*name\s*=\s*"([^"]*)"')
                     tloc = _first(tbody, r'(?m)^\s*location\s*=\s*(\d+)')
                     ships = []
-                    # ship 是单行：ship = { name = "X" definition = Y ... }
-                    for sm in re.finditer(r'(?m)^[ \t]*ship\s*=\s*\{[^\n]*', tbody):
-                        line = sm.group(0)
-                        nm = re.search(r'name\s*=\s*"([^"]*)"', line)
-                        df = re.search(r'definition\s*=\s*([A-Za-z0-9_]+)', line)
-                        ships.append({"name": nm.group(1) if nm else "",
-                                      "definition": df.group(1) if df else ""})
+                    # 兼容单行与多行 ship = { ... } 块
+                    for _sa, _se, sbody in find_blocks(tbody, "ship"):
+                        snm, sdf = "", ""
+                        for sk, sv, shb in top_items(sbody):
+                            if not shb:
+                                if sk == "name" and not snm:
+                                    snm = sv
+                                elif sk == "definition" and not sdf:
+                                    sdf = sv
+                        if not snm:
+                            snm = _first(sbody, r'\bname\s*=\s*"([^"]*)"')
+                        if not sdf:
+                            sdf = _first(sbody, r'\bdefinition\s*=\s*([A-Za-z0-9_]+)')
+                        ships.append({"name": snm, "definition": sdf})
                     _tline = fbody.rfind("\n", 0, tstart) + 1
                     tfs.append({"name": tname, "location": int(tloc or 0),
                                 "ships": ships, "ship_count": len(ships),
@@ -4199,7 +4405,7 @@ def war_delete(root, tag, index):
         en += 1
     tgt_tag = cur["wars"][index]["target"]
     snapshot(dst)
-    _atomic_write(dst, b"\xef\xbb\xbf" + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + (raw[:st] + "\n" + raw[en:]).encode("utf-8"))
     return {"ok": True, "msg": "已删除对 %s 的宣战" % tgt_tag}
 
 
@@ -4260,21 +4466,21 @@ def load_air_wings(root=None):
                 if we <= wb:
                     continue
                 wbody = abody[wb + 1:we - 1]
-                nm = _first(wbody, r'(?m)^\s*name\s*=\s*"([^"]*)"')
+                nm = ""
                 eqs = []
-                for em in re.finditer(r'(?m)^[ \t]*([A-Za-z0-9_]+)[ \t]*=\s*\{', wbody):
-                    etype = em.group(1)
-                    if etype in ("name",):
+                for ek, ebody, ehb in top_items(wbody):
+                    if not ehb:
+                        if ek == "name" and not nm:
+                            nm = ebody
                         continue
-                    eb = wbody.find("{", em.end() - 1)
-                    ee = brace_match(wbody, eb)
-                    if ee <= eb:
+                    if ek in ("name",):
                         continue
-                    ebody = wbody[eb + 1:ee - 1]
-                    ow = _first(ebody, r'(?m)^\s*owner\s*=\s*"?([A-Z0-9]+)"?')
-                    amt = _first(ebody, r'(?m)^\s*amount\s*=\s*(\d+)')
-                    eqs.append({"type": etype, "owner": ow,
+                    ow = _first(ebody, r'\bowner\s*=\s*"?([A-Za-z0-9_]+)"?')
+                    amt = _first(ebody, r'\bamount\s*=\s*(\d+)')
+                    eqs.append({"type": ek, "owner": ow,
                                 "amount": int(amt or 0)})
+                if not nm:
+                    nm = _first(wbody, r'\bname\s*=\s*"([^"]*)"')
                 # start 取「省号 = {」那一行的行首，否则删完会剩半截 "999 ="
                 _wline = abody.rfind("\n", 0, wm.start()) + 1
                 wings.append({"province": pid, "name": nm,
@@ -4343,7 +4549,7 @@ def air_wing_delete(root, idx):
     info = load_air_wings(root)
     nm = info["wings"][idx]["name"] if idx < len(info["wings"]) else ""
     snapshot(dst)
-    _atomic_write(dst, b"\xef\xbb\xbf" + (raw[:s2] + "\n" + raw[e2:]).encode("utf-8"))
+    _atomic_write(dst, _bom_for(dst) + (raw[:s2] + "\n" + raw[e2:]).encode("utf-8"))
     return {"ok": True, "msg": "已删除联队「%s」" % nm}
 
 
@@ -4862,8 +5068,106 @@ def _tpl_locate(root, name):
 
 
 
+def _tpl_patch_block(blk_raw, new_name, regs, sup, locked):
+    """在原有 division_template `{ ... }` 文本上局部原地替换，保留其余键与所有注释。"""
+    blk = blk_raw
+    clean = _strip_keep_len(blk)
+    m_ind = re.search(r'(?m)^([ \t]+)[A-Za-z_]', clean)
+    indent = m_ind.group(1) if m_ind else "\t"
+
+    def _find_top_match(pat_str):
+        c2 = _strip_keep_len(blk)
+        d2 = _hist_depths(c2)
+        for mm in re.finditer(pat_str, c2):
+            if mm.start() < len(d2) and d2[mm.start()] == 1:
+                return mm, c2
+        return None, c2
+
+    if new_name:
+        m_nm, _ = _find_top_match(r'(?m)^([ \t]*)name\s*=\s*"[^"]*"')
+        if m_nm:
+            blk = blk[:m_nm.start()] + '%sname = "%s"' % (m_nm.group(1), new_name) + blk[m_nm.end():]
+        else:
+            blk = blk[:1] + '\n%sname = "%s"' % (indent, new_name) + blk[1:]
+
+    if locked is not None:
+        want_locked = bool(locked)
+        m_lk, _ = _find_top_match(r'(?m)^([ \t]*)is_locked\s*=\s*(yes|no)')
+        if m_lk:
+            rep_lk = "%sis_locked = %s" % (m_lk.group(1), "yes" if want_locked else "no")
+            blk = blk[:m_lk.start()] + rep_lk + blk[m_lk.end():]
+        elif want_locked:
+            m_nm2, _ = _find_top_match(r'(?m)^[ \t]*name\s*=\s*"[^"]*"[^\n]*\n?')
+            ins_at = m_nm2.end() if m_nm2 else 1
+            prefix = "" if (ins_at > 1 and blk[ins_at - 1] == "\n") else "\n"
+            blk = blk[:ins_at] + prefix + "%sis_locked = yes\n" % indent + blk[ins_at:]
+
+    if regs is not None:
+        m_rg, c_rg = _find_top_match(r'(?m)^([ \t]*)regiments\s*=\s*\{')
+        if m_rg:
+            rb = c_rg.find("{", m_rg.end() - 1)
+            re_ = brace_match(c_rg, rb)
+            if re_ > rb:
+                ind = m_rg.group(1) or indent
+                inner = "".join(
+                    "%s\t%s = { x = %d y = %d }\n" % (
+                        ind, r["unit"], int(r.get("x") or 0), int(r.get("y") or 0))
+                    for r in regs
+                )
+                blk = blk[:rb] + "{\n" + inner + ind + "}" + blk[re_:]
+        elif regs:
+            inner = "".join(
+                "%s\t%s = { x = %d y = %d }\n" % (
+                    indent, r["unit"], int(r.get("x") or 0), int(r.get("y") or 0))
+                for r in regs
+            )
+            sub_blk = "%sregiments = {\n%s%s}\n" % (indent, inner, indent)
+            end_pos = blk.rfind("}")
+            if end_pos < 0:
+                end_pos = len(blk)
+            need_nl = "" if (end_pos > 0 and blk[end_pos - 1] == "\n") else "\n"
+            blk = blk[:end_pos] + need_nl + sub_blk + blk[end_pos:]
+
+    if sup is not None:
+        m_sp, c_sp = _find_top_match(r'(?m)^([ \t]*)support\s*=\s*\{')
+        if m_sp:
+            sb = c_sp.find("{", m_sp.end() - 1)
+            se = brace_match(c_sp, sb)
+            if se > sb:
+                ind = m_sp.group(1) or indent
+                inner = "".join(
+                    "%s\t%s = { x = %d y = %d }\n" % (
+                        ind, r["unit"], int(r.get("x") or 0), int(r.get("y") or 0))
+                    for r in sup
+                )
+                blk = blk[:sb] + "{\n" + inner + ind + "}" + blk[se:]
+        elif sup:
+            inner = "".join(
+                "%s\t%s = { x = %d y = %d }\n" % (
+                    indent, r["unit"], int(r.get("x") or 0), int(r.get("y") or 0))
+                for r in sup
+            )
+            sub_blk = "%ssupport = {\n%s%s}\n" % (indent, inner, indent)
+            m_rg2, c_rg2 = _find_top_match(r'(?m)^[ \t]*regiments\s*=\s*\{')
+            ins_pos = -1
+            if m_rg2:
+                rb2 = c_rg2.find("{", m_rg2.end() - 1)
+                re2 = brace_match(c_rg2, rb2)
+                if re2 > rb2:
+                    nl_after = blk.find("\n", re2)
+                    ins_pos = (nl_after + 1) if nl_after >= 0 else re2
+            if ins_pos < 0:
+                ins_pos = blk.rfind("}")
+                if ins_pos < 0:
+                    ins_pos = len(blk)
+            need_nl = "" if (ins_pos > 0 and blk[ins_pos - 1] == "\n") else "\n"
+            blk = blk[:ins_pos] + need_nl + sub_blk + blk[ins_pos:]
+
+    return blk
+
+
 def template_save(name, fields, root=None):
-    """改一个 division_template：名字 / 编制 / 支援 / 锁定。
+    """改一个 division_template：名字 / 编制 / 支援 / 锁定（原地局部写回，保留注释与扩展字段）。
 
     fields 里给什么改什么：
       new_name   改名
@@ -4888,15 +5192,11 @@ def template_save(name, fields, root=None):
         return {"ok": False, "msg": "找不到模板 %s" % name}
 
     new_name = (fields.get("new_name") or name).strip()
-    regs = fields.get("regiments")
-    if regs is None:
-        regs = cur["regiments"]
-    sup = fields.get("support")
-    if sup is None:
-        sup = cur["support"]
-    locked = fields.get("locked")
-    if locked is None:
-        locked = cur["locked"]
+    regs_in = fields.get("regiments")
+    sup_in = fields.get("support")
+    locked_in = fields.get("locked")
+    regs = cur["regiments"] if regs_in is None else regs_in
+    sup = cur["support"] if sup_in is None else sup_in
 
     with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
         raw = _fh.read()
@@ -4910,9 +5210,11 @@ def template_save(name, fields, root=None):
     if A < 0:
         return {"ok": False, "msg": "重新定位失败"}
 
-    # A 指向 { 的位置，块文本不能再带 division_template =
-    new_block = _tpl_render(new_name, regs, sup, locked, with_key=False)
+    new_block = _tpl_patch_block(raw[A:B], new_name, regs_in, sup_in, locked_in)
+    if not braces_balanced(_strip_keep_len(new_block)):
+        return {"ok": False, "msg": "模板块花括号不匹配，已取消保存"}
     new_text = raw[:A] + new_block + raw[B:]
+    backup(dst)
     snapshot(dst)
     _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
     load_units(root, force=True)
@@ -5405,54 +5707,236 @@ def _refine_attach_to_state(root, sid, new_ids, pid):
 
 
 
-def _railway_file(root):
-    """找 railways.txt（先 mod 后原版），返回 (path, base)"""
-    for base in reversed(mod_layers(root) or []):
-        if not base:
+def _writable_txt_top(root, layers=None):
+    """返回叠加链上最顶层可写（非原版且非创意工坊只读目录）的 mod 目录。"""
+    for cand in reversed(layers or (mod_layers(root) if root else [])):
+        if cand and not is_readonly_mod(cand):
+            return cand
+    for r in reversed(_state.roots() or []):
+        if r and not is_readonly_mod(r):
+            return r
+    return None
+
+
+def _ensure_map_txt_writable(rel_dir, rel_name, root=None, adopt=False):
+    """检查地图文本单文件可写性；来自只读层或下层父 mod 时支持确认后单文件接管到可写顶层。"""
+    root = _map_pick(root)
+    layers = mod_layers(root) if root else []
+    rel_path = (rel_dir.strip("/") + "/" + rel_name).lstrip("/")
+    src, src_base = _layers_find(rel_path, layers)
+    if not src:
+        return None, None, {"ok": False, "msg": "找不到 %s" % rel_path}
+    top = _writable_txt_top(root, layers)
+    ab_src = os.path.abspath(src_base or "")
+    ab_top = os.path.abspath(top or "") if top else ""
+    if not is_readonly_mod(src_base) and (not ab_top or ab_src == ab_top):
+        return src, src_base, None
+    if not top:
+        return None, None, {
+            "ok": False, "readonly": True,
+            "msg": "%s 来自只读目录（%s），不能直接改；请先新建或加载可写 submod"
+                   % (rel_path, os.path.basename(ab_src) or "原版"),
+        }
+    if not adopt:
+        src_name = os.path.basename(ab_src) or "父层"
+        top_name = os.path.basename(ab_top) or "当前 mod"
+        return None, None, {
+            "ok": False, "need_adopt": True,
+            "rel": rel_path, "from": src_name, "to": top_name,
+            "msg": "%s 来自%s（只读或下层），需先单文件复制到 %s 再编辑"
+                   % (rel_path, src_name, top_name),
+        }
+    dst, msg = ensure_writable_file(root, rel_dir, rel_name)
+    if not dst:
+        return None, None, {"ok": False, "msg": msg}
+    return dst, top, {"adopted": True, "adopt_msg": msg}
+
+
+def _adopt_map_txt_files(root, rel_dir, targets, adopt=False):
+    """批量检查/接管多个地图文本文件到顶层可写层，返回 ({原绝对路径: 可写路径}, 错误字典或 None)。"""
+    root = _map_pick(root)
+    layers = mod_layers(root) if root else []
+    top = _writable_txt_top(root, layers)
+    ab_top = os.path.abspath(top or "") if top else ""
+    resolved = {}
+    need = []
+    seen = set()
+    for b, p in targets:
+        ab_p = os.path.abspath(p)
+        if ab_p in seen:
             continue
-        p = os.path.join(base, "map", "railways.txt")
-        if os.path.exists(p):
-            return p, base
-    if GAME:
-        p = os.path.join(GAME, "map", "railways.txt")
-        if os.path.exists(p):
-            return p, GAME
-    return None, None
+        seen.add(ab_p)
+        ab_b = os.path.abspath(b or "")
+        if not is_readonly_mod(b) and (not ab_top or ab_b == ab_top):
+            resolved[ab_p] = p
+        else:
+            need.append((b, p, ab_b, ab_p))
+    if need:
+        if not top:
+            b0, p0, ab_b0, _ = need[0]
+            return None, {
+                "ok": False, "readonly": True,
+                "msg": "%s 来自只读目录（%s），不能直接改；请先新建或加载可写 submod"
+                       % (os.path.basename(p0), os.path.basename(ab_b0) or "原版"),
+            }
+        if not adopt:
+            rels = [os.path.relpath(p, b).replace("\\", "/") for b, p, _, _ in need]
+            from_nm = os.path.basename(need[0][2]) or "父层"
+            to_nm = os.path.basename(ab_top) or "当前 mod"
+            brief = "、".join(rels[:3]) + (" 等 %d 个文件" % len(rels) if len(rels) > 3 else "")
+            return None, {
+                "ok": False, "need_adopt": True,
+                "rel": rels[0], "files": rels, "from": from_nm, "to": to_nm,
+                "msg": "%s 来自%s（只读或下层），需单文件复制到 %s 再编辑"
+                       % (brief, from_nm, to_nm),
+            }
+        for _b, p, _ab_b, ab_p in need:
+            dst, msg = ensure_writable_file(root, rel_dir, os.path.basename(p))
+            if not dst:
+                return None, {"ok": False, "msg": msg}
+            resolved[ab_p] = dst
+    return resolved, None
+
+
+def _find_top_blocks_raw(raw, keyword):
+    """在原文上定位顶层 `keyword = { ... }`，返回 [(stmt_start, b, e), ...]，跳过注释与引号字符串。"""
+    clean = _strip_keep_len(raw)
+    pat = re.compile(r'(?<![A-Za-z0-9_])(' + re.escape(keyword) + r')\s*=\s*$')
+    out = []
+    instr = False
+    depth = 0
+    open_b = -1
+    prev_end = 0
+    for m in re.finditer(r'["{}]', clean):
+        ch = m.group(0)
+        if ch == '"':
+            instr = not instr
+            continue
+        if instr:
+            continue
+        if ch == '{':
+            if depth == 0:
+                open_b = m.start()
+            depth += 1
+        else:
+            if depth <= 0:
+                continue
+            depth -= 1
+            if depth == 0 and open_b >= 0:
+                km = pat.search(clean[prev_end:open_b])
+                if km:
+                    stmt_start = prev_end + km.start(1)
+                    ls = raw.rfind("\n", prev_end, stmt_start)
+                    ls = 0 if ls < 0 else ls + 1
+                    if not raw[ls:stmt_start].strip():
+                        stmt_start = ls
+                    out.append((stmt_start, open_b, m.end()))
+                prev_end = m.end()
+                open_b = -1
+    return out
+
+
+def _find_subblock_raw(body_raw, key):
+    """在块体原文上定位一级子块 `key = { ... }` 的 (b, e) 偏移（相对 body_raw）。"""
+    clean = _strip_keep_len(body_raw)
+    pat = re.compile(r'(?<![A-Za-z0-9_])' + re.escape(key) + r'\s*=\s*$')
+    instr = False
+    depth = 0
+    open_b = -1
+    prev_end = 0
+    for m in re.finditer(r'["{}]', clean):
+        ch = m.group(0)
+        if ch == '"':
+            instr = not instr
+            continue
+        if instr:
+            continue
+        if ch == '{':
+            if depth == 0:
+                open_b = m.start()
+            depth += 1
+        else:
+            if depth <= 0:
+                continue
+            depth -= 1
+            if depth == 0 and open_b >= 0:
+                if pat.search(clean[prev_end:open_b]):
+                    return open_b, m.end()
+                prev_end = m.end()
+                open_b = -1
+    return -1, -1
+
+
+def _remove_block_raw(raw, stmt_start, e):
+    """按原文起止移除顶层块并顺带清理紧邻行尾换行。"""
+    end = e
+    m = re.match(r'[ \t]*\r?\n', raw[e:])
+    if m:
+        end += m.end()
+    return raw[:stmt_start] + raw[end:]
+
+
+def _iter_layer_txt_files(sub, root):
+    """按 HOI4 叠加链由顶到底返回有效 .txt 文件 [(base, path), ...]，同文件名高优先级覆写下层。"""
+    seen_fn = set()
+    out = []
+    for base, d in _layer_dirs(sub, root):
+        try:
+            fns = sorted(f for f in os.listdir(d) if f.lower().endswith(".txt"))
+        except Exception:
+            continue
+        for fn in fns:
+            fk = fn.lower()
+            if fk in seen_fn:
+                continue
+            seen_fn.add(fk)
+            out.append((base, os.path.join(d, fn)))
+    return out
+
+
+def _railway_file(root):
+    """找 railways.txt（走叠加链并尊重 replace_path），返回 (path, base)"""
+    root = _map_pick(root)
+    return _layers_find("map/railways.txt", mod_layers(root) or [])
 
 
 def _railway_parse(path):
-    """解析 railways.txt。
-
-    行式：   <level> <count> p1 p2 p3 ...
-    块式：   railway = { level = N provinces = { p1 p2 ... } }
-    两种都收，返回 [{"level": N, "provs": [...], "raw_i": 行号}]"""
+    """解析 railways.txt，在原文精确记录行式 line_idx 与块式 (stmt_start, b, e)。"""
     out = []
     if not path or not os.path.exists(path):
         return out
     try:
-        with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+        with io.open(_out_read_path(path), encoding="utf-8-sig", errors="replace") as _fh:
             raw = _fh.read()
     except Exception:
         return out
-    text = strip_comments(raw)
-    # 块式
-    for m in re.finditer(r'(?m)^\s*railway\s*=\s*\{', text):
-        b = text.find("{", m.end() - 1)
-        e = brace_match(text, b)
-        if e <= b:
-            continue
-        body = text[b + 1:e - 1]
-        lv = re.search(r'level\s*=\s*(\d+)', body)
-        pr = re.search(r'provinces\s*=\s*\{([^}]*)\}', body)
-        if pr:
-            provs = [int(x) for x in re.findall(r'\d+', pr.group(1))]
+    clean = _strip_keep_len(raw)
+    block_spans = _find_top_blocks_raw(raw, "railway")
+    for stmt_start, b, e in block_spans:
+        body_raw = raw[b + 1:e - 1]
+        body_clean = clean[b + 1:e - 1]
+        lv = re.search(r'(?<![A-Za-z0-9_])level\s*=\s*(\d+)', body_clean)
+        pb, pe = _find_subblock_raw(body_raw, "provinces")
+        if pb >= 0:
+            provs = [int(x) for x in re.findall(r'\d+', body_clean[pb + 1:pe - 1])]
             if provs:
-                out.append({"level": int(lv.group(1)) if lv else 1,
-                            "provs": provs, "form": "block"})
-    # 行式
-    for ln in text.splitlines():
+                out.append({
+                    "level": int(lv.group(1)) if lv else 1,
+                    "provs": provs,
+                    "form": "block",
+                    "stmt_start": stmt_start,
+                    "b": b,
+                    "e": e,
+                    "_pos": stmt_start,
+                })
+    pos = 0
+    for i, ln in enumerate(clean.splitlines(True)):
+        ln_start = pos
+        pos += len(ln)
+        if any(s <= ln_start < e for s, _b, e in block_spans):
+            continue
         s = ln.strip()
-        if not s or s.startswith("#"):
+        if not s:
             continue
         parts = s.split()
         if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
@@ -5469,7 +5953,14 @@ def _railway_parse(path):
             except Exception:
                 break
         if len(provs) == n and provs:
-            out.append({"level": level, "provs": provs, "form": "line"})
+            out.append({
+                "level": level,
+                "provs": provs,
+                "form": "line",
+                "line_idx": i,
+                "_pos": ln_start,
+            })
+    out.sort(key=lambda x: x["_pos"])
     return out
 
 
@@ -5505,72 +5996,81 @@ def railways_list(root=None):
             "msg": "共 %d 条铁路，%d 条断连，%d 条等级超 5" % (len(items), broken, over)}
 
 
-def railway_set_level(index, level, root=None):
-    """改某条铁路的等级（行式直接改第一个数字，块式改 level = N）"""
+def railway_set_level(index, level, root=None, adopt=False):
+    """改某条铁路的等级（支持行式与块式，等级钳制在 1..5）"""
     root = _map_pick(root)
-    path, base = _railway_file(root)
-    if not path:
-        return {"ok": False, "msg": "找不到 map/railways.txt"}
-    if os.path.abspath(base) == os.path.abspath(GAME or ""):
-        return {"ok": False, "msg": "railways.txt 来自原版，只读"}
     try:
-        level = max(1, min(10, int(level)))
+        raw_lv = int(level)
+        level = max(1, min(5, raw_lv))
         index = int(index)
     except Exception:
         return {"ok": False, "msg": "参数不合法"}
-    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
-        raw = _fh.read()
-    lines = raw.splitlines(True)
-    # 收集行式铁路的行号
-    line_rows = []
-    for i, ln in enumerate(lines):
-        s = ln.strip()
-        parts = s.split()
-        if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
-            try:
-                n = int(parts[1])
-                if len(parts[2:2 + n]) == n:
-                    line_rows.append(i)
-            except Exception:
-                pass
-    rails = _railway_parse(path)
+    src_path, _src_base = _railway_file(root)
+    if not src_path:
+        return {"ok": False, "msg": "找不到 map/railways.txt"}
+    rails = _railway_parse(src_path)
     if index < 0 or index >= len(rails):
         return {"ok": False, "msg": "没有第 %d 条铁路" % index}
-    target = rails[index]
-    if target.get("form") == "line" and index < len(line_rows):
-        i = line_rows[index]
-        parts = lines[i].split(None, 2)
-        rest = parts[2] if len(parts) > 2 else ""
-        lines[i] = "%d %s %s" % (level, parts[1] if len(parts) > 1 else str(len(target["provs"])), rest)
-        if not lines[i].endswith(chr(10)):
-            lines[i] += chr(10)
-        snapshot(path)
-        _atomic_write(path, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
-        return {"ok": True, "index": index, "level": level,
-                "msg": "第 %d 条铁路等级改为 %d" % (index, level)}
-    return {"ok": False, "msg": "这条铁路是块式写法，暂不支持改等级"}
+
+    path, _base, err = _ensure_map_txt_writable("map", "railways.txt", root, adopt=adopt)
+    if err and not path:
+        return err
+    target = _railway_parse(path)[index]
+    with io.open(_out_read_path(path), encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
+
+    if target["form"] == "line":
+        lines = raw.splitlines(True)
+        li = target["line_idx"]
+        m = re.match(r'^(\s*)(\d+)(\s+\d+.*)', lines[li], re.S)
+        if not m:
+            return {"ok": False, "msg": "定位不到这一行"}
+        lines[li] = "%s%d%s" % (m.group(1), level, m.group(3))
+        if not lines[li].endswith("\n"):
+            lines[li] += "\n"
+        new_raw = "".join(lines)
+    else:
+        b, e = target["b"], target["e"]
+        body_raw = raw[b + 1:e - 1]
+        body_clean = _strip_keep_len(body_raw)
+        lm = re.search(r'(?m)^([ \t]*)level\s*=\s*\d+', body_clean)
+        if lm:
+            body_new = body_raw[:lm.start()] + "%slevel = %d" % (lm.group(1), level) + body_raw[lm.end():]
+        else:
+            body_new = "\n\tlevel = %d%s" % (level, body_raw)
+        new_raw = raw[:b + 1] + body_new + raw[e - 1:]
+
+    snapshot(path)
+    _atomic_write(_out_path(path), new_raw.encode("utf-8"))
+    clamped = "（已按 HOI4 上限钳至 5）" if raw_lv > 5 else ""
+    res = {"ok": True, "index": index, "level": level,
+           "msg": "第 %d 条铁路等级改为 %d%s" % (index, level, clamped)}
+    if isinstance(err, dict) and err.get("adopted"):
+        res["adopted"] = True
+        res["adopt_msg"] = err.get("adopt_msg") or ""
+    return res
 
 
-def railway_edit(index, level=None, provs=None, root=None):
-    """改某条铁路：等级 / 省份序列（行式直接改该行，块式重建块）"""
+def railway_edit(index, level=None, provs=None, root=None, adopt=False):
+    """改某条铁路：等级（1..5）/ 省份序列（支持行式与块式）"""
     root = _map_pick(root)
-    path, base = _railway_file(root)
-    if not path:
-        return {"ok": False, "msg": "找不到 map/railways.txt"}
-    if os.path.abspath(base) == os.path.abspath(GAME or ""):
-        return {"ok": False, "msg": "railways.txt 来自原版，只读"}
     try:
         index = int(index)
     except Exception:
         return {"ok": False, "msg": "铁路序号不合法"}
-
-    rails = _railway_parse(path)
+    src_path, _src_base = _railway_file(root)
+    if not src_path:
+        return {"ok": False, "msg": "找不到 map/railways.txt"}
+    rails = _railway_parse(src_path)
     if index < 0 or index >= len(rails):
         return {"ok": False, "msg": "没有第 %d 条铁路" % index}
     cur = rails[index]
 
-    new_level = int(level) if level not in (None, "") else cur["level"]
-    new_level = max(1, min(10, new_level))
+    try:
+        raw_lv = int(level) if level not in (None, "") else cur["level"]
+    except Exception:
+        return {"ok": False, "msg": "铁路等级不合法"}
+    new_level = max(1, min(5, raw_lv))
     new_provs = cur["provs"]
     if provs:
         try:
@@ -5579,6 +6079,10 @@ def railway_edit(index, level=None, provs=None, root=None):
             return {"ok": False, "msg": "省份列表不合法"}
         if len(cand) < 2:
             return {"ok": False, "msg": "铁路至少要有 2 个省"}
+        ptype_map = _m_map._prov_type_map(root)
+        bad_p = [p for p in cand if p <= 0 or (ptype_map and ptype_map.get(p) in ("sea", "lake"))]
+        if bad_p:
+            return {"ok": False, "msg": "铁路不能包含无效省或海洋/湖泊省：%s" % bad_p[:5]}
         # 邻接校验：相邻两省必须接壤，否则游戏里会断
         allnb = _all_prov_neighbors(root)
         bad = [[a, b] for a, b in zip(cand, cand[1:]) if b not in (allnb.get(a) or ())]
@@ -5587,136 +6091,133 @@ def railway_edit(index, level=None, provs=None, root=None):
                     "msg": "这些相邻省不接壤，会断连：%s" % bad[:3]}
         new_provs = cand
 
-    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+    path, _base, err = _ensure_map_txt_writable("map", "railways.txt", root, adopt=adopt)
+    if err and not path:
+        return err
+    cur = _railway_parse(path)[index]
+    with io.open(_out_read_path(path), encoding="utf-8-sig", errors="replace") as _fh:
         raw = _fh.read()
-    lines = raw.splitlines(True)
 
-    if cur.get("form") == "line":
-        # 行式在原文里的行号
-        rows = []
-        for i, ln in enumerate(lines):
-            parts = ln.strip().split()
-            if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
-                try:
-                    n = int(parts[1])
-                    if len(parts[2:2 + n]) == n:
-                        rows.append(i)
-                except Exception:
-                    pass
-        if index >= len(rows):
-            return {"ok": False, "msg": "定位不到这一行"}
-        i = rows[index]
-        tail = chr(10) if lines[i].endswith(chr(10)) else ""
-        lines[i] = "%d %d %s%s" % (new_level, len(new_provs),
-                                   " ".join(str(p) for p in new_provs), tail)
-        snapshot(path)
-        _atomic_write(path, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
-        return {"ok": True, "index": index, "level": new_level, "provs": new_provs,
-                "msg": "第 %d 条铁路已更新：等级 %d，%d 个省" % (
-                    index, new_level, len(new_provs))}
+    if cur["form"] == "line":
+        lines = raw.splitlines(True)
+        li = cur["line_idx"]
+        ln = lines[li]
+        tail = "\r\n" if ln.endswith("\r\n") else ("\n" if ln.endswith("\n") else "")
+        lines[li] = "%d %d %s%s" % (new_level, len(new_provs),
+                                    " ".join(str(p) for p in new_provs), tail)
+        new_raw = "".join(lines)
+        msg = "第 %d 条铁路已更新：等级 %d，%d 个省" % (index, new_level, len(new_provs))
+    else:
+        b, e = cur["b"], cur["e"]
+        body = ("\n\tlevel = %d\n\tprovinces = {\n\t\t%s\n\t}\n" % (
+            new_level, "\n\t\t".join(str(p) for p in new_provs)))
+        new_raw = raw[:b + 1] + body + raw[e - 1:]
+        msg = "第 %d 条铁路（块式）已重建" % index
 
-    # 块式：整条重建
-    text = strip_comments(raw)
-    blocks = []
-    for m in re.finditer(r'(?m)^\s*railway\s*=\s*\{', text):
-        b = text.find("{", m.end() - 1)
-        e = brace_match(text, b)
-        if e > b:
-            blocks.append((b, e))
-    if index >= len(blocks):
-        return {"ok": False, "msg": "定位不到这个块"}
-    b, e = blocks[index]
-    body = ("\n\tlevel = %d\n\tprovinces = {\n\t\t%s\n\t}\n" % (
-        new_level, "\n\t\t".join(str(p) for p in new_provs)))
-    new_raw = raw[:b + 1] + body + raw[e - 1:]
     snapshot(path)
-    _atomic_write(path, _bom_for(path) + new_raw.encode("utf-8"))
-    return {"ok": True, "index": index, "level": new_level, "provs": new_provs,
-            "msg": "第 %d 条铁路（块式）已重建" % index}
+    _atomic_write(_out_path(path), new_raw.encode("utf-8"))
+    res = {"ok": True, "index": index, "level": new_level, "provs": new_provs, "msg": msg}
+    if isinstance(err, dict) and err.get("adopted"):
+        res["adopted"] = True
+        res["adopt_msg"] = err.get("adopt_msg") or ""
+    return res
 
 
-def railway_delete(index, root=None):
-    """删除一条铁路（行式删行，块式删块）"""
+def railway_delete(index, root=None, adopt=False):
+    """删除一条铁路（行式删行，块式按原文边界删块）"""
     root = _map_pick(root)
-    path, base = _railway_file(root)
-    if not path:
-        return {"ok": False, "msg": "找不到 map/railways.txt"}
-    if os.path.abspath(base) == os.path.abspath(GAME or ""):
-        return {"ok": False, "msg": "railways.txt 来自原版，只读"}
     try:
         index = int(index)
     except Exception:
         return {"ok": False, "msg": "序号不合法"}
-    rails = _railway_parse(path)
+    src_path, _src_base = _railway_file(root)
+    if not src_path:
+        return {"ok": False, "msg": "找不到 map/railways.txt"}
+    rails = _railway_parse(src_path)
     if index < 0 or index >= len(rails):
         return {"ok": False, "msg": "没有第 %d 条铁路" % index}
-    cur = rails[index]
-    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+
+    path, _base, err = _ensure_map_txt_writable("map", "railways.txt", root, adopt=adopt)
+    if err and not path:
+        return err
+    cur = _railway_parse(path)[index]
+    with io.open(_out_read_path(path), encoding="utf-8-sig", errors="replace") as _fh:
         raw = _fh.read()
-    lines = raw.splitlines(True)
-    if cur.get("form") == "line":
-        rows = []
-        for i, ln in enumerate(lines):
-            parts = ln.strip().split()
-            if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
-                try:
-                    n = int(parts[1])
-                    if len(parts[2:2 + n]) == n:
-                        rows.append(i)
-                except Exception:
-                    pass
-        if index >= len(rows):
-            return {"ok": False, "msg": "定位不到这一行"}
-        del lines[rows[index]]
-        snapshot(path)
-        _atomic_write(path, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
-        return {"ok": True, "msg": "已删除第 %d 条铁路（%d 个省）" % (index, len(cur["provs"]))}
-    return {"ok": False, "msg": "块式铁路暂不支持删除"}
+
+    if cur["form"] == "line":
+        lines = raw.splitlines(True)
+        del lines[cur["line_idx"]]
+        new_raw = "".join(lines)
+    else:
+        new_raw = _remove_block_raw(raw, cur["stmt_start"], cur["e"])
+
+    snapshot(path)
+    _atomic_write(_out_path(path), new_raw.encode("utf-8"))
+    res = {"ok": True, "msg": "已删除第 %d 条铁路（%d 个省）" % (index, len(cur["provs"]))}
+    if isinstance(err, dict) and err.get("adopted"):
+        res["adopted"] = True
+        res["adopt_msg"] = err.get("adopt_msg") or ""
+    return res
+
+
+def _sa_parse_file(path):
+    """解析单个 supplyareas/*.txt（原文扫描，跳过注释，支持多块）。"""
+    out = []
+    try:
+        with io.open(_out_read_path(path), encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
+    except Exception:
+        return out
+    clean = _strip_keep_len(raw)
+    for stmt_start, b, e in _find_top_blocks_raw(raw, "supply_area"):
+        body_raw = raw[b + 1:e - 1]
+        body_clean = clean[b + 1:e - 1]
+        sid = re.search(r'(?m)^\s*id\s*=\s*(\d+)', body_clean)
+        if not sid:
+            continue
+        val = re.search(r'(?m)^\s*value\s*=\s*(\d+)', body_clean)
+        nm = re.search(r'(?m)^\s*name\s*=\s*"([^"]*)"', body_clean)
+        sb, se = _find_subblock_raw(body_raw, "states")
+        states = [int(x) for x in re.findall(r'\d+', body_clean[sb + 1:se - 1])] if sb >= 0 else []
+        out.append({
+            "id": int(sid.group(1)),
+            "name": nm.group(1) if nm else "",
+            "value": int(val.group(1)) if val else 0,
+            "states": states,
+            "stmt_start": stmt_start,
+            "span": [b, e],
+        })
+    return out
+
+
+def _sa_all_records(root):
+    """按叠加链由顶到底返回全部有效补给区 [(base, path, rec), ...]，尊重 replace_path 与同 id 子层优先。"""
+    seen_ids = set()
+    out = []
+    for base, p in _iter_layer_txt_files("map/supplyareas", root):
+        for r in _sa_parse_file(p):
+            if r["id"] in seen_ids:
+                continue
+            seen_ids.add(r["id"])
+            out.append((base, p, r))
+    return out
 
 
 def supply_areas(root=None):
-    """列出补给区：id、价值、覆盖的州"""
+    """列出补给区：id、价值、覆盖的州（子层优先并尊重 replace_path）"""
     root = _map_pick(root)
-    out = []
-    seen_ids = set()
-    for base in reversed(mod_layers(root) or []):
-        if not base:
-            continue
-        d = os.path.join(base, "map", "supplyareas")
-        if not os.path.isdir(d):
-            continue
-        for fn in sorted(os.listdir(d)):
-            if not fn.endswith(".txt"):
-                continue
-            p = os.path.join(d, fn)
-            try:
-                with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
-                    text = strip_comments(_fh.read())
-            except Exception:
-                continue
-            for m in re.finditer(r'supply_area\s*=\s*\{', text):
-                b = text.find("{", m.end() - 1)
-                e = brace_match(text, b)
-                if e <= b:
-                    continue
-                body = text[b + 1:e - 1]
-                sid = re.search(r'(?m)^\s*id\s*=\s*(\d+)', body)
-                if not sid:
-                    continue
-                sid = int(sid.group(1))
-                val = re.search(r'(?m)^\s*value\s*=\s*(\d+)', body)
-                st = re.search(r'states\s*=\s*\{([^}]*)\}', body)
-                states = [int(x) for x in re.findall(r'\d+', st.group(1))] if st else []
-                out.append({"id": sid, "value": int(val.group(1)) if val else 0,
-                            "states": states, "count": len(states),
-                            "file": os.path.relpath(p, base),
-                            "root": os.path.abspath(base)})
-                seen_ids.add(sid)
-    # 同名 id 以最后一层（mod）为准
-    merged = {}
-    for a in out:
-        merged[a["id"]] = a
-    items = sorted(merged.values(), key=lambda x: x["id"])
+    items = []
+    for base, p, r in _sa_all_records(root):
+        items.append({
+            "id": r["id"],
+            "name": r["name"],
+            "value": r["value"],
+            "states": r["states"],
+            "count": len(r["states"]),
+            "file": os.path.relpath(p, base),
+            "root": os.path.abspath(base),
+        })
+    items.sort(key=lambda x: x["id"])
     return {"ok": True, "count": len(items), "items": items,
             "msg": "共 %d 个补给区" % len(items)}
 
@@ -5776,115 +6277,214 @@ _state.set_map_var("_DEF_RGB_CACHE", {"key": None, "map": {}})
 
 
 def _sr_dirs(root):
-    """战略区目录（先 mod 后原版），返回 [(base, dir)]"""
-    out = []
-    for base in reversed(mod_layers(root) or []):
-        if not base:
-            continue
-        d = os.path.join(base, "map", "strategicregions")
-        if os.path.isdir(d):
-            out.append((base, d))
-    if GAME:
-        d = os.path.join(GAME, "map", "strategicregions")
-        if os.path.isdir(d):
-            out.append((GAME, d))
-    return out
+    """战略区目录（子层在前，尊重 replace_path），返回 [(base, dir)]"""
+    root = _map_pick(root)
+    return _layer_dirs("map/strategicregions", root)
 
 
 def _sr_parse_file(path):
-    """一个文件里可能有多个 strategic_region 块"""
+    """一个文件里可能有多个 strategic_region 块（原文精确扫描，跳过注释）"""
     out = []
     try:
-        with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
-            text = strip_comments(_fh.read())
+        with io.open(_out_read_path(path), encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
     except Exception:
         return out
-    for m in re.finditer(r'strategic_region\s*=\s*\{', text):
-        b = text.find("{", m.end() - 1)
-        e = brace_match(text, b)
-        if e <= b:
-            continue
-        body = text[b + 1:e - 1]
-        sid = re.search(r'(?m)^\s*id\s*=\s*(\d+)', body)
+    clean = _strip_keep_len(raw)
+    for stmt_start, b, e in _find_top_blocks_raw(raw, "strategic_region"):
+        body_raw = raw[b + 1:e - 1]
+        body_clean = clean[b + 1:e - 1]
+        sid = re.search(r'(?m)^\s*id\s*=\s*(\d+)', body_clean)
         if not sid:
             continue
-        nm = re.search(r'(?m)^\s*name\s*=\s*"([^"]*)"', body)
-        pr = re.search(r'provinces\s*=\s*\{([^}]*)\}', body)
-        provs = [int(x) for x in re.findall(r'\d+', pr.group(1))] if pr else []
+        nm = re.search(r'(?m)^\s*name\s*=\s*"([^"]*)"', body_clean)
+        pb, pe = _find_subblock_raw(body_raw, "provinces")
+        provs = [int(x) for x in re.findall(r'\d+', body_clean[pb + 1:pe - 1])] if pb >= 0 else []
         out.append({"id": int(sid.group(1)),
                     "name": nm.group(1) if nm else "",
                     "provinces": provs,
+                    "stmt_start": stmt_start,
                     "span": [b, e]})
     return out
 
 
+def _sr_all_records(root):
+    """按叠加链由顶到底返回全部有效战略区 [(base, path, rec), ...]，同文件名与同 id 均子层优先。"""
+    seen_ids = set()
+    out = []
+    for base, p in _iter_layer_txt_files("map/strategicregions", root):
+        for r in _sr_parse_file(p):
+            if r["id"] in seen_ids:
+                continue
+            seen_ids.add(r["id"])
+            out.append((base, p, r))
+    return out
+
+
 def strategic_regions_list(root=None):
-    """列出全部战略区；同 id 以最后一层（mod）为准"""
+    """列出全部战略区；同 id 以最高层（子 mod）为准"""
     root = _map_pick(root)
-    seen = {}
-    for base, d in _sr_dirs(root):
-        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
-            p = os.path.join(d, fn)
-            for r in _sr_parse_file(p):
-                if r["id"] in seen and os.path.abspath(base) == os.path.abspath(GAME or ""):
-                    continue   # 原版的被 mod 覆盖
-                seen[r["id"]] = {
-                    "id": r["id"], "name": r["name"],
-                    "count": len(r["provinces"]),
-                    "provinces": r["provinces"][:400],
-                    "file": os.path.relpath(p, base),
-                    "base": os.path.abspath(base),
-                    "fromMod": os.path.abspath(base) != os.path.abspath(GAME or ""),
-                }
-    items = sorted(seen.values(), key=lambda x: x["id"])
+    top = _writable_txt_top(root)
+    ab_top = os.path.abspath(top) if top else ""
+    items = []
+    for base, p, r in _sr_all_records(root):
+        ab_b = os.path.abspath(base)
+        items.append({
+            "id": r["id"], "name": r["name"],
+            "count": len(r["provinces"]),
+            "provinces": r["provinces"],
+            "file": os.path.relpath(p, base),
+            "base": ab_b,
+            "fromMod": bool(ab_top and ab_b == ab_top and not is_readonly_mod(base)),
+        })
+    items.sort(key=lambda x: x["id"])
     return {"ok": True, "count": len(items), "items": items,
             "msg": "共 %d 个战略区" % len(items)}
 
 
 def _sr_weather_template(root):
     """从任意一个现有战略区里抠出 weather 块，新建时作为模板"""
-    for base, d in _sr_dirs(root):
-        for fn in sorted(os.listdir(d)):
-            if not fn.endswith(".txt"):
-                continue
-            p = os.path.join(d, fn)
-            try:
-                with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
-                    text = strip_comments(_fh.read())
-            except Exception:
-                continue
-            m = re.search(r'weather\s*=\s*\{', text)
-            if not m:
-                continue
-            b = text.find("{", m.end() - 1)
-            e = brace_match(text, b)
-            if e > b:
-                return text[b:e]
+    for _base, p in _iter_layer_txt_files("map/strategicregions", root):
+        try:
+            with io.open(_out_read_path(p), encoding="utf-8-sig", errors="replace") as _fh:
+                raw = _fh.read()
+        except Exception:
+            continue
+        for _s, b, e in _find_top_blocks_raw(raw, "strategic_region"):
+            body_raw = raw[b + 1:e - 1]
+            wb, we = _find_subblock_raw(body_raw, "weather")
+            if wb >= 0 and we > wb:
+                return _strip_keep_len(body_raw[wb:we]).strip() if "#" in body_raw[wb:we] else body_raw[wb:we]
     return ""
 
 
 def _sr_write_dir(root):
-    """新建战略区写到 mod 目录（输出模式下写到 output）。
-
-    map/strategicregions 常被某一层用 replace_path 独占（muvluvCN 就是），
-    写在别处游戏不读，所以按 write_base 算真实写入层。"""
+    """新建战略区写到可写 mod 目录（输出模式下写到 output）。"""
     root = _map_pick(root)
+    layers = mod_layers(root) if root else []
     _calc = root if root else (ROOTS[-1] if ROOTS else "")
     base, _why = write_base(_calc, "map/strategicregions")
-    if not base:
-        return None, None
-    d = _out_path(base, os.path.join("map", "strategicregions")) if _state.output_mode() else \
-        os.path.join(base, "map", "strategicregions")
+    if not base or is_readonly_mod(base):
+        top = _writable_txt_top(root, layers)
+        if not top:
+            return None, None
+        chain = [os.path.abspath(x) for x in layers if x]
+        ab_top = os.path.abspath(top)
+        ab_base = os.path.abspath(base) if base else ""
+        if ab_base and ab_base in chain and ab_top in chain and chain.index(ab_top) < chain.index(ab_base):
+            return None, None
+        base, _why = top, "top"
+    raw_d = os.path.join(base, "map", "strategicregions")
+    d = _out_path(raw_d) if _state.output_mode() else raw_d
     os.makedirs(d, exist_ok=True)
     _write_layer_hint["strategicregions"] = _why
     return base, d
 
 
-def strategic_region_create(root=None, sid=None, name=None, provinces=None):
-    """新建战略区。id 不给就取现有最大值 +1；weather 从现有区复制"""
+def _sr_replace_provs_in_raw(raw, edits):
+    """在原文上按右到左顺序替换多个 strategic_region 的 provinces = { ... } 块。"""
+    blocks = _find_top_blocks_raw(raw, "strategic_region")
+    clean = _strip_keep_len(raw)
+    edit_map = {int(sid): list(provs) for sid, provs in edits}
+    patches = []
+    for _stmt, b, e in blocks:
+        body_raw = raw[b + 1:e - 1]
+        body_clean = clean[b + 1:e - 1]
+        sm = re.search(r'(?m)^\s*id\s*=\s*(\d+)', body_clean)
+        if not sm:
+            continue
+        sid = int(sm.group(1))
+        if sid not in edit_map:
+            continue
+        provs = edit_map[sid]
+        inner = "\n" + "".join("\t\t" + " ".join(str(x) for x in provs[i:i + 12]) + "\n"
+                                for i in range(0, len(provs), 12)) + "\t"
+        pb, pe = _find_subblock_raw(body_raw, "provinces")
+        if pb >= 0 and pe > pb:
+            patches.append((b + 1 + pb, b + 1 + pe, "{" + inner + "}"))
+        else:
+            patches.append((e - 1, e - 1, "\tprovinces={" + inner + "}\n"))
+    patches.sort(key=lambda x: x[0], reverse=True)
+    for ps, pe, rep in patches:
+        raw = raw[:ps] + rep + raw[pe:]
+    return raw
+
+
+def _sr_check_state_split(root, provs, expand_states=False):
+    """检查目标省集是否把多省州拆散到不同战略区（HOI4 引擎禁止同州跨战略区）。"""
+    layers = mod_layers(root) or []
+    layer_pri = {os.path.abspath(b): i for i, b in enumerate(layers) if b}
+    chain_abs = set(layer_pri.keys())
+    pid_owner = {}
+    if isinstance(STATES, dict):
+        for st_key, st in STATES.items():
+            if not isinstance(st, dict):
+                continue
+            st_root = st.get("root") or ""
+            if st_root and chain_abs and os.path.abspath(st_root) not in chain_abs:
+                continue
+            try:
+                st_id = int(st.get("id") or st_key)
+            except Exception:
+                continue
+            pri = layer_pri.get(os.path.abspath(st_root), 0) if st_root else 0
+            for raw_p in (st.get("provinces") or []):
+                try:
+                    pid = int(raw_p)
+                except Exception:
+                    continue
+                if pid <= 0:
+                    continue
+                cur = pid_owner.get(pid)
+                if cur is None or pri >= cur[0]:
+                    pid_owner[pid] = (pri, st_id)
+    if not pid_owner:
+        return list(provs), None, False
+
+    state_provs = {}
+    for pid, (_pri, st_id) in pid_owner.items():
+        state_provs.setdefault(st_id, set()).add(pid)
+
+    target_set = set(provs)
+    split_states = []
+    union_missing = set()
+    for st_id, ps in sorted(state_provs.items()):
+        if len(ps) <= 1:
+            continue
+        inter = ps & target_set
+        if inter and len(inter) < len(ps):
+            missing = sorted(ps - target_set)
+            union_missing.update(missing)
+            split_states.append({
+                "state_id": st_id,
+                "selected": sorted(inter),
+                "missing": missing,
+                "all": sorted(ps),
+            })
+    if not split_states:
+        return list(provs), None, False
+
+    expanded = sorted(target_set | union_missing)
+    if not expand_states:
+        sids_txt = "、".join("#%d" % x["state_id"] for x in split_states[:3])
+        if len(split_states) > 3:
+            sids_txt += " 等 %d 个州" % len(split_states)
+        return None, {
+            "ok": False,
+            "code": "STATE_SPLIT_SR",
+            "split_states": split_states,
+            "expanded_provinces": expanded,
+            "msg": "HOI4 要求同一个州不能横跨多个战略区：州 %s 还有 %d 个省未包含，请选整州或确认自动补全整州"
+                   % (sids_txt, len(union_missing)),
+        }, False
+    return expanded, None, True
+
+
+def strategic_region_create(root=None, sid=None, name=None, provinces=None, adopt=False, expand_states=False):
+    """新建战略区。支持自动从原属战略区迁出省份（含单文件接管）；拦截州跨区拆省并支持整州补全。"""
     root = _map_pick(root)
-    existing = strategic_regions_list(root)
-    used = set(x["id"] for x in existing["items"])
+    all_recs = _sr_all_records(root)
+    used = {r["id"] for _b, _p, r in all_recs}
     try:
         sid = int(sid) if sid not in (None, "") else (max(used) + 1 if used else 1)
     except Exception:
@@ -5900,19 +6500,48 @@ def strategic_region_create(root=None, sid=None, name=None, provinces=None):
     if not provs:
         return {"ok": False, "msg": "至少要指定一个省"}
 
-    # 一个省只能属于一个战略区，先检查
-    owner = {}
-    for it in existing["items"]:
-        for p in it.get("provinces") or []:
-            owner[p] = it["id"]
-    clash = [(p, owner[p]) for p in provs if p in owner]
-    if clash:
-        return {"ok": False,
-                "msg": "这些省已属于别的战略区：%s" % clash[:3]}
+    provs, split_err, did_expand = _sr_check_state_split(root, provs, expand_states=expand_states)
+    if split_err:
+        return split_err
 
-    b, d = _sr_write_dir(root)
-    fn = "%d-New Strategic Region.txt" % sid
-    path = os.path.join(d, fn)
+    b_dir, d_dir = _sr_write_dir(root)
+    if not d_dir:
+        return {"ok": False, "readonly": True, "msg": "找不到可写的 mod 目录（战略区目录只读）"}
+
+    provs_set = set(provs)
+    migrations = []
+    for o_base, o_path, o_rec in all_recs:
+        overlap = [p for p in o_rec["provinces"] if p in provs_set]
+        if not overlap:
+            continue
+        rem = [p for p in o_rec["provinces"] if p not in provs_set]
+        if not rem:
+            return {
+                "ok": False,
+                "msg": "省 %s 迁出后，战略区 #%d（%s）将没有剩余省（HOI4 不允许空战略区）"
+                       % (overlap[:5], o_rec["id"], o_rec["name"]),
+            }
+        migrations.append((o_base, o_path, o_rec["id"], rem))
+
+    resolved, err = _adopt_map_txt_files(
+        root, "map/strategicregions", [(ob, op) for ob, op, _oid, _rem in migrations], adopt=adopt
+    )
+    if err:
+        return err
+
+    by_file = {}
+    for _ob, op, oid, rem in migrations:
+        dst_p = resolved[os.path.abspath(op)]
+        by_file.setdefault(dst_p, []).append((oid, rem))
+    for dst_p, edits in by_file.items():
+        with io.open(_out_read_path(dst_p), encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
+        new_raw = _sr_replace_provs_in_raw(raw, edits)
+        snapshot(dst_p)
+        _atomic_write(_out_path(dst_p), new_raw.encode("utf-8"))
+
+    fn = unique_editor_filename(b_dir, "map/strategicregions", "%d-New Strategic Region.txt" % sid)
+    path = os.path.join(d_dir, fn)
     weather = _sr_weather_template(root)
     body = "strategic_region={\n\tid=%d\n\tname=\"%s\"\n\tprovinces={\n" % (
         sid, (name or ("STRATEGICREGION_%d" % sid)))
@@ -5922,27 +6551,32 @@ def strategic_region_create(root=None, sid=None, name=None, provinces=None):
     if weather:
         body += "\tweather=" + weather + "\n"
     body += "}\n"
-    _atomic_write(path, _bom_for(path) + body.encode("utf-8"))
+    snapshot(path)
+    _atomic_write(path, body.encode("utf-8"))
+    invalidate_chain_cache()
     reload_data()
-    return {"ok": True, "id": sid, "file": os.path.relpath(path, b),
-            "provinces": len(provs), "weatherCopied": bool(weather),
-            "msg": "已新建战略区 %d（%d 个省）%s" % (
-                sid, len(provs), "，天气块已复制" if weather else "，没有找到天气模板")}
+    mig_note = "（已从 %d 个原战略区迁出冲突省）" % len(migrations) if migrations else ""
+    res = {"ok": True, "id": sid, "file": os.path.relpath(path, b_dir) if not _state.output_mode() else fn,
+           "provinces": len(provs), "weatherCopied": bool(weather),
+           "migrated_from": [oid for _ob, _op, oid, _rem in migrations],
+           "msg": "已新建战略区 %d（%d 个省）%s%s" % (
+               sid, len(provs), "，天气块已复制" if weather else "，没有找到天气模板", mig_note)}
+    if did_expand:
+        res["expanded"] = True
+    return res
 
 
 def _sr_find(root, sid):
-    """按 id 找文件与块位置"""
-    for base, d in _sr_dirs(root):
-        for fn in sorted(f for f in os.listdir(d) if f.endswith(".txt")):
-            p = os.path.join(d, fn)
-            for r in _sr_parse_file(p):
-                if r["id"] == int(sid):
-                    return base, p, r
+    """按 id 找有效战略区文件与块位置"""
+    sid = int(sid)
+    for base, p, r in _sr_all_records(root):
+        if r["id"] == sid:
+            return base, p, r
     return None, None, None
 
 
-def strategic_region_set_provinces(sid, provinces, root=None):
-    """改某战略区覆盖的省份（整块替换 provinces = { }）"""
+def strategic_region_set_provinces(sid, provinces, root=None, adopt=False, expand_states=False):
+    """改某战略区覆盖的省份（拦截州跨区拆省并支持整州补全，支持跨区/跨层迁出及单文件接管）"""
     root = _map_pick(root)
     try:
         sid = int(sid)
@@ -5951,36 +6585,73 @@ def strategic_region_set_provinces(sid, provinces, root=None):
         return {"ok": False, "msg": "参数不合法"}
     if not provs:
         return {"ok": False, "msg": "至少要有一个省"}
-    base, path, rec = _sr_find(root, sid)
+    all_recs = _sr_all_records(root)
+    base, path, rec = None, None, None
+    for b, p, r in all_recs:
+        if r["id"] == sid:
+            base, path, rec = b, p, r
+            break
     if not path:
         return {"ok": False, "msg": "没有战略区 %d" % sid}
-    if os.path.abspath(base) == os.path.abspath(GAME or ""):
-        return {"ok": False, "msg": "这个战略区来自原版，只读"}
-    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
-        text = _fh.read()
-    b, e = rec["span"]
-    body = text[b + 1:e - 1]
-    inner = "\n" + "".join("\t\t" + " ".join(str(x) for x in provs[i:i + 12]) + "\n"
-                            for i in range(0, len(provs), 12)) + "\t"
-    m = re.search(r'provinces\s*=\s*\{', body)
-    if m:
-        pb = body.find("{", m.end() - 1)
-        pe = brace_match(body, pb)
-        if pe > pb:
-            body2 = body[:pb] + "{" + inner + "}" + body[pe:]
-        else:
-            body2 = body
-    else:
-        body2 = body + "\n\tprovinces={" + inner + "}"
-    new_text = text[:b + 1] + body2 + text[e - 1:]
-    snapshot(path)
-    _atomic_write(path, _bom_for(path) + new_text.encode("utf-8"))
-    return {"ok": True, "id": sid, "provinces": len(provs),
-            "msg": "战略区 %d 现在覆盖 %d 个省" % (sid, len(provs))}
+
+    provs, split_err, did_expand = _sr_check_state_split(root, provs, expand_states=expand_states)
+    if split_err:
+        return split_err
+
+    provs_set = set(provs)
+    migrations = []
+    for o_base, o_path, o_rec in all_recs:
+        if o_rec["id"] == sid:
+            continue
+        overlap = [p for p in o_rec["provinces"] if p in provs_set]
+        if not overlap:
+            continue
+        rem = [p for p in o_rec["provinces"] if p not in provs_set]
+        if not rem:
+            return {
+                "ok": False,
+                "msg": "省 %s 迁出后，战略区 #%d（%s）将没有剩余省（HOI4 不允许空战略区）"
+                       % (overlap[:5], o_rec["id"], o_rec["name"]),
+            }
+        migrations.append((o_base, o_path, o_rec["id"], rem))
+
+    targets = [(base, path)] + [(ob, op) for ob, op, _oid, _rem in migrations]
+    resolved, err = _adopt_map_txt_files(root, "map/strategicregions", targets, adopt=adopt)
+    if err:
+        return err
+
+    by_file = {}
+    for _ob, op, oid, rem in migrations:
+        dst_p = resolved[os.path.abspath(op)]
+        by_file.setdefault(dst_p, []).append((oid, rem))
+    dst_target = resolved[os.path.abspath(path)]
+    by_file.setdefault(dst_target, []).append((sid, provs))
+
+    for dst_p, edits in by_file.items():
+        with io.open(_out_read_path(dst_p), encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
+        new_raw = _sr_replace_provs_in_raw(raw, edits)
+        snapshot(dst_p)
+        _atomic_write(_out_path(dst_p), new_raw.encode("utf-8"))
+
+    orphans = sorted(p for p in rec["provinces"] if p not in provs_set)
+    msg = "战略区 %d 现在覆盖 %d 个省" % (sid, len(provs))
+    if migrations:
+        msg += "（已从 %d 个区迁出冲突省）" % len(migrations)
+    if orphans:
+        msg += "；注意：%d 个原属省被移出且未归入其他区（%s）" % (len(orphans), orphans[:5])
+    res = {"ok": True, "id": sid, "provinces": len(provs),
+           "migrated_from": [oid for _ob, _op, oid, _rem in migrations],
+           "orphan_provinces": orphans, "msg": msg}
+    if did_expand:
+        res["expanded"] = True
+    if os.path.abspath(dst_target) != os.path.abspath(path):
+        res["adopted"] = True
+    return res
 
 
-def strategic_region_delete(sid, root=None):
-    """删除战略区：整个块从文件里摘掉；文件里没有其它块就删文件"""
+def strategic_region_delete(sid, root=None, adopt=False):
+    """删除战略区：仅允许删除链顶可写层；多块文件只摘目标块，单块则删文件"""
     root = _map_pick(root)
     try:
         sid = int(sid)
@@ -5989,61 +6660,49 @@ def strategic_region_delete(sid, root=None):
     base, path, rec = _sr_find(root, sid)
     if not path:
         return {"ok": False, "msg": "没有战略区 %d" % sid}
-    if os.path.abspath(base) == os.path.abspath(GAME or ""):
-        return {"ok": False, "msg": "这个战略区来自原版，只读"}
-    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
-        text = _fh.read()
-    others = [r for r in _sr_parse_file(path) if r["id"] != sid]
+    top = _writable_txt_top(root)
+    if is_readonly_mod(base) or not top or os.path.abspath(base) != os.path.abspath(top):
+        return {"ok": False, "readonly": True,
+                "msg": "战略区 #%d 来自只读层或下层（%s），不能直接删除"
+                       % (sid, os.path.basename(os.path.abspath(base)) or "原版")}
+    blocks = _sr_parse_file(path)
+    others = [r for r in blocks if r["id"] != sid]
     if not others:
         snapshot(path)
         try:
             os.remove(path)
+            invalidate_chain_cache()
         except Exception as e:
             return {"ok": False, "msg": "删文件失败：%s" % e}
         return {"ok": True, "id": sid, "removedFile": True,
                 "msg": "已删除战略区 %d 及其文件" % sid}
-    b, e = rec["span"]
-    # 连同前面的 strategic_region = { 一起摘掉
-    start = text.rfind("strategic_region", 0, b)
-    if start < 0:
-        start = b
-    new_text = text[:start] + text[e:]
+    with io.open(_out_read_path(path), encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
+    new_raw = _remove_block_raw(raw, rec["stmt_start"], rec["span"][1])
     snapshot(path)
-    _atomic_write(path, _bom_for(path) + new_text.encode("utf-8"))
+    _atomic_write(_out_path(path), new_raw.encode("utf-8"))
     return {"ok": True, "id": sid, "removedFile": False,
             "msg": "已从文件里移除战略区 %d（文件里还有 %d 个）" % (sid, len(others))}
 
 
-
-
 def _adj_file(root):
-    for base in reversed(mod_layers(root) or []):
-        if not base:
-            continue
-        p = os.path.join(base, "map", "adjacencies.csv")
-        if os.path.exists(p):
-            return p, base
-    if GAME:
-        p = os.path.join(GAME, "map", "adjacencies.csv")
-        if os.path.exists(p):
-            return p, GAME
-    return None, None
+    root = _map_pick(root)
+    return _layers_find("map/adjacencies.csv", mod_layers(root) or [])
 
 
 def adjacencies_list(root=None):
-    """海峡 / 陆地连接列表。坐标 -1 表示不画线，用省质心代替"""
+    """海峡 / 陆地连接列表。过滤负 ID 哨兵行（如 -1;-1），坐标 -1 表示不画线"""
     root = _map_pick(root)
     path, base = _adj_file(root)
     if not path:
         return {"ok": False, "msg": "找不到 map/adjacencies.csv"}
     items = []
     try:
-        with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+        with io.open(_out_read_path(path), encoding="utf-8-sig", errors="replace") as _fh:
             raw = _fh.read()
     except Exception as e:
         return {"ok": False, "msg": "读取失败：%s" % e}
     lines = raw.splitlines()
-    header = lines[0] if lines else ""
     for i, ln in enumerate(lines[1:], start=2):
         if not ln.strip() or ln.strip().startswith("#"):
             continue
@@ -6053,6 +6712,8 @@ def adjacencies_list(root=None):
         try:
             frm, to = int(c[0]), int(c[1])
         except Exception:
+            continue
+        if frm < 0 or to < 0:
             continue
         through = c[3] if len(c) > 3 else ""
         coords = []
@@ -6079,82 +6740,135 @@ def adjacencies_list(root=None):
                 len(items), "，".join("%s %d" % (k, v) for k, v in sorted(types.items())))}
 
 
-def adjacency_edit(line, adj_type=None, root=None):
+def _adj_validate_line(lines, line):
+    """校验 adjacencies.csv 行号是否为可编辑的正 ID 连接行。"""
+    if line < 2 or line > len(lines):
+        return None, {"ok": False, "msg": "没有第 %d 行（不能改写表头）" % line if line == 1 else "没有第 %d 行" % line}
+    idx = line - 1
+    ln = lines[idx]
+    if not ln.strip() or ln.lstrip().startswith("#"):
+        return None, {"ok": False, "msg": "不能修改或删除空行/注释行"}
+    c = ln.rstrip("\r\n").split(";")
+    if len(c) < 4:
+        return None, {"ok": False, "msg": "这一行格式不对"}
+    try:
+        frm, to = int(c[0]), int(c[1])
+    except Exception:
+        return None, {"ok": False, "msg": "这一行不是有效的连接行"}
+    if frm < 0 or to < 0:
+        return None, {"ok": False, "msg": "不能修改或删除 -1;-1 哨兵行"}
+    return c, None
+
+
+def adjacency_edit(line, adj_type=None, root=None, adopt=False):
     """改某一条连接的类型（sea / land / lake 等）"""
     root = _map_pick(root)
-    path, base = _adj_file(root)
-    if not path:
-        return {"ok": False, "msg": "找不到 map/adjacencies.csv"}
-    if os.path.abspath(base) == os.path.abspath(GAME or ""):
-        return {"ok": False, "msg": "adjacencies.csv 来自原版，只读"}
     try:
         line = int(line)
     except Exception:
         return {"ok": False, "msg": "行号不合法"}
-    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+    src_path, _src_base = _adj_file(root)
+    if not src_path:
+        return {"ok": False, "msg": "找不到 map/adjacencies.csv"}
+    with io.open(_out_read_path(src_path), encoding="utf-8-sig", errors="replace") as _fh:
+        raw0 = _fh.read()
+    lines0 = raw0.splitlines(True)
+    _c0, verr = _adj_validate_line(lines0, line)
+    if verr:
+        return verr
+
+    path, _base, err = _ensure_map_txt_writable("map", "adjacencies.csv", root, adopt=adopt)
+    if err and not path:
+        return err
+    with io.open(_out_read_path(path), encoding="utf-8-sig", errors="replace") as _fh:
         raw = _fh.read()
     lines = raw.splitlines(True)
+    c, verr = _adj_validate_line(lines, line)
+    if verr:
+        return verr
     idx = line - 1
-    if idx < 0 or idx >= len(lines):
-        return {"ok": False, "msg": "没有第 %d 行" % line}
-    c = lines[idx].rstrip("\r\n").split(";")
-    if len(c) < 4:
-        return {"ok": False, "msg": "这一行格式不对"}
     old = c[2]
     if adj_type:
         c[2] = adj_type
-    tail = chr(10) if lines[idx].endswith(chr(10)) else ""
+    tail = "\r\n" if lines[idx].endswith("\r\n") else ("\n" if lines[idx].endswith("\n") else "")
     lines[idx] = ";".join(c) + tail
     snapshot(path)
-    _atomic_write(path, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
-    return {"ok": True, "line": line, "from": old, "to": c[2],
-            "msg": "第 %d 行的类型 %s → %s" % (line, old, c[2])}
+    _atomic_write(_out_path(path), "".join(lines).encode("utf-8"))
+    res = {"ok": True, "line": line, "from": old, "to": c[2],
+           "msg": "第 %d 行的类型 %s → %s" % (line, old, c[2])}
+    if isinstance(err, dict) and err.get("adopted"):
+        res["adopted"] = True
+        res["adopt_msg"] = err.get("adopt_msg") or ""
+    return res
 
 
-def adjacency_delete(line, root=None):
-    """删除一条连接"""
+def adjacency_delete(line, root=None, adopt=False):
+    """删除一条连接（拒绝删除表头或哨兵行）"""
     root = _map_pick(root)
-    path, base = _adj_file(root)
-    if not path:
-        return {"ok": False, "msg": "找不到 map/adjacencies.csv"}
-    if os.path.abspath(base) == os.path.abspath(GAME or ""):
-        return {"ok": False, "msg": "adjacencies.csv 来自原版，只读"}
     try:
         line = int(line)
     except Exception:
         return {"ok": False, "msg": "行号不合法"}
-    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
+    src_path, _src_base = _adj_file(root)
+    if not src_path:
+        return {"ok": False, "msg": "找不到 map/adjacencies.csv"}
+    with io.open(_out_read_path(src_path), encoding="utf-8-sig", errors="replace") as _fh:
+        raw0 = _fh.read()
+    lines0 = raw0.splitlines(True)
+    _c0, verr = _adj_validate_line(lines0, line)
+    if verr:
+        return verr
+
+    path, _base, err = _ensure_map_txt_writable("map", "adjacencies.csv", root, adopt=adopt)
+    if err and not path:
+        return err
+    with io.open(_out_read_path(path), encoding="utf-8-sig", errors="replace") as _fh:
         raw = _fh.read()
     lines = raw.splitlines(True)
+    _c, verr = _adj_validate_line(lines, line)
+    if verr:
+        return verr
     idx = line - 1
-    if idx < 0 or idx >= len(lines):
-        return {"ok": False, "msg": "没有第 %d 行" % line}
     gone = lines[idx].rstrip("\r\n")
     del lines[idx]
     snapshot(path)
-    _atomic_write(path, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
-    return {"ok": True, "line": line, "removed": gone[:60],
-            "msg": "已删除第 %d 行连接" % line}
+    _atomic_write(_out_path(path), "".join(lines).encode("utf-8"))
+    res = {"ok": True, "line": line, "removed": gone[:60],
+           "msg": "已删除第 %d 行连接" % line}
+    if isinstance(err, dict) and err.get("adopted"):
+        res["adopted"] = True
+        res["adopt_msg"] = err.get("adopt_msg") or ""
+    return res
 
 
-def adjacency_add(frm, to, adj_type="sea", through="", root=None):
-    """新增一条连接（追加到文件末尾）"""
+def adjacency_add(frm, to, adj_type="sea", through="", root=None, adopt=False):
+    """新增一条连接（插入到首个 -1;-1 哨兵行前方，标准 10 列无 BOM）"""
     root = _map_pick(root)
-    path, base = _adj_file(root)
-    if not path:
-        return {"ok": False, "msg": "找不到 map/adjacencies.csv"}
-    if os.path.abspath(base) == os.path.abspath(GAME or ""):
-        return {"ok": False, "msg": "adjacencies.csv 来自原版，只读"}
     try:
         frm, to = int(frm), int(to)
     except Exception:
         return {"ok": False, "msg": "省号不合法"}
+    if frm <= 0 or to <= 0:
+        return {"ok": False, "msg": "省号必须是正整数"}
     if frm == to:
         return {"ok": False, "msg": "两端不能是同一个省"}
-    with io.open(path, encoding="utf-8-sig", errors="replace") as _fh:
-        raw = _fh.read()
-    lines = raw.splitlines(True)
-    for ln in lines[1:]:
+    adj_type = (adj_type or "sea").strip() or "sea"
+    thr_s = str(through).strip() if through is not None else ""
+    if adj_type == "sea":
+        try:
+            thr_i = int(thr_s)
+        except Exception:
+            thr_i = 0
+        if thr_i <= 0:
+            return {"ok": False, "msg": "海峡类型需要填写经过的海省 ID（Through）"}
+        thr_s = str(thr_i)
+
+    src_path, _src_base = _adj_file(root)
+    if not src_path:
+        return {"ok": False, "msg": "找不到 map/adjacencies.csv"}
+    with io.open(_out_read_path(src_path), encoding="utf-8-sig", errors="replace") as _fh:
+        raw0 = _fh.read()
+    for ln in raw0.splitlines()[1:]:
         c = ln.split(";")
         if len(c) >= 2:
             try:
@@ -6163,14 +6877,42 @@ def adjacency_add(frm, to, adj_type="sea", through="", root=None):
                 continue
             if (a == frm and b == to) or (a == to and b == frm):
                 return {"ok": False, "msg": "这两省之间已经有连接了"}
-    row = "%d;%d;%s;%s;-1;-1;-1;-1;;" % (frm, to, adj_type or "sea", through or "")
-    if not raw.endswith(chr(10)):
-        lines[-1] = lines[-1] + chr(10)
-    lines.append(row + chr(10))
+
+    path, _base, err = _ensure_map_txt_writable("map", "adjacencies.csv", root, adopt=adopt)
+    if err and not path:
+        return err
+    with io.open(_out_read_path(path), encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
+    lines = raw.splitlines(True)
+    eol = "\r\n" if "\r\n" in raw else "\n"
+    row = "%d;%d;%s;%s;-1;-1;-1;-1;;" % (frm, to, adj_type, thr_s) + eol
+
+    sent_idx = None
+    for idx in range(1, len(lines)):
+        c = lines[idx].strip().split(";")
+        if len(c) >= 2:
+            try:
+                if int(c[0]) < 0 and int(c[1]) < 0:
+                    sent_idx = idx
+                    break
+            except Exception:
+                continue
+    if sent_idx is not None:
+        lines.insert(sent_idx, row)
+    else:
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] = lines[-1] + eol
+        lines.append(row)
+        lines.append("-1;-1;;-1;-1;-1;-1;-1;-1" + eol)
+
     snapshot(path)
-    _atomic_write(path, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
-    return {"ok": True, "from": frm, "to": to, "type": adj_type,
-            "msg": "已新增连接 %d ↔ %d（%s）" % (frm, to, adj_type or "sea")}
+    _atomic_write(_out_path(path), "".join(lines).encode("utf-8"))
+    res = {"ok": True, "from": frm, "to": to, "type": adj_type, "through": thr_s,
+           "msg": "已新增连接 %d ↔ %d（%s）" % (frm, to, adj_type)}
+    if isinstance(err, dict) and err.get("adopted"):
+        res["adopted"] = True
+        res["adopt_msg"] = err.get("adopt_msg") or ""
+    return res
 
 
 
@@ -6236,80 +6978,77 @@ def orphan_tags(root=None):
 
 
 def _supply_dir_write(root):
-    """补给区写到哪：按 replace_path 算真实写入层"""
+    """补给区写到哪：按 replace_path 算真实写入层，拦截只读目录"""
     root = _map_pick(root)
+    layers = mod_layers(root) if root else []
     _calc = root if root else (ROOTS[-1] if ROOTS else "")
     base, _why = write_base(_calc, "map/supplyareas")
-    if not base:
-        return None, None
-    d = _out_path(base, os.path.join("map", "supplyareas")) if _state.output_mode() else \
-        os.path.join(base, "map", "supplyareas")
+    if not base or is_readonly_mod(base):
+        top = _writable_txt_top(root, layers)
+        if not top:
+            return None, None
+        chain = [os.path.abspath(x) for x in layers if x]
+        ab_top = os.path.abspath(top)
+        ab_base = os.path.abspath(base) if base else ""
+        if ab_base and ab_base in chain and ab_top in chain and chain.index(ab_top) < chain.index(ab_base):
+            return None, None
+        base, _why = top, "top"
+    raw_d = os.path.join(base, "map", "supplyareas")
+    d = _out_path(raw_d) if _state.output_mode() else raw_d
     os.makedirs(d, exist_ok=True)
     _write_layer_hint["supplyareas"] = _why
     return base, d
 
 
-def supply_area_save(sid, value=None, states=None, name=None, root=None):
-    """新建或修改一个补给区。
+def _sa_replace_states_in_raw(raw, edits):
+    """在原文上按右到左顺序替换多个 supply_area 的 states = { ... } 块，保同文件其余块。"""
+    blocks = _find_top_blocks_raw(raw, "supply_area")
+    clean = _strip_keep_len(raw)
+    edit_map = {int(sid): list(states) for sid, states in edits}
+    patches = []
+    for _stmt, b, e in blocks:
+        body_raw = raw[b + 1:e - 1]
+        body_clean = clean[b + 1:e - 1]
+        sm = re.search(r'(?m)^\s*id\s*=\s*(\d+)', body_clean)
+        if not sm:
+            continue
+        sid = int(sm.group(1))
+        if sid not in edit_map:
+            continue
+        sts = edit_map[sid]
+        inner = "\n" + "".join("\t\t%d\n" % x for x in sts) + "\t"
+        sb, se = _find_subblock_raw(body_raw, "states")
+        if sb >= 0 and se > sb:
+            patches.append((b + 1 + sb, b + 1 + se, "{" + inner + "}"))
+        else:
+            patches.append((e - 1, e - 1, "\tstates={" + inner + "}\n"))
+    patches.sort(key=lambda x: x[0], reverse=True)
+    for ps, pe, rep in patches:
+        raw = raw[:ps] + rep + raw[pe:]
+    return raw
 
-    sid 已存在就改（value / states / name），不存在就新建文件。
-    写法沿用 HOI4 的 supply_area={ id name value states }。"""
+
+def supply_area_save(sid, value=None, states=None, name=None, root=None, adopt=False):
+    """新建或修改一个补给区（含州独占迁出、跨层单文件接管、多块保其余块、无 BOM）。"""
     root = _map_pick(root)
     try:
         sid = int(sid)
     except Exception:
         return {"ok": False, "msg": "补给区 id 不合法"}
-    base, d = _supply_dir_write(root)
+    w_base, d = _supply_dir_write(root)
     if not d:
-        return {"ok": False, "msg": "找不到可写的 mod 目录"}
+        return {"ok": False, "readonly": True, "msg": "找不到可写的 mod 目录（补给区目录只读）"}
 
-    # 找现有文件
-    exist_path = None
-    for _b, _d in _layer_dirs("map/supplyareas", root):
-        for fn in sorted(os.listdir(_d)):
-            if not fn.endswith(".txt"):
-                continue
-            p = os.path.join(_d, fn)
-            try:
-                with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
-                    t = strip_comments(_fh.read())
-            except Exception:
-                continue
-            for m in re.finditer(r'supply_area\s*=\s*\{', t):
-                b = t.find("{", m.end() - 1)
-                e = brace_match(t, b)
-                if e <= b:
-                    continue
-                body = t[b + 1:e - 1]
-                mm = re.search(r'(?m)^\s*id\s*=\s*(\d+)', body)
-                if mm and int(mm.group(1)) == sid:
-                    exist_path = p
-                    break
-            if exist_path:
-                break
-        if exist_path:
+    all_recs = _sa_all_records(root)
+    exist_base, exist_path, exist_rec = None, None, None
+    for b, p, r in all_recs:
+        if r["id"] == sid:
+            exist_base, exist_path, exist_rec = b, p, r
             break
 
-    # 现有值（改的时候保留没传的字段）
-    cur_value, cur_states, cur_name = 12, [], "SUPPLYAREA_%d" % sid
-    if exist_path:
-        try:
-            with io.open(exist_path, encoding="utf-8-sig", errors="replace") as _fh:
-                t = strip_comments(_fh.read())
-            b = t.find("{", t.find("supply_area"))
-            e = brace_match(t, b)
-            body = t[b + 1:e - 1]
-            mv = re.search(r'(?m)^\s*value\s*=\s*(\d+)', body)
-            if mv:
-                cur_value = int(mv.group(1))
-            mn = re.search(r'(?m)^\s*name\s*=\s*"([^"]*)"', body)
-            if mn:
-                cur_name = mn.group(1)
-            ms = re.search(r'states\s*=\s*\{([^}]*)\}', body)
-            if ms:
-                cur_states = [int(x) for x in re.findall(r'\d+', ms.group(1))]
-        except Exception:
-            pass
+    cur_value = exist_rec["value"] if exist_rec else 12
+    cur_states = list(exist_rec["states"]) if exist_rec else []
+    cur_name = (exist_rec["name"] or ("SUPPLYAREA_%d" % sid)) if exist_rec else ("SUPPLYAREA_%d" % sid)
 
     if value not in (None, ""):
         try:
@@ -6318,7 +7057,7 @@ def supply_area_save(sid, value=None, states=None, name=None, root=None):
             return {"ok": False, "msg": "value 必须是整数"}
     if name:
         cur_name = str(name)
-    if states:
+    if states is not None:
         try:
             cur_states = sorted({int(x) for x in states})
         except Exception:
@@ -6331,62 +7070,124 @@ def supply_area_save(sid, value=None, states=None, name=None, root=None):
     if bad:
         return {"ok": False, "msg": "这些州不存在：%s" % bad[:5]}
 
-    fn = os.path.basename(exist_path) if exist_path else ("%d-SupplyArea.txt" % sid)
-    path = os.path.join(d, fn)
+    # 州独占校验与跨层迁出检查
+    st_set = set(cur_states)
+    migrations = []
+    for o_base, o_path, o_rec in all_recs:
+        if o_rec["id"] == sid:
+            continue
+        overlap = [s for s in o_rec["states"] if s in st_set]
+        if not overlap:
+            continue
+        rem = [s for s in o_rec["states"] if s not in st_set]
+        if not rem:
+            return {
+                "ok": False,
+                "msg": "州 %s 迁出后，补给区 #%d（%s）将没有剩余州（HOI4 不允许空补给区）"
+                       % (overlap[:5], o_rec["id"], o_rec["name"] or str(o_rec["id"])),
+            }
+        migrations.append((o_base, o_path, o_rec["id"], rem))
+
+    targets = ([(exist_base, exist_path)] if exist_path else []) + [
+        (ob, op) for ob, op, _oid, _rem in migrations
+    ]
+    resolved, err = _adopt_map_txt_files(root, "map/supplyareas", targets, adopt=adopt)
+    if err:
+        return err
+
+    by_file = {}
+    for _ob, op, oid, rem in migrations:
+        dst_p = resolved[os.path.abspath(op)]
+        by_file.setdefault(dst_p, []).append((oid, rem))
+    for dst_p, edits in by_file.items():
+        with io.open(_out_read_path(dst_p), encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
+        new_raw = _sa_replace_states_in_raw(raw, edits)
+        snapshot(dst_p)
+        _atomic_write(_out_path(dst_p), new_raw.encode("utf-8"))
+
     inner = "\n" + "".join("\t\t%d\n" % x for x in cur_states) + "\t"
-    body = ('supply_area={\n\tid=%d\n\tname="%s"\n\tvalue=%d\n\tstates={%s}\n}\n'
-            % (sid, cur_name, cur_value, inner))
-    _atomic_write(path, _bom_for(path) + body.encode("utf-8"))
+    block_txt = ('supply_area={\n\tid=%d\n\tname="%s"\n\tvalue=%d\n\tstates={%s}\n}'
+                 % (sid, cur_name, cur_value, inner))
+    adopted = False
+    if exist_path:
+        path = resolved[os.path.abspath(exist_path)]
+        adopted = os.path.abspath(path) != os.path.abspath(exist_path)
+        with io.open(_out_read_path(path), encoding="utf-8-sig", errors="replace") as _fh:
+            raw = _fh.read()
+        clean = _strip_keep_len(raw)
+        replaced = False
+        for stmt_start, b, e in _find_top_blocks_raw(raw, "supply_area"):
+            sm = re.search(r'(?m)^\s*id\s*=\s*(\d+)', clean[b + 1:e - 1])
+            if sm and int(sm.group(1)) == sid:
+                raw = raw[:stmt_start] + block_txt + raw[e:]
+                replaced = True
+                break
+        if not replaced:
+            if raw and not raw.endswith("\n"):
+                raw += "\n"
+            raw += block_txt + "\n"
+        snapshot(path)
+        _atomic_write(_out_path(path), raw.encode("utf-8"))
+    else:
+        fn = unique_editor_filename(w_base, "map/supplyareas", "%d-SupplyArea.txt" % sid)
+        path = os.path.join(d, fn)
+        snapshot(path)
+        _atomic_write(path, (block_txt + "\n").encode("utf-8"))
+        invalidate_chain_cache()
+
     reload_data()
-    return {"ok": True, "id": sid, "file": os.path.basename(path),
-            "value": cur_value, "states": cur_states,
-            "created": not bool(exist_path),
-            "msg": "%s补给区 %d（value=%d，%d 个州）" % (
-                "已新建" if not exist_path else "已更新", sid, cur_value, len(cur_states))}
+    mig_note = "（已从 %d 个原补给区迁出冲突州）" % len(migrations) if migrations else ""
+    res = {"ok": True, "id": sid, "file": os.path.basename(path),
+           "value": cur_value, "states": cur_states,
+           "created": not bool(exist_path),
+           "migrated_from": [oid for _ob, _op, oid, _rem in migrations],
+           "msg": "%s补给区 %d（value=%d，%d 个州）%s" % (
+               "已新建" if not exist_path else "已更新", sid, cur_value, len(cur_states), mig_note)}
+    if adopted:
+        res["adopted"] = True
+    return res
 
 
-def supply_area_delete(sid, root=None):
-    """删除一个补给区：只从当前 mod 层的文件里摘，原版不动"""
+def supply_area_delete(sid, root=None, adopt=False):
+    """删除一个补给区：仅允许删除链顶可写层；多块文件只摘目标块，单块则删文件"""
     root = _map_pick(root)
     try:
         sid = int(sid)
     except Exception:
         return {"ok": False, "msg": "id 不合法"}
-    base, d = _supply_dir_write(root)
-    if not d:
-        return {"ok": False, "msg": "找不到可写的 mod 目录"}
-    # 只处理自己目录里的文件
-    for fn in sorted(os.listdir(d)):
-        if not fn.endswith(".txt"):
-            continue
-        p = os.path.join(d, fn)
+    exist_base, exist_path, exist_rec = None, None, None
+    for b, p, r in _sa_all_records(root):
+        if r["id"] == sid:
+            exist_base, exist_path, exist_rec = b, p, r
+            break
+    if not exist_path:
+        return {"ok": False, "msg": "没有补给区 %d" % sid}
+    top = _writable_txt_top(root)
+    if is_readonly_mod(exist_base) or not top or os.path.abspath(exist_base) != os.path.abspath(top):
+        return {"ok": False, "readonly": True,
+                "msg": "补给区 %d 来自只读层或下层（%s），不能直接删除"
+                       % (sid, os.path.basename(os.path.abspath(exist_base)) or "原版")}
+    blocks = _sa_parse_file(exist_path)
+    others = [r for r in blocks if r["id"] != sid]
+    if not others:
+        snapshot(exist_path)
         try:
-            with io.open(p, encoding="utf-8-sig", errors="replace") as _fh:
-                t = _fh.read()
-        except Exception:
-            continue
-        ct = strip_comments(t)
-        found = False
-        for m in re.finditer(r'supply_area\s*=\s*\{', ct):
-            b = ct.find("{", m.end() - 1)
-            e = brace_match(ct, b)
-            if e <= b:
-                continue
-            mm = re.search(r'(?m)^\s*id\s*=\s*(\d+)', ct[b + 1:e - 1])
-            if mm and int(mm.group(1)) == sid:
-                found = True
-                break
-        if not found:
-            continue
-        try:
-            snapshot(p)
-            os.remove(p)
+            os.remove(exist_path)
+            invalidate_chain_cache()
         except Exception as ex:
             return {"ok": False, "msg": "删除失败：%s" % ex}
         reload_data()
-        return {"ok": True, "id": sid, "msg": "已删除补给区 %d（%s）" % (sid, fn)}
-    return {"ok": False,
-            "msg": "补给区 %d 不在当前 mod 层里（可能来自原版或父 mod，只读）" % sid}
+        return {"ok": True, "id": sid, "removedFile": True,
+                "msg": "已删除补给区 %d（%s）" % (sid, os.path.basename(exist_path))}
+    with io.open(_out_read_path(exist_path), encoding="utf-8-sig", errors="replace") as _fh:
+        raw = _fh.read()
+    new_raw = _remove_block_raw(raw, exist_rec["stmt_start"], exist_rec["span"][1])
+    snapshot(exist_path)
+    _atomic_write(_out_path(exist_path), new_raw.encode("utf-8"))
+    reload_data()
+    return {"ok": True, "id": sid, "removedFile": False,
+            "msg": "已从文件里移除补给区 %d（文件里还有 %d 个）" % (sid, len(others))}
 
 
 
@@ -6793,16 +7594,49 @@ def item_raw(kind, iid):
 
 def expand_shared_trees():
     byid = {}
+    children = {}
     for n in SHARED_FOCUSES:
-        byid[n["id"]] = n
+        nid = n.get("id")
+        if not nid:
+            continue
+        byid[nid] = n
+        for grp in (n.get("prereq") or []):
+            for pid in grp:
+                if pid:
+                    children.setdefault(pid, []).append(nid)
+        rel = n.get("rel")
+        if rel:
+            children.setdefault(rel, []).append(nid)
+        for mid in (n.get("mutex") or []):
+            if mid:
+                children.setdefault(mid, []).append(nid)
+                children.setdefault(nid, []).append(mid)
+
     for t in TREES.values():
-        ids = {f["id"] for f in t.get("focuses", [])}
-        for sid in t.get("shared", []):
-            if sid in byid and sid not in ids:
-                node = dict(byid[sid])
+        focuses = t.setdefault("focuses", [])
+        ids = {f.get("id") for f in focuses if f.get("id")}
+        queue = []
+        visited = set(ids)
+        for sid in (t.get("shared") or []):
+            if sid in byid and sid not in visited:
+                visited.add(sid)
+                queue.append(sid)
+        for fid in list(ids):
+            if fid in byid:
+                queue.append(fid)
+        qi = 0
+        while qi < len(queue):
+            cur = queue[qi]
+            qi += 1
+            if cur in byid and cur not in ids:
+                node = dict(byid[cur])
                 node["shared"] = True
-                t["focuses"].append(node)
-                ids.add(sid)
+                focuses.append(node)
+                ids.add(cur)
+            for nxt in children.get(cur, ()):
+                if nxt in byid and nxt not in visited:
+                    visited.add(nxt)
+                    queue.append(nxt)
 
 def find_usages(iid):
     out = []
@@ -7053,11 +7887,22 @@ def data_payload():
                       "focuses": t["focuses"], "shared": t["shared"],
                       "analysis": analyze(t)})
     if SHARED_FOCUSES:
+        sf_tree = {"focuses": SHARED_FOCUSES}
+        resolve_positions(sf_tree)
+        sf_views = []
+        for f in SHARED_FOCUSES:
+            v = dict(f)
+            v["name"] = LOC.get(v["id"], v["id"])
+            v.pop("desc", None)
+            v.pop("effect", None)
+            v.pop("select_effect", None)
+            v.pop("iconPng", None)
+            sf_views.append(v)
         trees.append({"id": "shared_focuses", "file": "", "source": "shared",
                       "root": "",
                       "default": "", "country_raw": "",
-                      "focuses": SHARED_FOCUSES, "shared": [],
-                      "analysis": analyze({"focuses": SHARED_FOCUSES})})
+                      "focuses": sf_views, "shared": [],
+                      "analysis": analyze(sf_tree)})
     return {"trees": trees,
             "ideas": [{k: v for k, v in IDEAS[k].items() if k != "raw"} for k in sorted(IDEAS)],
             "equipment": [_eq_view(EQUIPMENTS[k]) for k in sorted(EQUIPMENTS)],
@@ -7828,7 +8673,7 @@ def _writable_top(after=None):
 
 
 def _adopt_file(dst_root, src_root, rel):
-    """把 src_root/rel 复制到 dst_root/rel（目标已存在就不动）。"""
+    """把 src_root/rel 复制到 dst_root/rel（目标已存在就不动；非 .yml 自动剥除 UTF-8 BOM）。"""
     if not dst_root or not src_root or not rel:
         return False
     try:
@@ -7839,6 +8684,12 @@ def _adopt_file(dst_root, src_root, rel):
         dd = os.path.dirname(d)
         if dd and not os.path.isdir(dd):
             os.makedirs(dd)
+        if not rel.lower().endswith(".yml"):
+            with io.open(s, "rb") as _fh:
+                raw = _fh.read()
+            if raw.startswith(b"\xef\xbb\xbf"):
+                _atomic_write(d, raw[3:])
+                return True
         shutil.copy2(s, d)
         return True
     except Exception:
@@ -8089,38 +8940,59 @@ def ai_chat(cfg, prompt, context="", history=None):
 def add_shared_focus(root, sid):
     if not re.match(r'^[A-Za-z0-9_]+$', sid or ""):
         return False, "id 只能字母数字下划线"
-    d = os.path.join(root, "common", "national_focus")
+    tgt = root if (root and not is_under_game(root) and not is_readonly_mod(root)) else ""
+    if not tgt:
+        tgt = _writable_top(root)
+    if not tgt or is_under_game(tgt) or is_readonly_mod(tgt):
+        return False, "原版/只读目录不可写：请先加载自己的可写模组"
+    owner = _replace_owner(tgt, "common/national_focus")
+    if owner and os.path.abspath(owner) != os.path.abspath(tgt):
+        chain = [os.path.abspath(x) for x in (mod_layers(tgt) or []) if x]
+        ab_t = os.path.abspath(tgt)
+        ab_o = os.path.abspath(owner)
+        if ab_o in chain and ab_t in chain and chain.index(ab_o) > chain.index(ab_t):
+            return False, "common/national_focus 被更上层的 replace_path 独占，无法写入"
+
+    d = os.path.join(tgt, "common", "national_focus")
     os.makedirs(d, exist_ok=True)
-    fn = unique_editor_filename(root, "common/national_focus", "zz_focus_editor_shared.txt")
+    fn = unique_editor_filename(tgt, "common/national_focus", "zz_focus_editor_shared.txt")
     path = os.path.join(d, fn)
     if os.path.exists(path):
-        with io.open(path, encoding="utf-8", errors="replace", newline="") as _fh:
-            text = _fh.read()
+        text, _ = _read_bom_text(path)
     else:
         text = ""
-    if re.search(r'(?m)^\s*id\s*=\s*"?%s"?' % re.escape(sid), text):
+    if re.search(r'(?m)^\s*id\s*=\s*"?%s"?' % re.escape(sid), strip_comments(text)):
         return False, "共享焦点已存在"
     block = ("\nshared_focus = {\n\tid = %s\n\ticon = GFX_goal_generic_national_unity\n"
              "\tx = 0\n\ty = 0\n\tcost = 1\n}\n" % sid)
+    backup(path)
     snapshot(path)
-    with io.open(path, "w", encoding="utf-8", newline="") as _fh:
-        _fh.write(text + block)
-    CHANGED[path] = os.path.join("common", "national_focus", fn)
+    _atomic_write(path, (text + block).encode("utf-8"))
+    rel = os.path.join("common", "national_focus", fn)
+    CHANGED[path] = rel
     reload_data()
     return True, "已新建共享焦点 " + sid
 
 def delete_shared_focus(root, rel, sid):
-    path = os.path.join(root, rel)
-    with io.open(path, encoding="utf-8", errors="replace", newline="") as _fh:
-        text = _fh.read()
+    if not rel or not sid:
+        return False, "参数不完整：缺少 file 或 id"
+    rel_norm = rel.replace("\\", "/").lstrip("/")
+    sub = os.path.dirname(rel_norm) or "common/national_focus"
+    bn = os.path.basename(rel_norm)
+    dst, werr = ensure_writable_file(root or None, sub, bn)
+    if not dst:
+        return False, werr or "原版/只读目录不可写：请先加载自己的可写模组"
+    if is_under_game(dst) or is_readonly_mod(dst):
+        return False, "只读目录不可写"
+    text, _ = _read_bom_text(dst)
     for m in re.finditer(r'(?m)^\s*shared_focus\s*=\s*\{', text):
         b = text.find('{', m.start())
         e = brace_match(text, b)
-        if re.search(r'(?m)^\s*id\s*=\s*"?%s"?' % re.escape(sid), text[b:e]):
-            snapshot(path)
-            with io.open(path, "w", encoding="utf-8", newline="") as _fh:
-                _fh.write(text[:m.start()] + text[e:])
-            CHANGED[path] = rel
+        if re.search(r'(?m)^\s*id\s*=\s*"?%s"?' % re.escape(sid), strip_comments(text[b:e])):
+            backup(dst)
+            snapshot(dst)
+            _atomic_write(dst, (text[:m.start()] + text[e:]).encode("utf-8"))
+            CHANGED[dst] = rel
             reload_data()
             return True, "已删除共享焦点 " + sid
     return False, "未找到共享焦点 " + sid

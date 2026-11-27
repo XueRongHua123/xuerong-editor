@@ -221,6 +221,19 @@ def _loc_resolve(key, loc_map=None):
     return val
 
 
+def _find_blocks_ci(text, key):
+    """不区分大小写匹配块 key = { ... }，兼容 MD 等大小写混写（如 technology_Categories）。"""
+    out = []
+    for m in re.finditer(r'(?i)\b%s\s*=\s*\{' % re.escape(key), text):
+        start = text.find('{', m.start())
+        if start < 0:
+            continue
+        end = brace_match(text, start)
+        if end > start:
+            out.append((start, end, text[start + 1:end - 1]))
+    return out
+
+
 def load_technology_tags(root=None):
     """解析叠加链中有效的 technology_folders 与 technology_categories。"""
     root = paths._pick(root)
@@ -241,7 +254,7 @@ def load_technology_tags(root=None):
         except Exception:
             continue
 
-        for _s, _e, body in find_blocks(text, "technology_folders"):
+        for _s, _e, body in _find_blocks_ci(text, "technology_folders"):
             for fid, fbody, is_blk in top_items(body):
                 if not fid:
                     continue
@@ -266,7 +279,7 @@ def load_technology_tags(root=None):
                     "source": src,
                 }
 
-        for _s, _e, body in find_blocks(text, "technology_categories"):
+        for _s, _e, body in _find_blocks_ci(text, "technology_categories"):
             for cid in re.findall(r'[A-Za-z][A-Za-z0-9_]*', body):
                 if cid not in cat_seen:
                     cat_seen.add(cid)

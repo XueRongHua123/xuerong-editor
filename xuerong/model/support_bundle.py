@@ -300,7 +300,7 @@ def _build_layer_chain():
         layers_out.append({
             "order": lm.get("order"),
             "name": scrub_sensitive_text(lm.get("name") or ""),
-            "is_game": bool(lm.get("is_game")),
+            "is_game": bool(lm.get("is_game") or lm.get("game") or paths.is_under_game(lm.get("path") or "")),
             "file_count": lm.get("file_count", 0),
             "override_count": lm.get("override_count", 0),
             "overridden_count": lm.get("overridden_count", 0),

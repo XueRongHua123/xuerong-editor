@@ -16,21 +16,46 @@
     });
   };
   window._mapWriteWithAdopt = async function(url, body){
-    const send = async function(extra){
-      const payload = Object.assign({root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''}, body || {}, extra || {});
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payload)
-      });
-      return await resp.json();
+    const extra = {};
+    const send = async function(){
+      const payload = Object.assign({root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''}, body || {}, extra);
+      try{
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        return await resp.json();
+      }catch(e){
+        return {ok: false, msg: e.message};
+      }
     };
     let r = await send();
-    if(r && r.need_adopt){
-      const ok = window.confirm((r.msg || '目标地图文件来自只读或下层目录') + '\n\n是否单文件复制到当前可写 mod 并继续操作？');
-      if(!ok) return r;
-      r = await send({adopt: true});
+    let adopted = false;
+    for(let step = 0; step < 2 && r; step++){
+      if(r.code === 'STATE_SPLIT_SR' && !extra.expand_states){
+        const sc = Array.isArray(r.split_states) ? r.split_states.length : 0;
+        const total = Array.isArray(r.expanded_provinces) ? r.expanded_provinces.length : 0;
+        const detail = (sc || total)
+          ? ('\n\n涉及 ' + sc + ' 个跨区州，自动补全整州后共 ' + total + ' 个省。')
+          : '';
+        const ok = window.confirm((r.msg || 'HOI4 要求同一个州不能横跨多个战略区') + detail + '\n是否自动补全整州并继续？');
+        if(!ok) return r;
+        extra.expand_states = true;
+        r = await send();
+        continue;
+      }
+      if(r.need_adopt && !extra.adopt){
+        const ok = window.confirm((r.msg || '目标地图文件来自只读或下层目录') + '\n\n是否单文件复制到当前可写 mod 并继续操作？');
+        if(!ok) return r;
+        extra.adopt = true;
+        adopted = true;
+        r = await send();
+        continue;
+      }
+      break;
     }
+    if(adopted && r && typeof r === 'object') r._adopted = true;
     return r;
   };
 })();
@@ -139,32 +164,37 @@ async function mapRunCheck(){
 
   async function paintBegin(){
     const r = window._mapWriteWithAdopt
-      ? await window._mapWriteWithAdopt('/api/map_paint', {act:'begin', root: MAP.root || ''})
-      : await paintCall({act:'begin', root: MAP.root || ''});
-    if(!r.ok){ status(r.msg || '无法开始涂色', true); return false; }
+      ? await window._mapWriteWithAdopt('/api/map_paint', {act:'begin', root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''})
+      : await paintCall({act:'begin', root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''});
+    if(!r.ok){ status(r.msg || '无法开始涂色', true); return 0; }
     begun = true;
     pending = 0;
     paintStat('待涂 0 像素');
-    status('涂色就绪：可在地图上点击或拖动');
-    return true;
+    status(r._adopted ? '已接管 provinces.bmp，请重新落笔涂色' : '涂色就绪：可在地图上点击或拖动');
+    return r._adopted ? 2 : 1;
   }
 
   async function paintDab(imgX, imgY){
     const pid = targetPid();
     if(!pid){ status('先在右侧填目标省号', true); return; }
     const radius = Number(document.getElementById('paintR').value || 4);
-    const r = await paintCall({act:'dab', x: Math.round(imgX), y: Math.round(imgY), r: radius, pid: pid});
+    const r = await paintCall({
+      act:'dab', x: Math.round(imgX), y: Math.round(imgY), r: radius, pid: pid,
+      root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''
+    });
     if(r.ok){
       pending += r.pixels || 0;
       paintStat('待涂 ' + pending + ' 像素（点「应用」写盘）');
       const tp = document.getElementById('paintPid');
       if(tp) tp.textContent = String(pid);
+    }else if(r.msg){
+      status(r.msg, true);
     }
   }
 
   async function paintApply(){
     if(!pending){ status('还没有涂抹', true); return; }
-    const r = await paintCall({act:'commit'});
+    const r = await paintCall({act:'commit', root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''});
     if(!r.ok){ status(r.msg || '写入失败', true); return; }
     pending = 0;
     begun = false;
@@ -175,14 +205,14 @@ async function mapRunCheck(){
   }
 
   async function paintUndo(){
-    const r = await paintCall({act:'undo'});
+    const r = await paintCall({act:'undo', root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''});
     paintStat(r.ok ? ('已撤销（撤销栈 ' + (r.undo_depth || 0) + '）') : (r.msg || '没有可撤销'));
     status(r.ok ? ('已撤销（剩 ' + (r.undo_depth || 0) + ' 步）') : (r.msg || '没有可撤销'), !r.ok);
     if(r.ok){ try{ await mapBuild(true); }catch(e){} }
   }
 
   async function paintRedo(){
-    const r = await paintCall({act:'redo'});
+    const r = await paintCall({act:'redo', root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''});
     paintStat(r.ok ? ('已重做（撤销栈 ' + (r.undo_depth || 0) + '）') : (r.msg || '没有可重做'));
     status(r.ok ? '已重做' : (r.msg || '没有可重做'), !r.ok);
     if(r.ok){ try{ await mapBuild(true); }catch(e){} }
@@ -208,8 +238,14 @@ async function mapRunCheck(){
       downActive = true;
       const p = mapScreenToImage(e.clientX, e.clientY);
       if(!begun){
-        const ok = await paintBegin();
-        if(!ok){ downActive = false; return; }
+        const st = await paintBegin();
+        if(!st){ downActive = false; painting = false; return; }
+        if(st === 2){
+          downActive = false;
+          painting = false;
+          wrap.classList.remove('dragging');
+          return;
+        }
       }
       if(downActive){
         painting = true;
@@ -241,7 +277,12 @@ async function mapRunCheck(){
   }
 
   window.mapBindPaint = bindPaint;
-  window.mapPaintReset = function(){ begun = false; pending = 0; painting = false; downActive = false; };
+  window.mapPaintReset = function(){
+    begun = false; pending = 0; painting = false; downActive = false;
+    const w = document.getElementById('mapStageWrap');
+    if(w) w.classList.remove('dragging');
+    paintStat('待涂 0 像素');
+  };
 })();
 
 
@@ -305,7 +346,10 @@ async function mapRunCheck(){
     if(!src || !dst){ mgStat('源省和目标省都要填', true); return; }
     if(!confirm('把省 ' + src + ' 合并进省 ' + dst + '？\n\n会改写 provinces.bmp 与相关州文件的省份列表，可用「撤销上一笔」回退。')) return;
     mgStat('执行中…');
-    const r = await call({act:'apply', src: src, dst: dst, root: MAP.root || ''});
+    const body = {act:'apply', src: src, dst: dst, root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''};
+    const r = window._mapWriteWithAdopt
+      ? await window._mapWriteWithAdopt('/api/map_merge', body)
+      : await call(body);
     if(!r.ok){ mgStat(r.msg || '合并失败', true); return; }
     mgStat('已合并 ' + r.pixels + ' 像素，改动 ' + (r.states || []).length + ' 个州文件；重建图层中…');
     try{ await mapBuild(true); }catch(e){}
@@ -524,7 +568,8 @@ async function mapShowRank(){
   stats.innerHTML = '';
   list.innerHTML = '<div class="cm-empty">读取中…</div>';
   try{
-    const r = await (await fetch('/api/map_analysis?limit=60&min_px=800')).json();
+    const rq = encodeURIComponent((typeof MAP !== 'undefined' && MAP && MAP.root) || '');
+    const r = await (await fetch('/api/map_analysis?limit=60&min_px=800&root=' + rq)).json();
     if(!r.ok){ list.innerHTML = '<div class="cm-empty">' + escapeHtml(r.msg || '读取失败') + '</div>'; return; }
     stats.innerHTML = '<span class="i">陆地省 ' + r.count + '</span>' +
       '<span class="i">中位 ' + r.median + 'px</span>' +
@@ -562,7 +607,8 @@ async function mapRepair(){
   document.getElementById('mckHint').textContent = '只修能安全自动处理的项';
   list.innerHTML = '<div class="cm-empty">检查中…</div>';
   try{
-    const p = await (await fetch('/api/map_repair?act=preview')).json();
+    const rq = encodeURIComponent((typeof MAP !== 'undefined' && MAP && MAP.root) || '');
+    const p = await (await fetch('/api/map_repair?act=preview&root=' + rq)).json();
     if(!p.ok){ list.innerHTML = '<div class="cm-empty">' + escapeHtml(p.msg || '检查失败') + '</div>'; return; }
     const rows = [];
     rows.push(['幽灵省', p.ghost_count + ' 个',
@@ -571,7 +617,7 @@ async function mapRepair(){
     // 十字交叉：单独查一次
     let cross = {found: 0, msg: ''};
     try{
-      cross = await (await fetch('/api/map_repair_cross')).json();
+      cross = await (await fetch('/api/map_repair_cross?root=' + rq)).json();
     }catch(e){}
     rows.push(['十字交叉像素', (cross.found || 0) + ' 处',
       cross.found ? ('把 2×2 的 A B / B A 解成横切或纵切；' + (cross.msg || '')) : '无需处理',
@@ -591,8 +637,14 @@ async function mapRepair(){
         if(kind === '幽灵省'){
           if(!confirm('删除 ' + p.ghost_count + ' 个幽灵省？会改写 definition.csv（有备份）。')) return;
           btn.disabled = true; btn.textContent = '修复中…';
-          const r = await (await fetch('/api/map_repair?act=ghost')).json();
-          if(!r.ok){ btn.textContent = '失败'; status(r.msg || '修复失败', true); return; }
+          let r = await (await fetch('/api/map_repair?act=ghost&root=' + rq)).json();
+          if(r && r.need_adopt){
+            if(!confirm((r.msg || '目标地图文件来自只读或下层目录') + '\n\n是否单文件复制到当前可写 mod 并继续修复？')){
+              btn.disabled = false; btn.textContent = '执行'; return;
+            }
+            r = await (await fetch('/api/map_repair?act=ghost&adopt=1&root=' + rq)).json();
+          }
+          if(!r.ok){ btn.disabled = false; btn.textContent = '失败'; status(r.msg || '修复失败', true); return; }
           status('已删除 ' + r.removed + ' 个幽灵省，正在重建图层…');
           btn.textContent = '已修';
           try{ await mapBuild(true); }catch(e){}
@@ -600,8 +652,14 @@ async function mapRepair(){
         } else {
           if(!confirm('修复 ' + (cross.found || 0) + ' 处十字交叉？会改写 provinces.bmp（可撤销）。')) return;
           btn.disabled = true; btn.textContent = '修复中…';
-          const r = await (await fetch('/api/map_repair_cross?apply=1')).json();
-          if(!r.ok){ btn.textContent = '失败'; status(r.msg || '修复失败', true); return; }
+          let r = await (await fetch('/api/map_repair_cross?apply=1&root=' + rq)).json();
+          if(r && r.need_adopt){
+            if(!confirm((r.msg || '目标地图文件来自只读或下层目录') + '\n\n是否单文件复制到当前可写 mod 并继续修复？')){
+              btn.disabled = false; btn.textContent = '执行'; return;
+            }
+            r = await (await fetch('/api/map_repair_cross?apply=1&adopt=1&root=' + rq)).json();
+          }
+          if(!r.ok){ btn.disabled = false; btn.textContent = '失败'; status(r.msg || '修复失败', true); return; }
           status(r.msg || '已修复');
           btn.textContent = '已修';
           try{ await mapBuild(true); }catch(e){}
@@ -662,7 +720,7 @@ async function mapRepair(){
         e.preventDefault();
         const act = k === 'z' ? 'undo' : 'redo';
         fetch('/api/map_paint', {method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({act})}).then(r=>r.json()).then(r=>{
+          body: JSON.stringify({act, root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''})}).then(r=>r.json()).then(r=>{
           status(r.ok ? (k === 'z' ? '已撤销一步地图编辑' : '已重做') : (r.msg || '没有可撤销的操作'), !r.ok);
           if(r.ok) mapBuild(true).catch(()=>{});
         }).catch(()=>{});
@@ -1314,11 +1372,15 @@ async function mapShowGfxMissing(){
     if(sel.value) evDraw(sel.value);
   }
 
+  let _evDrawSeq = 0;
+
   async function evDraw(ns){
+    const seq = ++_evDrawSeq;
     const svg = document.getElementById('evSvg');
     const info = document.getElementById('evInfo');
     info.textContent = '读取中…';
     const g = await (await fetch('/api/event_graph?ns=' + encodeURIComponent(ns))).json();
+    if(seq !== _evDrawSeq) return;
     if(!g.ok){ info.textContent = g.msg || '读取失败'; svg.innerHTML = ''; return; }
     evData = g;
     info.textContent = g.msg;
@@ -1405,7 +1467,7 @@ async function mapShowGfxMissing(){
     svg.setAttribute('data-h', H);
     svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
     if(!svg._pan){ svg._pan = makePannable(svg, document.getElementById('evBody')); }
-    setTimeout(()=>{ if(svg._pan) svg._pan(); }, 30);
+    setTimeout(()=>{ if(seq !== _evDrawSeq) return; if(svg._pan) svg._pan(); }, 30);
 
     let out = '<defs><marker id="evArrow" markerWidth="7" markerHeight="7" refX="6" refY="2.5" orient="auto">'
       + '<path d="M0,0 L6,2.5 L0,5 z" fill="#5a656b"/></marker></defs>';
@@ -1961,6 +2023,9 @@ function makePannable(svg, body){
       if(st.category) rows.push(['类别', st.category]);
       // v1.17.0 州视图直接编辑
       window.__curStateId = st.id;
+      window.__curState = st;
+      window.__curProvId = pid;
+      if(typeof MAP !== 'undefined' && MAP) MAP.curState = st;
       editBlock = ''
         + '<div class="mp-k" style="margin-top:10px">改归属国</div>'
         + '<div class="mp-acts">'
@@ -2085,15 +2150,22 @@ function makePannable(svg, body){
 
 // v1.10.0 铁路可视化
 (function(){
-  let RAIL_DATA = null;
+  let RAIL_DATA = null, RAIL_ROOT = null;
 
   async function loadRails(){
-    if(RAIL_DATA) return RAIL_DATA;
-    const r = await (await fetch('/api/railways')).json();
+    const rt = (typeof MAP !== 'undefined' && MAP && MAP.root) || '';
+    if(RAIL_DATA && RAIL_ROOT === rt) return RAIL_DATA;
+    const r = await (await fetch('/api/railways?root=' + encodeURIComponent(rt))).json();
     RAIL_DATA = r.ok ? r : { items: [] };
+    RAIL_ROOT = rt;
     window.RAIL_DATA_PRE = RAIL_DATA;
     return RAIL_DATA;
   }
+  window.mapClearRailCache = function(){
+    RAIL_DATA = null;
+    RAIL_ROOT = null;
+    window.RAIL_DATA_PRE = null;
+  };
 
   // 铁路必须和矢量边界画在同一次里：两者共用 mapEdgeCanvas，
   // 边界那一步会 clearRect，单独画会被擦掉。
@@ -2156,7 +2228,8 @@ function makePannable(svg, body){
   async function loadRails(){
     const stat = document.getElementById('railStat');
     if(stat) stat.textContent = '读取中（首次要建全图邻接，约 4 秒）…';
-    const r = await (await fetch('/api/railways')).json();
+    const rq = encodeURIComponent((typeof MAP !== 'undefined' && MAP && MAP.root) || '');
+    const r = await (await fetch('/api/railways?root=' + rq)).json();
     RAILS = r;
     if(!r.ok){ if(stat) stat.textContent = r.msg || '读取失败'; return; }
     if(stat) stat.innerHTML = '共 <b>' + r.count + '</b> 条，断连 <b style="color:var(--danger)">'
@@ -2194,13 +2267,16 @@ function makePannable(svg, body){
     const lv = Number(document.getElementById('railLv').value || 1);
     const provs = document.getElementById('railProvs').value.trim().split(/\s+/).map(Number).filter(function(x){ return x > 0; });
     msg('保存中…');
-    const r = await (await fetch('/api/railway_edit', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({index: curIdx, level: lv, provs: provs})})).json();
+    const body = {index: curIdx, level: lv, provs: provs, root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''};
+    const r = window._mapWriteWithAdopt
+      ? await window._mapWriteWithAdopt('/api/railway_edit', body)
+      : await (await fetch('/api/railway_edit', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body)})).json();
     msg(r.msg || (r.ok ? '已保存' : '保存失败'), !r.ok);
     if(r.ok){
       status(r.msg);
-      if(window.RAIL_DATA_PRE) window.RAIL_DATA_PRE = null;
+      if(window.mapClearRailCache) window.mapClearRailCache();
       if(window.mapDrawRails) window.mapDrawRails();
       await loadRails();
     }
@@ -2209,43 +2285,31 @@ function makePannable(svg, body){
   async function delRail(){
     if(curIdx < 0) return;
     if(!confirm('删除第 ' + curIdx + ' 条铁路？会改写 railways.txt（有备份）。')) return;
-    const r = await (await fetch('/api/railway_delete', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({index: curIdx})})).json();
+    const body = {index: curIdx, root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''};
+    const r = window._mapWriteWithAdopt
+      ? await window._mapWriteWithAdopt('/api/railway_delete', body)
+      : await (await fetch('/api/railway_delete', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body)})).json();
     msg(r.msg || '', !r.ok);
     if(r.ok){
       status(r.msg);
       curIdx = -1;
       document.getElementById('railEdit').style.display = 'none';
-      if(window.RAIL_DATA_PRE) window.RAIL_DATA_PRE = null;
+      if(window.mapClearRailCache) window.mapClearRailCache();
       if(window.mapDrawRails) window.mapDrawRails();
       await loadRails();
     }
   }
 
-  async function loadSupply(){
-    const stat = document.getElementById('supStat');
-    if(stat) stat.textContent = '读取中…';
-    const r = await (await fetch('/api/supply_areas')).json();
-    if(!r.ok){ if(stat) stat.textContent = r.msg || '读取失败'; return; }
-    if(stat) stat.textContent = r.msg;
-    const box = document.getElementById('supList');
-    box.innerHTML = (r.items || []).map(function(a){
-      return '<div style="padding:3px 6px;font-size:11.5px;font-family:Consolas,monospace">'
-        + '区 ' + a.id + '　价值 ' + a.value + '　' + a.count + ' 州　'
-        + '<span style="color:var(--t3)">' + (a.states || []).slice(0, 6).join(',') + '</span></div>';
-    }).join('');
-  }
-
   function bind(){
-    ['railRefresh','railSave','railDel','supRefresh'].forEach(function(id){
+    ['railRefresh','railSave','railDel'].forEach(function(id){
       const el = document.getElementById(id);
       if(!el || el.dataset.bound) return;
       el.dataset.bound = '1';
       if(id === 'railRefresh') el.onclick = loadRails;
       if(id === 'railSave') el.onclick = saveRail;
       if(id === 'railDel') el.onclick = delRail;
-      if(id === 'supRefresh') el.onclick = loadSupply;
     });
   }
   window.mapBindRail = bind;
@@ -2276,7 +2340,8 @@ function makePannable(svg, body){
     }
     let items = null;
     try{
-      const r = await (await fetch('/api/terrain_types')).json();
+      const mr = (typeof MAP !== 'undefined' && MAP && MAP.root) ? MAP.root : '';
+      const r = await (await fetch('/api/terrain_types?root=' + encodeURIComponent(mr))).json();
       if(r && r.items) items = r.items.filter(function(x){ return x.writable; });
     }catch(e){ return null; }   // 失败绝不缓存，下次还会重试
     if(items === null) return null;
@@ -2434,7 +2499,16 @@ function makePannable(svg, body){
     bmsg('转换中…');
     const r = await window._mapWriteWithAdopt('/api/terrain_by_type', {from: from.value, to: to.value});
     bmsg(r.msg || '', !r.ok);
-    if(r.ok){ status(r.msg); await rebuildMap('terrain'); }
+    if(r.ok){
+      if(typeof MAP !== 'undefined' && MAP && MAP.idx){
+        Object.keys(MAP.idx).forEach(function(pid){
+          const rec = MAP.idx[pid];
+          if(rec && rec.terrain === from.value) rec.terrain = to.value;
+        });
+      }
+      status(r.msg);
+      await rebuildMap('terrain');
+    }
   }
 
   async function rebuildMap(only){
@@ -2593,7 +2667,8 @@ function makePannable(svg, body){
   async function loadSR(){
     const stat = document.getElementById('srStat');
     if(stat) stat.textContent = '读取中…';
-    const r = await (await fetch('/api/strategic_regions')).json();
+    const rq = encodeURIComponent((typeof MAP !== 'undefined' && MAP && MAP.root) || '');
+    const r = await (await fetch('/api/strategic_regions?root=' + rq)).json();
     SRS = r;
     if(!r.ok){ if(stat) stat.textContent = r.msg || '读取失败'; return; }
     if(stat) stat.innerHTML = '共 <b>' + r.count + '</b> 个战略区';
@@ -2621,9 +2696,11 @@ function makePannable(svg, body){
     });
     document.getElementById('srEdit').style.display = 'block';
     document.getElementById('srCur').textContent =
-      '#' + id + '　' + it.name + '　' + it.count + ' 省' + (it.fromMod ? '' : '（原版只读）');
-    document.getElementById('srDel').disabled = !it.fromMod;
-    document.getElementById('srApplyProvs').disabled = !it.fromMod;
+      '#' + id + '　' + it.name + '　' + it.count + ' 省' + (it.fromMod ? '' : '（来自原版/父层，改范围将触发接管）');
+    const delBtn = document.getElementById('srDel');
+    delBtn.disabled = !it.fromMod;
+    delBtn.title = it.fromMod ? '' : '该战略区来自原版或父层，不能在当前 mod 直接删除';
+    document.getElementById('srApplyProvs').disabled = false;
   }
 
   async function createSR(){
@@ -2632,11 +2709,17 @@ function makePannable(svg, body){
     const idEl = document.getElementById('srNewId');
     const nameEl = document.getElementById('srNewName');
     smsg('创建中…');
-    const r = await (await fetch('/api/sr_create', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id: idEl.value.trim() || null,
-                            name: nameEl.value.trim() || null,
-                            provinces: pids})})).json();
+    const body = {
+      id: idEl.value.trim() || null,
+      name: nameEl.value.trim() || null,
+      provinces: pids,
+      root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''
+    };
+    const r = window._mapWriteWithAdopt
+      ? await window._mapWriteWithAdopt('/api/sr_create', body)
+      : await (await fetch('/api/sr_create', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body)})).json();
     smsg(r.msg || '', !r.ok);
     if(r.ok){ status(r.msg); idEl.value = ''; nameEl.value = ''; await loadSR(); }
   }
@@ -2646,9 +2729,12 @@ function makePannable(svg, body){
     const pids = selPids();
     if(!pids.length){ smsg('先在地图上选中省', true); return; }
     smsg('写入中…');
-    const r = await (await fetch('/api/sr_set_provinces', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id: curSR, provinces: pids})})).json();
+    const body = {id: curSR, provinces: pids, root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''};
+    const r = window._mapWriteWithAdopt
+      ? await window._mapWriteWithAdopt('/api/sr_set_provinces', body)
+      : await (await fetch('/api/sr_set_provinces', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body)})).json();
     smsg(r.msg || '', !r.ok);
     if(r.ok){ status(r.msg); await loadSR(); }
   }
@@ -2656,9 +2742,12 @@ function makePannable(svg, body){
   async function delSR(){
     if(curSR < 0) return;
     if(!confirm('删除战略区 ' + curSR + '？（会摘掉整个块，文件里没有其它块就删文件）')) return;
-    const r = await (await fetch('/api/sr_delete', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id: curSR})})).json();
+    const body = {id: curSR, root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''};
+    const r = window._mapWriteWithAdopt
+      ? await window._mapWriteWithAdopt('/api/sr_delete', body)
+      : await (await fetch('/api/sr_delete', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body)})).json();
     smsg(r.msg || '', !r.ok);
     if(r.ok){
       status(r.msg);
@@ -2695,7 +2784,8 @@ function makePannable(svg, body){
   async function loadAdj(){
     const stat = document.getElementById('adjStat');
     if(stat) stat.textContent = '读取中…';
-    const r = await (await fetch('/api/adjacencies')).json();
+    const rq = encodeURIComponent((typeof MAP !== 'undefined' && MAP && MAP.root) || '');
+    const r = await (await fetch('/api/adjacencies?root=' + rq)).json();
     ADJS = r;
     if(!r.ok){ if(stat) stat.textContent = r.msg || '读取失败'; return; }
     if(stat) stat.textContent = r.msg + (r.fromMod ? '' : '（原版只读）');
@@ -2735,9 +2825,12 @@ function makePannable(svg, body){
     if(curLine < 0) return;
     const sel = document.getElementById('adjTypeSel');
     amsg('写入中…');
-    const r = await (await fetch('/api/adj_edit', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({line: curLine, type: sel.value})})).json();
+    const body = {line: curLine, type: sel.value, root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''};
+    const r = window._mapWriteWithAdopt
+      ? await window._mapWriteWithAdopt('/api/adj_edit', body)
+      : await (await fetch('/api/adj_edit', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body)})).json();
     amsg(r.msg || '', !r.ok);
     if(r.ok){ status(r.msg); await loadAdj(); }
   }
@@ -2745,9 +2838,12 @@ function makePannable(svg, body){
   async function delAdj(){
     if(curLine < 0) return;
     if(!confirm('删除第 ' + curLine + ' 行连接？')) return;
-    const r = await (await fetch('/api/adj_delete', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({line: curLine})})).json();
+    const body = {line: curLine, root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''};
+    const r = window._mapWriteWithAdopt
+      ? await window._mapWriteWithAdopt('/api/adj_delete', body)
+      : await (await fetch('/api/adj_delete', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body)})).json();
     amsg(r.msg || '', !r.ok);
     if(r.ok){
       status(r.msg);
@@ -2761,16 +2857,26 @@ function makePannable(svg, body){
     const f = document.getElementById('adjFrom').value.trim();
     const t = document.getElementById('adjTo').value.trim();
     const ty = document.getElementById('adjNewType').value;
+    const thEl = document.getElementById('adjThrough');
+    const th = thEl ? thEl.value.trim() : '';
     if(!f || !t){ amsg('填两端省号', true); return; }
+    if(ty === 'sea' && !th){ amsg('sea 类型需要填经过海省 ID（through）', true); return; }
     amsg('新增中…');
-    const r = await (await fetch('/api/adj_add', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({from: Number(f), to: Number(t), type: ty})})).json();
+    const body = {
+      from: Number(f), to: Number(t), type: ty, through: th,
+      root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''
+    };
+    const r = window._mapWriteWithAdopt
+      ? await window._mapWriteWithAdopt('/api/adj_add', body)
+      : await (await fetch('/api/adj_add', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body)})).json();
     amsg(r.msg || '', !r.ok);
     if(r.ok){
       status(r.msg);
       document.getElementById('adjFrom').value = '';
       document.getElementById('adjTo').value = '';
+      if(thEl) thEl.value = '';
       await loadAdj();
     }
   }
@@ -3207,7 +3313,8 @@ function makePannable(svg, body){
     const stat = document.getElementById('supStat');
     const box = document.getElementById('supList');
     if(stat) stat.textContent = '读取中…';
-    const r = await (await fetch('/api/supply_areas')).json();
+    const rq = encodeURIComponent((typeof MAP !== 'undefined' && MAP && MAP.root) || '');
+    const r = await (await fetch('/api/supply_areas?root=' + rq)).json();
     if(!r.ok){ if(stat) stat.textContent = r.msg || '失败'; return; }
     if(stat) stat.textContent = r.msg;
     if(!box) return;
@@ -3223,9 +3330,12 @@ function makePannable(svg, body){
     box.querySelectorAll('.sup-del').forEach(function(b){
       b.onclick = async function(){
         if(!confirm('删除补给区 ' + b.dataset.id + '？')) return;
-        const r2 = await (await fetch('/api/supply_delete', {method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({id: Number(b.dataset.id)})})).json();
+        const body = {id: Number(b.dataset.id), root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''};
+        const r2 = window._mapWriteWithAdopt
+          ? await window._mapWriteWithAdopt('/api/supply_delete', body)
+          : await (await fetch('/api/supply_delete', {method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body: JSON.stringify(body)})).json();
         msg(r2.msg || '', !r2.ok);
         if(r2.ok){ status(r2.msg); await loadSup(); }
       };
@@ -3247,9 +3357,12 @@ function makePannable(svg, body){
     if(!id){ msg('填 id', true); return; }
     const states = st ? st.split(/\s+/).map(Number).filter(function(x){ return x > 0; }) : null;
     msg('写入中…');
-    const r = await (await fetch('/api/supply_save', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id: id, value: val || null, states: states})})).json();
+    const body = {id: id, value: val || null, states: states, root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''};
+    const r = window._mapWriteWithAdopt
+      ? await window._mapWriteWithAdopt('/api/supply_save', body)
+      : await (await fetch('/api/supply_save', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body)})).json();
     msg(r.msg || '', !r.ok);
     if(r.ok){ status(r.msg); await loadSup(); }
   }
@@ -3357,18 +3470,22 @@ function makePannable(svg, body){
   }
 
   async function addUnits(){
-    const pid = window.__curProvId;
+    const pid = window.__curProvId || (typeof MAP !== 'undefined' && MAP && MAP.lastPid) || (typeof MAP_LAST_PID !== 'undefined' && MAP_LAST_PID) || 0;
     const sel = document.getElementById('unitTpl');
     const cnt = Number((document.getElementById('unitCount')||{}).value || 1);
     if(!pid){ msg('先选一个省', true); return; }
     if(!sel || !sel.value){ msg('先选模板', true); return; }
+    const st = (typeof MAP !== 'undefined' && MAP && MAP.curState) || window.__curState || (typeof _stateById === 'function' ? _stateById(window.__curStateId || (MAP && MAP.lastState)) : null);
+    const stOwnerEl = document.getElementById('stOwner');
+    const ownerTag = ((stOwnerEl && stOwnerEl.value) || (st && (st.owner || st.owner_tag)) || '').trim().toUpperCase();
+    if(!ownerTag){ msg('当前州没有归属国，请先填写或保存州归属 TAG', true); return; }
     msg('写入中…');
     let ok = 0, err = '';
     for(let i=0;i<Math.max(1, cnt);i++){
       const r = await (await fetch('/api/unit_add', {method:'POST',
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({location: pid, template: sel.value,
-                              tag: (st && (st.owner || st.owner_tag)) || null})})).json();
+                              tag: ownerTag})})).json();
       if(r.ok) ok++; else { err = r.msg || '失败'; break; }
     }
     if(ok){ msg('已在省 ' + pid + ' 加 ' + ok + ' 支', false); status('加 ' + ok + ' 支部队'); await refresh(); }
@@ -3446,7 +3563,7 @@ function makePannable(svg, body){
     const wrapped = function(){
       const r = orig.apply(this, arguments);
       setTimeout(function(){
-        if((window.MAP_PICK_UNIT || 'prov') === 'prov'){ bind(); renderProvUnits(); }
+        if((window.MAP_PICK_UNIT || 'prov') === 'prov' || document.getElementById('unitAddBtn')){ bind(); renderProvUnits(); }
       }, 280);
       return r;
     };
@@ -3840,7 +3957,8 @@ function makePannable(svg, body){
       u.onclick = async function(){
         try{
           const r = await (await fetch('/api/river_undo', {method:'POST',
-            headers:{'Content-Type':'application/json'}, body: '{}'})).json();
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({root: (typeof MAP !== 'undefined' && MAP && MAP.root) || ''})})).json();
           msg(r.msg || '', !r.ok);
           if(r.ok) reloadPreview();
         }catch(e){ msg('撤销失败：' + e.message, true); }
@@ -3852,7 +3970,8 @@ function makePannable(svg, body){
       ck.onclick = async function(){
         msg('检查中…');
         try{
-          const r = await (await fetch('/api/river_stats')).json();
+          const rq = encodeURIComponent((typeof MAP !== 'undefined' && MAP && MAP.root) || '');
+          const r = await (await fetch('/api/river_stats?root=' + rq)).json();
           if(!r.ok){ msg(r.msg || '检查失败', true); return; }
           msg((r.lines || [r.msg]).join('；'));
         }catch(e){ msg('检查失败：' + e.message, true); }
@@ -4014,6 +4133,7 @@ function mapSwitchSource(path){
   MAP.centers = null;
   MAP.regions = null;
   if(window.mapPaintReset) window.mapPaintReset();
+  if(window.mapClearRailCache) window.mapClearRailCache();
   mapHideOps();
   document.getElementById('mapMeta').textContent = '切换来源…';
   mapLoadMeta(path);
@@ -4548,6 +4668,7 @@ async function mapBuild(force){
     stopLoading(r.ok ? '地图图层构建完成' : (r.msg || '构建失败'), !r.ok);
     if(r.ok){
       MAP.ready = false; MAP.idCanvas = null;
+      MAP.idx = null; MAP.centers = null; MAP.regions = null;
       MAP.ver = (MAP.ver || 0) + 1;
       await mapLoadMeta();
     } else {

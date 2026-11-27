@@ -74,7 +74,7 @@ def _refine_load_ids(root):
         w, h = im.size
         raw = im.convert("RGB").tobytes()
     rgb2pid = {}
-    with io.open(csvp, encoding="utf-8", errors="replace") as f:
+    with io.open(csvp, encoding="utf-8-sig", errors="replace") as f:
         for line in f:
             p = line.strip().split(";")
             if len(p) >= 8 and p[0].isdigit():
@@ -137,7 +137,7 @@ def _map_files_layered(root):
     return None, None, None, layers
 
 def bmp_info(path):
-    """读 BMP 头，返回 (width, height, bpp, data_offset, row_size, top_down)"""
+    """读 BMP 头，返回 (width, height, bpp, data_offset, row_size, top_down, compression)"""
     with open(path, "rb") as f:
         head = f.read(54)
         if len(head) < 54 or head[:2] != b"BM":
@@ -146,11 +146,13 @@ def bmp_info(path):
         w = struct.unpack("<i", head[18:22])[0]
         h = struct.unpack("<i", head[22:26])[0]
         bpp = struct.unpack("<H", head[28:30])[0]
+        compression = struct.unpack("<I", head[30:34])[0]
         top_down = h < 0
         h = abs(h)
         row_size = ((w * bpp // 8) + 3) // 4 * 4
         return {"w": w, "h": h, "bpp": bpp, "offset": data_off,
-                "row": row_size, "top_down": top_down, "bytes_pp": bpp // 8}
+                "row": row_size, "top_down": top_down, "bytes_pp": bpp // 8,
+                "compression": compression}
 
 def bmp_read_rect(path, x0, y0, w, h):
     path = _out_read_path(path)          # 输出模式下读改过的副本
@@ -178,18 +180,24 @@ def bmp_read_rect(path, x0, y0, w, h):
                 out.append((data[i + 2], data[i + 1], data[i]))
     return out
 
-def bmp_write_rect(path, x0, y0, w, h, pixels):
-    """把 RGB 像素列表原位写回 bmp（不重存文件，保持原有结构）。
-    输出模式下：先把源 bmp 复制到 output/ 再改副本，源文件不动。"""
+def _out_bmp_path(path):
+    """输出模式下把源 bmp 复制到 output/ 并返回副本路径；非输出模式返回原路径。"""
     if state.output_mode():
         _dst = _out_path(path)
         if os.path.abspath(_dst) != os.path.abspath(path):
             if not os.path.exists(_dst):
                 os.makedirs(os.path.dirname(_dst) or ".", exist_ok=True)
                 shutil.copyfile(path, _dst)
-            path = _dst
+            return _dst
+    return path
+
+
+def bmp_write_rect(path, x0, y0, w, h, pixels):
+    """把 RGB 像素列表原位写回 bmp（不重存文件，保持原有结构）。
+    输出模式下：先把源 bmp 复制到 output/ 再改副本，源文件不动。"""
+    path = _out_bmp_path(path)
     info = bmp_info(path)
-    if not info or info["bpp"] != 24:
+    if not info or info["bpp"] != 24 or info.get("compression", 0) != 0:
         return False
     buf = bytearray()
     if pixels and isinstance(pixels[0], (list, tuple)) and len(pixels[0]) == 3:
@@ -206,23 +214,23 @@ def bmp_write_rect(path, x0, y0, w, h, pixels):
     return True
 
 def _ensure_prov_rgb(root=None):
-    """按需从 definition.csv 加载省颜色，**按 mod 缓存**。
+    """按需从 definition.csv 加载省颜色，**按 csv 路径与 mtime 缓存**。
 
     原来用全局单例：第一个 mod 加载完就再也不更新，换 mod 后它的省号全部「不存在」。
     实测后果：跑回归时先测 CN 再测京都，京都的 17214/17217 被判为不存在，州细化失败。"""
     _root = _map_pick(root or None)
-    key = os.path.abspath(_root or "")
-    if key in state.map_var("_PROV_RGB_CACHE"):
-        state.map_var("PROV_RGB").clear()
-        state.map_var("PROV_RGB").update(state.map_var("_PROV_RGB_CACHE")[key])
-        return state.map_var("PROV_RGB")
     state.map_var("PROV_RGB").clear()
     try:
         _layers = mod_layers(_root)
         csvp, _prov = _layers_find("map/definition.csv", _layers)
         if not csvp or not os.path.exists(csvp):
             return state.map_var("PROV_RGB")
-        with io.open(csvp, encoding="utf-8", errors="replace") as f:
+        csv_read = _out_read_path(csvp)
+        key = (os.path.abspath(csv_read), os.path.getmtime(csv_read))
+        if key in state.map_var("_PROV_RGB_CACHE"):
+            state.map_var("PROV_RGB").update(state.map_var("_PROV_RGB_CACHE")[key])
+            return state.map_var("PROV_RGB")
+        with io.open(csv_read, encoding="utf-8-sig", errors="replace") as f:
             for line in f:
                 parts = line.strip().split(";")
                 if len(parts) < 4:
@@ -231,9 +239,9 @@ def _ensure_prov_rgb(root=None):
                     state.map_var("PROV_RGB")[int(parts[0])] = (int(parts[1]), int(parts[2]), int(parts[3]))
                 except Exception:
                     continue
+        state.map_var("_PROV_RGB_CACHE")[key] = dict(state.map_var("PROV_RGB"))
     except Exception as e:
         print("加载 definition.csv 颜色失败:", e)
-    state.map_var("_PROV_RGB_CACHE")[key] = dict(state.map_var("PROV_RGB"))
     return state.map_var("PROV_RGB")
 
 def _map_files_strict(root):
@@ -366,8 +374,9 @@ def bmp_write_rect_8(path, x0, y0, w, h, values):
 
     bmp_write_rect 只处理 24 位；索引图必须单独写，否则会把 P 模式 bmp 改成 RGB，
     HOI4 就读不出来了。"""
+    path = _out_bmp_path(path)
     info = bmp_info(path)
-    if not info or info.get("bpp") != 8:
+    if not info or info.get("bpp") != 8 or info.get("compression", 0) != 0:
         return False
     bpp_bytes = info.get("bytes_pp") or 1
     if bpp_bytes != 1:
@@ -400,7 +409,7 @@ def _prov_type_map(root):
         return cache[1]
     out = {}
     try:
-        with io.open(csvp, encoding="utf-8", errors="replace") as f:
+        with io.open(csvp, encoding="utf-8-sig", errors="replace") as f:
             for line in f:
                 p = line.strip().split(";")
                 if len(p) >= 5 and p[0].isdigit():

@@ -14,8 +14,8 @@ from urllib.parse import parse_qs, urlparse
 from xuerong.api.router import get, post, prefix
 from xuerong.core import facade_bridge as LG
 from xuerong import state
-from xuerong.core.paths import (_chain_layers, _pick, ensure_writable_file,
-                                is_readonly_mod, is_under_game, mod_layers)
+from xuerong.core.paths import (_chain_layers, _pick, is_readonly_mod,
+                                is_under_game, mod_layers)
 from xuerong.model.map import (
     _ensure_prov_rgb, _map_pick, height_paint, height_preview, height_sample,
     map_analysis, map_asset, map_build, map_cache_clear, map_edit_begin,
@@ -24,37 +24,36 @@ from xuerong.model.map import (
     map_prov_neighbors, map_repair_cross, map_repair_ghost, map_repair_preview,
     prov_terrain_batch, prov_terrain_by_type, prov_terrain_set, river_paint,
     river_preview, river_stats, river_undo, terrain_paint, terrain_types)
+from xuerong.model.map.io import _ensure_map_writable
 
 
 @post("/api/map_paint")
 def r_api_map_paint(h, body):
     act = body.get("act") or ""
     if act == "begin":
-        _bp = body.get("bmp") or state.map_var("MAP_EDIT").get("file") or ""
-        if not _bp:
-            _root = _map_pick(body.get("root") or None)
-            _layers = mod_layers(_root)
-            _top = _layers[-1] if _layers else ""
-            _bp = os.path.join(_top, "map", "provinces.bmp")
-            if not os.path.exists(_bp):
-                if bool(body.get("adopt")):
-                    _dst, _amsg = ensure_writable_file(_root, "map", "provinces.bmp")
-                    if not _dst:
-                        h._send({"ok": False, "msg": _amsg})
-                        return
-                    _bp = _dst
-                else:
-                    h._send({"ok": False,
-                                "need_adopt": True,
-                                "rel": "map/provinces.bmp",
-                                "msg": "链顶 mod 没有自己的 provinces.bmp（地图来自父 mod），"
-                                       "需先单文件复制到当前 mod 再涂色"})
-                    return
-        if is_readonly_mod(_bp):
-            h._send({"ok": False, "msg": "原版或工坊只读目录，不能直接涂色"})
-            return
+        _req_root = body.get("root") or None
+        _bp = body.get("bmp") or ""
+        if _bp:
+            if is_readonly_mod(_bp):
+                h._send({"ok": False, "msg": "原版或只读目录，不能直接涂色"})
+                return
+        else:
+            _root = _map_pick(_req_root)
+            _bp, _base, _err = _ensure_map_writable(
+                "provinces.bmp", root=_root, adopt=bool(body.get("adopt"))
+            )
+            if not _bp:
+                h._send(_err)
+                return
+            if is_readonly_mod(_bp):
+                h._send({"ok": False, "msg": "原版或只读目录，不能直接涂色"})
+                return
         r = {"ok": map_edit_begin(_bp), "bmp": _bp}
     elif act == "dab":
+        _bp = state.map_var("MAP_EDIT").get("file") or body.get("bmp") or ""
+        if _bp and is_readonly_mod(_bp):
+            h._send({"ok": False, "msg": "原版或只读目录，不能直接涂色"})
+            return
         _rgb = body.get("rgb")
         if not _rgb and body.get("pid") is not None:
             _ensure_prov_rgb(body.get("root") or None)
@@ -62,11 +61,15 @@ def r_api_map_paint(h, body):
             if not _rgb:
                 h._send({"ok": False, "msg": "省 %s 没有颜色定义" % body.get("pid")})
                 return
-        nx = map_edit_dab(state.map_var("MAP_EDIT").get("file") or body.get("bmp"), int(body.get("x", 0)),
+        nx = map_edit_dab(_bp, int(body.get("x", 0)),
                           int(body.get("y", 0)), int(body.get("r", 2)),
                           tuple(_rgb or (255, 0, 255)))
         r = {"ok": True, "pixels": nx}
     elif act == "commit":
+        _bp = state.map_var("MAP_EDIT").get("file") or body.get("bmp") or ""
+        if _bp and is_readonly_mod(_bp):
+            h._send({"ok": False, "msg": "原版或只读目录，不能直接涂色"})
+            return
         r = map_edit_commit()
     elif act == "undo":
         r = map_edit_undo()
@@ -88,7 +91,7 @@ def r_api_map_merge(h, body):
     elif act == "neighbors":
         h._send(map_prov_neighbors(_src, _rt))
     else:
-        h._send(map_merge_apply(_src, _dst, _rt))
+        h._send(map_merge_apply(_src, _dst, _rt, adopt=bool(body.get("adopt"))))
 
 
 @post("/api/map_integrity")
@@ -148,48 +151,56 @@ def r_api_map_generate(h, body):
 def r_api_supply_save(h, body):
     h._send(LG.supply_area_save(body.get("id"), body.get("value"),
                                 body.get("states"), body.get("name"),
-                                body.get("root")))
+                                body.get("root"), adopt=bool(body.get("adopt"))))
 
 
 @post("/api/supply_delete")
 def r_api_supply_delete(h, body):
-    h._send(LG.supply_area_delete(body.get("id"), body.get("root")))
+    h._send(LG.supply_area_delete(body.get("id"), body.get("root"),
+                                  adopt=bool(body.get("adopt"))))
 
 
 @post("/api/adj_edit")
 def r_api_adj_edit(h, body):
     h._send(LG.adjacency_edit(body.get("line"), body.get("type"),
-                              body.get("root")))
+                              body.get("root"), adopt=bool(body.get("adopt"))))
 
 
 @post("/api/adj_delete")
 def r_api_adj_delete(h, body):
-    h._send(LG.adjacency_delete(body.get("line"), body.get("root")))
+    h._send(LG.adjacency_delete(body.get("line"), body.get("root"),
+                                adopt=bool(body.get("adopt"))))
 
 
 @post("/api/adj_add")
 def r_api_adj_add(h, body):
     h._send(LG.adjacency_add(body.get("from"), body.get("to"),
                              body.get("type"), body.get("through"),
-                             body.get("root")))
+                             body.get("root"), adopt=bool(body.get("adopt"))))
 
 
 @post("/api/sr_create")
 def r_api_sr_create(h, body):
-    h._send(LG.strategic_region_create(body.get("root"), body.get("id"),
-                                       body.get("name"), body.get("provinces")))
+    h._send(LG.strategic_region_create(
+        body.get("root"), body.get("id"), body.get("name"), body.get("provinces"),
+        adopt=bool(body.get("adopt")),
+        expand_states=bool(body.get("expand_states")),
+    ))
 
 
 @post("/api/sr_set_provinces")
 def r_api_sr_set_provinces(h, body):
-    h._send(LG.strategic_region_set_provinces(body.get("id"),
-                                              body.get("provinces"),
-                                              body.get("root")))
+    h._send(LG.strategic_region_set_provinces(
+        body.get("id"), body.get("provinces"), body.get("root"),
+        adopt=bool(body.get("adopt")),
+        expand_states=bool(body.get("expand_states")),
+    ))
 
 
 @post("/api/sr_delete")
 def r_api_sr_delete(h, body):
-    h._send(LG.strategic_region_delete(body.get("id"), body.get("root")))
+    h._send(LG.strategic_region_delete(body.get("id"), body.get("root"),
+                                       adopt=bool(body.get("adopt"))))
 
 
 @post("/api/terrain_batch")
@@ -233,18 +244,20 @@ def r_api_terrain_set(h, body):
 @post("/api/railway_edit")
 def r_api_railway_edit(h, body):
     h._send(LG.railway_edit(body.get("index"), body.get("level"),
-                            body.get("provs"), body.get("root")))
+                            body.get("provs"), body.get("root"),
+                            adopt=bool(body.get("adopt"))))
 
 
 @post("/api/railway_delete")
 def r_api_railway_delete(h, body):
-    h._send(LG.railway_delete(body.get("index"), body.get("root")))
+    h._send(LG.railway_delete(body.get("index"), body.get("root"),
+                              adopt=bool(body.get("adopt"))))
 
 
 @post("/api/railway_level")
 def r_api_railway_level(h, body):
     h._send(LG.railway_set_level(body.get("index"), body.get("level"),
-                                 body.get("root")))
+                                 body.get("root"), adopt=bool(body.get("adopt"))))
 
 
 # --------------------------------------------------------------- GET（P5 从 routes_get.py 原样搬出，12 条）
@@ -301,7 +314,9 @@ def r_api_map_asset(h, path_only):
 
 @get("/api/adjacencies")
 def r_api_adjacencies(h, path_only):
-    h._send(LG.adjacencies_list(_map_pick(None)))
+    _q = parse_qs(urlparse(h.path).query)
+    _rt = _q.get("root", [""])[0] or None
+    h._send(LG.adjacencies_list(_map_pick(_rt)))
 
 
 @get("/api/terrain_by_type")
@@ -314,24 +329,29 @@ def r_api_terrain_by_type(h, path_only):
 
 @get("/api/terrain_types")
 def r_api_terrain_types(h, path_only):
-    h._send(terrain_types(_map_pick(None)))
+    _q = parse_qs(urlparse(h.path).query)
+    _rt = _q.get("root", [""])[0] or None
+    h._send(terrain_types(_map_pick(_rt)))
 
 
 @get("/api/map_repair_cross")
 def r_api_map_repair_cross(h, path_only):
     _q = parse_qs(urlparse(h.path).query)
     _ap = _q.get("apply", ["0"])[0] in ("1", "true", "yes")
-    h._send(map_repair_cross(_q.get("root", [None])[0], _ap))
+    _ad = _q.get("adopt", ["0"])[0] in ("1", "true", "yes")
+    h._send(map_repair_cross(_q.get("root", [None])[0] or None, _ap, adopt=_ad))
 
 
 @get("/api/map_repair")
 def r_api_map_repair(h, path_only):
     _q = parse_qs(urlparse(h.path).query)
     _act = _q.get("act", ["preview"])[0]
+    _rt = _q.get("root", [None])[0] or None
     if _act == "ghost":
-        h._send(map_repair_ghost(_q.get("root", [None])[0]))
+        _ad = _q.get("adopt", ["0"])[0] in ("1", "true", "yes")
+        h._send(map_repair_ghost(_rt, adopt=_ad))
     else:
-        h._send(map_repair_preview(_q.get("root", [None])[0]))
+        h._send(map_repair_preview(_rt))
 
 
 @get("/api/map_analysis")

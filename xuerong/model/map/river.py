@@ -56,7 +56,7 @@ def _def_rgb_kind():
         return state.map_var("_DEF_RGB_CACHE")["map"]
     m = {}
     try:
-        with io.open(csvp, encoding="utf-8", errors="replace") as _f:
+        with io.open(csvp, encoding="utf-8-sig", errors="replace") as _f:
             for ln in _f:
                 p = ln.strip().split(";")
                 if len(p) >= 5:

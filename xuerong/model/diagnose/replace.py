@@ -132,10 +132,30 @@ def _diag_replace_refs(root, own_only=False):
             scanned.append((layer, dirpath, rel_dir, files))
     if not scanned:
         return out
+    try:
+        from xuerong.model import diagnose as _diag_mod
+        _tick = getattr(_diag_mod, "_prog_tick", None)
+    except Exception:
+        _tick = None
+
+    kw_pats = []
+    for sub, label, kws in _REF_KEYWORDS:
+        if sub in replaced and kws:
+            kw_pats.append((sub, label, re.compile("|".join(re.escape(k) for k in kws))))
+
+    total_txt = sum(
+        1 for _l, _dp, _rd, fs in scanned for _fn in fs if _fn.endswith(".txt")
+    )
+    done_txt = 0
     for layer, dirpath, rel_dir, files in scanned:
         for fn in sorted(files):
             if not fn.endswith(".txt"):
                 continue
+            done_txt += 1
+            if _tick and done_txt % 200 == 0:
+                _tick("诊断（10/17）：replace_path 断链引用",
+                      pct=58,
+                      sub="已扫 %d/%d 个文件" % (done_txt, total_txt))
             p = os.path.join(dirpath, fn)
             base = (rel_dir + "/" + fn) if rel_dir != "." else fn
             # 原版文件加 vanilla/ 前缀，避免和同名 mod 文件混在一起
@@ -145,19 +165,17 @@ def _diag_replace_refs(root, own_only=False):
                     txt = _fh.read()
             except Exception:
                 continue
-            for sub, label, kws in _REF_KEYWORDS:
-                if sub not in replaced:
+            for sub, label, pat in kw_pats:
+                m_kw = pat.search(txt)
+                if not m_kw:
                     continue
-                for kw in kws:
-                    idx = txt.find(kw)
-                    if idx < 0:
-                        continue
-                    line = txt.count(chr(10), 0, idx) + 1
-                    # 按目录归并：原版里同一个目录往往有几十个文件都在引用，
-                    # 逐个报会把界面刷满，也没有额外信息量。
-                    gkey = rel.rsplit("/", 1)[0] if rel.endswith(".txt") else rel
-                    hits.setdefault(gkey, []).append((sub, label, kw, line, rel))
-                    break
+                idx = m_kw.start()
+                kw = m_kw.group(0)
+                line = txt.count(chr(10), 0, idx) + 1
+                # 按目录归并：原版里同一个目录往往有几十个文件都在引用，
+                # 逐个报会把界面刷满，也没有额外信息量。
+                gkey = rel.rsplit("/", 1)[0] if rel.endswith(".txt") else rel
+                hits.setdefault(gkey, []).append((sub, label, kw, line, rel))
 
     for gkey in sorted(hits):
         items = hits[gkey]

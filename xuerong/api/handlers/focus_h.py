@@ -105,16 +105,29 @@ def r_api_focus(h, path_only):
     qs = parse_qs(urlparse(h.path).query)
     tid = qs.get("tree", [""])[0]
     fid = qs.get("id", [""])[0]
-    t = state.trees().get(tid)
     node = None
-    if t:
-        for f in t.get("focuses", []):
+    if tid and tid != "shared_focuses":
+        t = state.trees().get(tid)
+        if t:
+            for f in t.get("focuses", []):
+                if f.get("id") == fid:
+                    node = f
+                    break
+    if not node or (node.get("shared") and "effect" not in node):
+        for f in state.shared_focuses():
             if f.get("id") == fid:
                 node = f
                 break
     if node:
-        h._send({"desc": state.loc().get(fid + "_desc", ""),
-                    "effect": node.get("effect", ""),
-                    "select_effect": node.get("select_effect", "")})
+        h._send({
+            "id": node.get("id", fid),
+            "desc": state.loc().get(fid + "_desc", "") or node.get("desc", ""),
+            "effect": node.get("effect", ""),
+            "select_effect": node.get("select_effect", ""),
+            "raw": node.get("raw", ""),
+            "file": node.get("file", ""),
+            "source": node.get("source", ""),
+            "root": node.get("root", ""),
+        })
     else:
         h._send({"err": "not found"}, 404)

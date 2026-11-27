@@ -629,7 +629,7 @@ window.onerror = function(m, s, l, c){
     <div id="mapModal">
       <div id="mapCard">
         <div id="mapHead">
-          <b>地图</b><i class="exp-tag" title="涂色与地形/高程写盘已验，尚未通过 HOI4 对局实测；自制独立地图崩溃 +11816992 未解">实验性</i>
+          <b>地图</b>
           <span class="k" id="mapMeta">未构建</span>
           <span class="map-grow"></span>
           <select id="mapSource" class="btn" style="padding:3px 6px;max-width:190px" title="地图来源"></select>
@@ -977,8 +977,11 @@ window.onerror = function(m, s, l, c){
                 <option value="">（不改类型）</option>
                 <option value="corps_commander">陆军将军 corps_commander</option>
                 <option value="field_marshal">元帅 field_marshal</option>
+                <option value="navy_leader">海军将领 navy_leader</option>
                 <option value="country_leader">国家领导人 country_leader</option>
+                <option value="advisor">政治顾问 advisor</option>
                 <option value="operative">特工 operative</option>
+                <option value="scientist">科学家 scientist</option>
               </select>
             </div>
             <div class="mp-acts" style="margin-top:3px">
@@ -997,8 +1000,11 @@ window.onerror = function(m, s, l, c){
               <select id="chNewType" style="height:22px;width:110px;font-size:11px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:4px">
                 <option value="corps_commander">corps_commander</option>
                 <option value="field_marshal">field_marshal</option>
+                <option value="navy_leader">navy_leader</option>
                 <option value="country_leader">country_leader</option>
+                <option value="advisor">advisor</option>
                 <option value="operative">operative</option>
+                <option value="scientist">scientist</option>
               </select>
               <input id="chNewCountry" placeholder="国家 TAG" style="height:22px;width:56px" title="归属国家，决定写进哪个文件">
               <input id="chNewSkill" value="3" style="height:22px;width:36px" title="技能">
@@ -1248,7 +1254,7 @@ window.onerror = function(m, s, l, c){
             </div>
             <div id="railEdit" style="display:none;border-top:1px solid var(--line);margin-top:10px;padding-top:8px">
               <label class="mp-k">等级</label>
-              <input type="number" id="railLv" min="1" max="10" style="width:70px">
+              <input type="number" id="railLv" min="1" max="5" style="width:70px">
               <label class="mp-k" style="display:block;margin-top:6px">省份序列（空格分隔）</label>
               <textarea id="railProvs" rows="3" style="width:100%;box-sizing:border-box;font-family:Consolas,monospace;font-size:12px;background:var(--input);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px"></textarea>
               <div class="mp-acts" style="margin-top:8px">
@@ -1282,6 +1288,7 @@ window.onerror = function(m, s, l, c){
                 <option value="sea">sea</option>
                 <option value="land">land</option>
               </select>
+              <input id="adjThrough" placeholder="经过海省 ID（sea 必填）" style="height:26px;width:140px">
               <button class="btn" id="adjAdd">新增</button>
             </div>
             <div class="mp-k" id="adjMsg" style="min-height:16px;line-height:1.5"></div>
@@ -1529,16 +1536,16 @@ window.onerror = function(m, s, l, c){
     </div>
   </div>
 </div>
-<div id="equipModal" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1020px,calc(100% - 70px));height:min(720px,calc(100% - 80px));background:#171b1d;border:1px solid #3a4346;border-radius:14px;z-index:60;padding:12px;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.55)">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="color:#c2ae82;font-size:14px">装备编辑器</b><div style="display:flex;gap:6px"><button class="btn" id="equipDesigner">🛠 设计器</button><button class="btn" id="equipRef">🔗 引用</button><button class="btn" id="equipCopy">📋 复制</button><button class="btn primary" id="equipSaveTop">保存装备</button><button class="btn" id="equipClose">关闭</button></div></div>
+<div id="equipModal" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1020px,calc(100% - 70px));height:min(720px,calc(100% - 80px));box-sizing:border-box;background:var(--panel);border:1px solid var(--line);border-radius:14px;z-index:60;padding:12px;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.55)">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="color:var(--accent);font-size:14px">装备编辑器</b><div style="display:flex;gap:6px"><button class="btn" id="equipDesigner">🛠 设计器</button><button class="btn" id="equipRef">🔗 引用</button><button class="btn" id="equipCopy">📋 复制</button><button class="btn primary" id="equipSaveTop">保存装备</button><button class="btn" id="equipClose">关闭</button></div></div>
   <div style="display:flex;gap:10px;flex:1;min-height:0">
     <div style="width:300px;display:flex;flex-direction:column;min-height:0">
       <input id="equipSearch" placeholder="搜索装备 id / 名称" style="margin:0 0 6px">
-      <div id="equipList" style="overflow:auto;flex:1;background:#141719;border:1px solid #2f3a3c;border-radius:8px;padding:4px"></div>
+      <div id="equipList" style="overflow:auto;flex:1;background:var(--input);border:1px solid var(--line);border-radius:8px;padding:4px"></div>
     </div>
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       <div style="flex:1;min-height:0;overflow-y:auto;padding-right:4px">
-        <div id="equipTitle" style="color:#ffd479;margin-bottom:4px"></div>
+        <div id="equipTitle" style="color:var(--accent);margin-bottom:4px"></div>
         <div class="src-hint" id="equipSrc"></div>
         <div class="k">中文名称 / 描述</div>
         <input type="text" id="equipNameZ" placeholder="中文名称（游戏中显示的装备名称）">
@@ -1571,11 +1578,11 @@ window.onerror = function(m, s, l, c){
         <div class="k">脚本原文（保存会重写该块）</div>
         <textarea id="equipRaw" style="height:140px;min-height:110px;flex-shrink:0;font-family:Consolas,monospace"></textarea>
       </div>
-      <div style="margin-top:6px;padding-top:6px;border-top:1px solid #2f3a3c;flex-shrink:0;display:flex;gap:6px"><button class="btn primary" id="equipSave">保存装备</button><button class="btn" id="equipAdd">＋ 新建</button><button class="btn" id="equipDelete">🗑 删除</button></div>
+      <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--line);flex-shrink:0;display:flex;gap:6px"><button class="btn primary" id="equipSave">保存装备</button><button class="btn" id="equipAdd">＋ 新建</button><button class="btn" id="equipDelete">🗑 删除</button></div>
     </div>
   </div>
 </div>
-<div id="techModal" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1680px,calc(100% - 20px));height:min(960px,calc(100% - 20px));background:var(--panel);border:1px solid var(--line);border-radius:14px;z-index:60;padding:12px;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.55)">
+<div id="techModal" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1680px,calc(100% - 20px));height:min(960px,calc(100% - 20px));box-sizing:border-box;background:var(--panel);border:1px solid var(--line);border-radius:14px;z-index:60;padding:12px;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.55)">
   <div class="tt-topbar">
     <div class="tt-topbar-l">
       <b>🔬 科技树工作台</b>
@@ -1783,16 +1790,16 @@ window.onerror = function(m, s, l, c){
   </div>
   <div id="ttStudioDlg" class="tt-dlg" style="display:none"></div>
 </div>
-<div id="eventModal" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1020px,calc(100% - 70px));height:min(720px,calc(100% - 80px));background:#171b1d;border:1px solid #3a4346;border-radius:14px;z-index:60;padding:12px;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.55)">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="color:#c2ae82;font-size:14px">事件编辑器</b><div style="display:flex;gap:6px"><button class="btn" id="eventRef">🔗 引用</button><button class="btn" id="eventCopy">📋 复制</button><button class="btn" id="eventAdd">＋ 新建</button><button class="btn" id="eventDelete">🗑 删除</button><button class="btn primary" id="eventSaveTop">保存事件</button><button class="btn" id="eventClose">关闭</button></div></div>
+<div id="eventModal" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1020px,calc(100% - 70px));height:min(720px,calc(100% - 80px));box-sizing:border-box;background:var(--panel);border:1px solid var(--line);border-radius:14px;z-index:60;padding:12px;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.55)">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="color:var(--accent);font-size:14px">事件编辑器</b><div style="display:flex;gap:6px"><button class="btn" id="eventRef">🔗 引用</button><button class="btn" id="eventCopy">📋 复制</button><button class="btn" id="eventAdd">＋ 新建</button><button class="btn" id="eventDelete">🗑 删除</button><button class="btn primary" id="eventSaveTop">保存事件</button><button class="btn" id="eventClose">关闭</button></div></div>
   <div style="display:flex;gap:10px;flex:1;min-height:0">
     <div style="width:320px;display:flex;flex-direction:column;min-height:0">
       <input id="eventSearch" placeholder="搜索事件 id / 标题" style="margin:0 0 6px">
-      <div id="eventList" style="overflow:auto;flex:1;background:#141719;border:1px solid #2f3a3c;border-radius:8px;padding:4px"></div>
+      <div id="eventList" style="overflow:auto;flex:1;background:var(--input);border:1px solid var(--line);border-radius:8px;padding:4px"></div>
     </div>
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       <div style="flex:1;min-height:0;overflow-y:auto;padding-right:4px">
-        <div id="eventTitle" style="color:#ffd479;margin-bottom:4px"></div>
+        <div id="eventTitle" style="color:var(--accent);margin-bottom:4px"></div>
         <div class="src-hint" id="eventSrc"></div>
         <div class="k">中文标题 / 描述</div>
         <input type="text" id="eventNameZ" placeholder="中文标题（事件弹窗顶部标题）"><textarea id="eventDescZ" style="height:44px" placeholder="中文描述（事件正文文本，不要把 trigger/immediate 脚本填在这里）"></textarea>
@@ -1821,7 +1828,7 @@ window.onerror = function(m, s, l, c){
         <div class="k">脚本原文（保存会重写该事件块）</div>
         <textarea id="eventRaw" style="height:140px;min-height:110px;flex-shrink:0;font-family:Consolas,monospace"></textarea>
       </div>
-      <div style="margin-top:6px;padding-top:6px;border-top:1px solid #2f3a3c;flex-shrink:0"><button class="btn primary" id="eventSave">保存事件</button></div>
+      <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--line);flex-shrink:0"><button class="btn primary" id="eventSave">保存事件</button></div>
     </div>
   </div>
 </div>
@@ -1975,7 +1982,7 @@ window.onerror = function(m, s, l, c){
     <div class="ts-body">
       <div class="k" id="tsId"></div>
       <label class="k">default
-        <select id="tsDefault" style="margin-left:8px;background:#141719;color:#d9d3c7;border:1px solid #3a4346;border-radius:5px;padding:3px 6px">
+        <select id="tsDefault" style="margin-left:8px;background:var(--input);color:var(--text);border:1px solid var(--line);border-radius:5px;padding:3px 6px">
           <option value="">（不写）</option>
           <option value="yes">yes</option>
           <option value="no">no</option>

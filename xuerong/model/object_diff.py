@@ -115,7 +115,8 @@ def _extract_event_records(layer_dir, layer_idx, layer_name):
             if not m:
                 continue
             eid = m.group(1)
-            tm = re.search(r'(?m)^\s*title\s*=\s*"?([^"\r\n]+)"?', v)
+            tm = re.search(r'(?m)^\s*title\s*=\s*(?!\{)"?([^"\r\n#{}]+)"?', v)
+            t_str = tm.group(1).strip() if tm else ""
             trig = "仅触发" if re.search(r'(?m)^\s*is_triggered_only\s*=\s*yes\b', v) else "MTTH/常规"
             opt_n = len(re.findall(r'(?m)^\s*option\s*=\s*\{', v))
             recs.append({
@@ -128,7 +129,7 @@ def _extract_event_records(layer_dir, layer_idx, layer_name):
                 "order": layer_idx + 1,
                 "layer_name": layer_name,
                 "rel": rel,
-                "summary": "%s · %s · %d 选项%s" % (k, trig, opt_n, (" · " + tm.group(1).strip()) if tm else ""),
+                "summary": "%s · %s · %d 选项%s" % (k, trig, opt_n, (" · " + t_str) if t_str else ""),
             })
     return recs
 
@@ -452,7 +453,7 @@ def analyze_objects(layers=None, cat="all", status="interacted", query="",
         st = it["status"]
         stats["total"] += 1
         stats["by_cat"][it["cat"]] = stats["by_cat"].get(it["cat"], 0) + 1
-        if st != "unique":
+        if st not in ("unique", "blocked"):
             stats["interacted"] += 1
         if st == "duplicate_error":
             stats["duplicate_error"] += 1
@@ -465,7 +466,7 @@ def analyze_objects(layers=None, cat="all", status="interacted", query="",
 
         if c_filter != "all" and it["cat"] != c_filter:
             continue
-        if s_filter == "interacted" and st == "unique":
+        if s_filter == "interacted" and st in ("unique", "blocked"):
             continue
         elif s_filter == "duplicate_error" and st != "duplicate_error":
             continue
@@ -488,6 +489,24 @@ def analyze_objects(layers=None, cat="all", status="interacted", query="",
         if lf is not None and not any(r["layer"] == lf for r in it["records"]):
             continue
         matched.append(it)
+
+    top_idx = (len(norm_layers) - 1) if norm_layers else None
+    _st_rank = {
+        "duplicate_error": 0,
+        "file_override": 1,
+        "id_override": 1,
+        "cross_tree": 1,
+        "removed_by_file": 2,
+        "unique": 3,
+        "blocked": 4,
+    }
+    matched.sort(key=lambda it: (
+        0 if (top_idx is not None and any(r.get("layer") == top_idx for r in (it.get("records") or []))) else 1,
+        _st_rank.get(it.get("status"), 5),
+        it.get("cat") or "",
+        (it.get("id") or "").lower(),
+        it.get("key") or "",
+    ))
 
     return {
         "ok": True,

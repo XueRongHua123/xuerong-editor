@@ -10,14 +10,80 @@ function curTree(){ return DATA.trees[current]; }
 function rootOf(t){
   // 树的真实所在层（后端按 _layer_dirs 的 base 记；创意工坊/原版层会自动被接管到最顶层可写 mod）
   if(t && t.root) return t.root;
-  return (DATA.roots.find(r=>t.source===r.name)||DATA.roots[0]||{}).path;
+  const wr = typeof _writableRoot === 'function' ? _writableRoot() : (window._writableRoot ? window._writableRoot() : '');
+  if(wr) return wr;
+  const roots = (DATA && DATA.roots) || [];
+  return ((t && roots.find(r=>t.source===r.name)) || roots[0] || {}).path || '';
 }
 
+let _iconSeq = 0;
+let _iconTimer = null;
+let _iconPumpTimer = null;
+
+function _scheduleIconPump(){
+  const seq = _iconSeq;
+  if(_iconPumpTimer) clearTimeout(_iconPumpTimer);
+  _iconPumpTimer = setTimeout(()=>{
+    _iconPumpTimer = null;
+    if(seq === _iconSeq) _pumpTreeIcons(seq);
+  }, 60);
+}
+
+function _pumpTreeIcons(seq){
+  if(seq !== _iconSeq) return;
+  const pending = Array.from(vp.querySelectorAll('image[data-icon-href]'));
+  if(!pending.length) return;
+  const rect = svg.getBoundingClientRect();
+  const k = Math.max(0.01, (view && view.k) || 1);
+  const pad = 180 / k;
+  const vx0 = (-view.x) / k - pad, vy0 = (-view.y) / k - pad;
+  const vx1 = (rect.width - view.x) / k + pad, vy1 = (rect.height - view.y) / k + pad;
+  const vis = [];
+  for(const img of pending){
+    const nx = Number(img.getAttribute('data-nx') || 0);
+    const ny = Number(img.getAttribute('data-ny') || 0);
+    if(nx + NODE_W >= vx0 && nx <= vx1 && ny + NODE_H >= vy0 && ny <= vy1){
+      vis.push(img);
+    }
+  }
+  if(!vis.length) return;
+  const batch = vis.slice(0, 32);
+  let left = batch.length;
+  let advanced = false;
+  const next = ()=>{
+    if(advanced || seq !== _iconSeq) return;
+    if(--left <= 0){
+      advanced = true;
+      _iconTimer = setTimeout(()=>_pumpTreeIcons(seq), 16);
+    }
+  };
+  for(const img of batch){
+    const url = img.getAttribute('data-icon-href');
+    img.removeAttribute('data-icon-href');
+    if(!url){ next(); continue; }
+    let done = false;
+    const finish = ()=>{
+      if(done) return;
+      done = true;
+      img.removeEventListener('load', finish);
+      img.removeEventListener('error', finish);
+      next();
+    };
+    img.addEventListener('load', finish, {once:true});
+    img.addEventListener('error', finish, {once:true});
+    img.setAttribute('href', url);
+    setTimeout(finish, 3000);
+  }
+}
 
 function renderTree(){
   const t = curTree();
+  const mySeq = ++_iconSeq;
+  if(_iconTimer){ clearTimeout(_iconTimer); _iconTimer = null; }
+  if(_iconPumpTimer){ clearTimeout(_iconPumpTimer); _iconPumpTimer = null; }
   if(!t){ vp.innerHTML = ''; return; }
   const ids = new Set(t.focuses.map(f=>f.id));
+  const lazyIcons = t.focuses.length > 400;
   let html = `<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5d7f99"/></marker></defs>`;
   t.analysis.edges.forEach(([a,b])=>{
     const A=nodeById(t,a), B=nodeById(t,b); if(!A||!B) return;
@@ -40,7 +106,11 @@ function renderTree(){
     const cyc = t.analysis.cycles.some(c=>c.includes(f.id));
     const cls='node'+(cyc?' cycle':'')+(selId===f.id?' sel':'')+(multiSel.has(f.id)?' multi':'')+(dirty.has(f.id)?' dirty':'');
     const iconUrl = f.icon ? ('/api/icon?gfx=' + encodeURIComponent(f.icon)) : (f.iconPng || '');
-    const withIcon = iconUrl ? `<image href="${iconUrl}" x="4" y="6" width="24" height="24" preserveAspectRatio="xMidYMid meet"/>` : '';
+    const withIcon = iconUrl
+      ? (lazyIcons
+          ? `<image data-icon-href="${escapeHtml(iconUrl)}" data-nx="${x}" data-ny="${y}" x="4" y="6" width="24" height="24" preserveAspectRatio="xMidYMid meet"/>`
+          : `<image href="${iconUrl}" x="4" y="6" width="24" height="24" preserveAspectRatio="xMidYMid meet"/>`)
+      : '';
     const tx = iconUrl ? 32 : 6;
     html += `<g class="${cls}" data-id="${escapeHtml(f.id)}" transform="translate(${x},${y})">
       <rect width="${NODE_W}" height="${NODE_H}" rx="8"></rect>
@@ -53,6 +123,9 @@ function renderTree(){
   });
   vp.innerHTML = html;
   applyView();
+  if(lazyIcons){
+    _iconTimer = setTimeout(()=>_pumpTreeIcons(mySeq), 0);
+  }
   vp.querySelectorAll('.node').forEach(n=>{
     n.addEventListener('mousedown', ev=>startNodeDrag(ev, n));
     n.addEventListener('click', ev=>{
@@ -689,6 +762,7 @@ function fitView(){
   view.y = (rect.height - h*view.k)/2 - minY*view.k;
   applyView();
   updateZoomLabel();
+  _scheduleIconPump();
 }
 
 function renderAll(){
@@ -1131,7 +1205,7 @@ svg.addEventListener('mousedown', ev=>{
 });
 
 window.addEventListener('mousemove', ev=>{
-  if(pan){ view.x = pan.vx + (ev.clientX - pan.x); view.y = pan.vy + (ev.clientY - pan.y); applyView(); }
+  if(pan){ view.x = pan.vx + (ev.clientX - pan.x); view.y = pan.vy + (ev.clientY - pan.y); applyView(); _scheduleIconPump(); }
 });
 
 window.addEventListener('mouseup', ()=>{ pan = null; });
@@ -1162,6 +1236,7 @@ function applyZoomFactor(factor, clientX, clientY){
   view.k = k1;
   applyView();
   updateZoomLabel();
+  _scheduleIconPump();
 }
 
 function updateZoomLabel(){

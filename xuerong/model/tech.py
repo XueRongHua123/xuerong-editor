@@ -20,8 +20,8 @@ from xuerong.core.paths import (_layer_dirs, _layers_find, _read_bom_text, _writ
                                 effective_layer_files, is_readonly_mod, is_under_game,
                                 mod_layers, unique_editor_filename)
 from xuerong.core.text import (_atomic_write, _bom_for, _strip_keep_len, append_into_block,
-                               brace_match, braces_balanced, collect_top_blocks, find_blocks,
-                               insert_before_date_or_end, set_raw_block, set_scalar,
+                               brace_depth_at, brace_match, braces_balanced, collect_top_blocks,
+                               find_blocks, insert_before_date_or_end, set_raw_block, set_scalar,
                                strip_comments, top_items)
 from xuerong.model.country import _country_hist_file, _country_hist_write_base
 from xuerong.model.history import snapshot
@@ -518,6 +518,117 @@ def tech_batch_move(root, moves):
 
 
 
+def _parse_date_tuple(text, start_pos):
+    m = re.match(r'[ \t]*(\d{3,4})\.(\d{1,2})\.(\d{1,2})[ \t]*=', text[start_pos:])
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+
+def _effective_start_date(root=None):
+    sd = state.start_date()
+    if sd and sd != (1936, 1, 1):
+        return sd
+    if root:
+        try:
+            return paths._start_date_for(root)
+        except Exception:
+            pass
+    return sd or (1936, 1, 1)
+
+
+def _pick_opening_date_span(text, dspans, root=None):
+    if not dspans:
+        return None
+    sd = _effective_start_date(root)
+    parsed = []
+    for ds, de in dspans:
+        dt = _parse_date_tuple(text, ds)
+        if dt is not None:
+            parsed.append((dt, (ds, de)))
+    if not parsed:
+        return dspans[0]
+    for dt, sp in parsed:
+        if dt == sd:
+            return sp
+    parsed.sort(key=lambda x: x[0])
+    return parsed[0][1]
+
+
+def _collect_country_tech_blocks(text, root=None):
+    """定位国家历史中的有效 set_technology 块。
+
+    规则：
+    1) 深度 0（或非日期块且无匹配的开局日期块）存在 set_technology → 只用非日期块（严格隔离 1939.1.1）；
+    2) 深度 0 无 set_technology 且存在日期块 → 选匹配 state.start_date() 或最早的开局日期块，
+       汇总其中非子日期块的 set_technology。
+    返回 (block_list, dspans, target_date_span)。
+    """
+    non_date_blocks, dspans = collect_top_blocks(text, "set_technology", include_date=False)
+    has_depth0 = any(blk[0] == 0 for blk in non_date_blocks)
+    if has_depth0:
+        return non_date_blocks, dspans, None
+
+    sd = _effective_start_date(root)
+    has_exact_sd = any(_parse_date_tuple(text, ds) == sd for ds, _de in dspans)
+    if non_date_blocks and not has_exact_sd:
+        return non_date_blocks, dspans, None
+
+    if not dspans:
+        return non_date_blocks, dspans, None
+
+    ds, de = _pick_opening_date_span(text, dspans, root)
+    db_open = text.find("{", ds)
+    if db_open < 0 or db_open >= de:
+        return non_date_blocks, dspans, None
+    inner_start = db_open + 1
+    inner_end = de - 1
+    base_depth = brace_depth_at(text, inner_start)
+
+    # 排除该开局日期块内部可能嵌套的子日期块
+    sub_dspans = []
+    for m in re.finditer(r'(?m)^[ \t]*\d{3,4}\.\d+\.\d+[ \t]*=\s*\{', text[inner_start:inner_end]):
+        sub_pos = inner_start + m.start()
+        if brace_depth_at(text, sub_pos) != base_depth:
+            continue
+        ob = text.find("{", sub_pos)
+        if ob >= 0:
+            ce = brace_match(text, ob)
+            if ce > ob:
+                sub_dspans.append((sub_pos, ce))
+
+    out = []
+    for a, b, body in find_blocks(text, "set_technology"):
+        if not (inner_start <= a < b <= inner_end):
+            continue
+        if any(sds < a < sde for sds, sde in sub_dspans):
+            continue
+        hdr = text.rfind("set_technology", inner_start, a)
+        depth_rel = brace_depth_at(text, hdr if hdr >= 0 else a) - base_depth
+        out.append((max(0, depth_rel), a, b, body))
+    out.sort(key=lambda x: (0 if x[0] == 0 else 1, x[1]))
+    return out, dspans, (ds, de)
+
+
+def _extract_unlocked_from_blocks(block_list):
+    unlocked = []
+    for _depth, _a, _b, body in block_list:
+        for ln in body.splitlines():
+            ln = ln.strip()
+            if not ln or ln.startswith("#"):
+                continue
+            m = re.match(r'([A-Za-z][A-Za-z0-9_\-\.]*)\s*=\s*1\b', ln)
+            if m:
+                unlocked.append(m.group(1))
+    seen = set()
+    out = []
+    for x in unlocked:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
 def load_country_techs(root=None, tag=""):
     """解析某国的 set_technology，返回已解锁科技列表。"""
     root = paths._pick(root)
@@ -533,23 +644,9 @@ def load_country_techs(root=None, tag=""):
     except Exception as e:
         return {"ok": False, "msg": "读取失败：%s" % e, "unlocked": []}
     text = _strip_keep_len(raw)
-    block_list, _dspans = collect_top_blocks(text, "set_technology", include_date=False)
-    unlocked, blocks = [], len(block_list)
-    for _depth, _a, _b, body in block_list:
-        for ln in body.splitlines():
-            ln = ln.strip()
-            if not ln or ln.startswith("#"):
-                continue
-            m = re.match(r'([A-Za-z][A-Za-z0-9_\-\.]*)\s*=\s*1\b', ln)
-            if m:
-                unlocked.append(m.group(1))
-    # 去重保序
-    seen = set()
-    out = []
-    for x in unlocked:
-        if x not in seen:
-            seen.add(x)
-            out.append(x)
+    block_list, _dspans, _date_span = _collect_country_tech_blocks(text, root)
+    out = _extract_unlocked_from_blocks(block_list)
+    blocks = len(block_list)
     return {"ok": True, "tag": tag, "file": os.path.basename(p),
             "blocks": blocks, "unlocked": out, "count": len(out),
             "msg": "%s：%d 项科技（%d 个 set_technology 块）" % (tag, len(out), blocks)}
@@ -581,9 +678,9 @@ def country_tech_toggle(root, tag, tech, on=True):
     with io.open(dst, encoding="utf-8-sig", errors="replace") as _fh:
         raw = _fh.read()
     text = _strip_keep_len(raw)
-    non_date_blocks, dspans = collect_top_blocks(text, "set_technology", include_date=False)
-    top_blocks = [blk for blk in non_date_blocks if blk[0] == 0]
-    cur = load_country_techs(root, tag)["unlocked"]
+    block_list, dspans, target_date_span = _collect_country_tech_blocks(text, root)
+    top_blocks = [blk for blk in block_list if blk[0] == 0]
+    cur = _extract_unlocked_from_blocks(block_list)
     has = tech in cur
 
     if on and has:
@@ -594,8 +691,13 @@ def country_tech_toggle(root, tag, tech, on=True):
     if on:
         if top_blocks:
             _depth, _a, b, _body = top_blocks[0]
-            new_text = append_into_block(raw, b, "\t%s = 1" % tech)
+            indent = "\t\t" if target_date_span else "\t"
+            new_text = append_into_block(raw, b, "%s%s = 1" % (indent, tech))
             msg = "已加 %s" % tech
+        elif target_date_span is not None:
+            ins_in_date = "\tset_technology = {\n\t\t%s = 1\n\t}" % tech
+            new_text = append_into_block(raw, target_date_span[1], ins_in_date)
+            msg = "已加 %s（新建 set_technology 块）" % tech
         else:
             ins = "\nset_technology = {\n\t%s = 1\n}\n" % tech
             new_text = insert_before_date_or_end(raw, dspans, ins)
@@ -606,7 +708,7 @@ def country_tech_toggle(root, tag, tech, on=True):
 
     pat = re.compile(r'(?m)^[ \t]*' + re.escape(tech) + r'[ \t]*=[ \t]*1[ \t]*\r?\n?')
     new_text = None
-    for _depth, a, b, _body in non_date_blocks:
+    for _depth, a, b, _body in block_list:
         seg = raw[a:b]
         seg2 = pat.sub('', seg)
         if seg2 != seg:

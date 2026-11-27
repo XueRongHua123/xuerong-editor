@@ -155,6 +155,21 @@ def load_country_ideas(root=None, tag=""):
 
 
 
+def _sync_country_ideas_state(tag, idea, on):
+    """写盘成功后同步更新 state.countries()[tag]['ideas']。"""
+    c = state.countries().get(tag)
+    if not isinstance(c, dict):
+        return
+    cur = list(c.get("ideas") or [])
+    if on:
+        if idea not in cur:
+            cur.append(idea)
+            cur.sort()
+        c["ideas"] = cur
+    else:
+        c["ideas"] = [x for x in cur if x != idea]
+
+
 def country_idea_toggle(root, tag, idea, on=True):
     """给某国开局加上或去掉一项国家精神（写顶层块，绕开日期块与条件块）。"""
     root = paths._pick(root)
@@ -185,6 +200,7 @@ def country_idea_toggle(root, tag, idea, on=True):
 
     if on:
         if idea in _extract_ideas_from_blocks(top_blocks):
+            _sync_country_ideas_state(tag, idea, True)
             return {"ok": True, "msg": "已经有 %s 了" % idea}
         if top_blocks:
             _depth, _a, b, _body = top_blocks[0]
@@ -194,6 +210,7 @@ def country_idea_toggle(root, tag, idea, on=True):
             new_text = insert_before_date_or_end(raw, dspans, ins)
         snapshot(dst)
         _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
+        _sync_country_ideas_state(tag, idea, True)
         msg = "已加 %s" % idea if top_blocks else "已加 %s（新建顶层 add_ideas 块）" % idea
         return {"ok": True, "msg": msg}
 
@@ -211,6 +228,7 @@ def country_idea_toggle(root, tag, idea, on=True):
 
     snapshot(dst)
     _atomic_write(dst, _bom_for(dst) + new_text.encode("utf-8"))
+    _sync_country_ideas_state(tag, idea, False)
     return {"ok": True, "msg": "已删 %s" % idea}
 
 

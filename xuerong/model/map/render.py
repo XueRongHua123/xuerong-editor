@@ -186,7 +186,7 @@ def _map_build_run(root, dirp, base, bmp, csv, meta_path):
     prov2type = {}
     prov2terrain = {}
     prov2continent = {}
-    with io.open(csv, encoding="utf-8", errors="replace") as f:
+    with io.open(csv, encoding="utf-8-sig", errors="replace") as f:
         for line in f:
             parts = line.strip().split(";")
             if len(parts) < 5:

@@ -450,7 +450,8 @@ def r_api_event_graph(h, path_only):
 @get("/api/equipment_list")
 def r_api_equipment_list(h, path_only):
     _q = parse_qs(urlparse(h.path).query)
-    h._send(equipment_list(_pick(None), _q.get("q", [""])[0]))
+    req_root = (_q.get("root", [""])[0] or "").strip() or None
+    h._send(equipment_list(_pick(req_root), _q.get("q", [""])[0]))
 
 
 @get("/api/equipment_detail")

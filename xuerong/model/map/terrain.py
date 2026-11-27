@@ -5,12 +5,12 @@ import os
 import re
 
 from xuerong import state
-from xuerong.core.paths import _layers_find, mod_layers
+from xuerong.core.paths import _layers_find, _out_path, _out_read_path, mod_layers
 from xuerong.core.text import _atomic_write, brace_match, strip_comments
 from xuerong.model.history import snapshot
 from xuerong.model.map.io import (_ensure_map_writable, _map_pair_compatible,
-                                  _map_pick, _refine_load_ids, bmp_info,
-                                  bmp_write_rect_8)
+                                  _map_pick, _out_bmp_path, _refine_load_ids,
+                                  bmp_info, bmp_write_rect_8)
 
 
 def _terrain_tex_map(root):
@@ -60,7 +60,7 @@ def terrain_types(root=None):
     csvp, _ = _layers_find("map/definition.csv", mod_layers(root))
     if csvp:
         try:
-            with io.open(csvp, encoding="utf-8", errors="replace") as f:
+            with io.open(_out_read_path(csvp), encoding="utf-8-sig", errors="replace") as f:
                 for line in f:
                     p = line.strip().split(";")
                     if len(p) >= 8 and p[0].isdigit():
@@ -73,6 +73,16 @@ def terrain_types(root=None):
                       "writable": t2i.get(t) is not None})
     return {"ok": True, "items": items, "count": len(items),
             "msg": "共 %d 种地形类型" % len(items)}
+
+def _collect_adopt_info(*errs):
+    msgs = []
+    for e in errs:
+        if isinstance(e, dict) and e.get("adopted"):
+            msgs.append(e.get("adopt_msg") or "已单文件接管")
+    if not msgs:
+        return False, ""
+    return True, "；".join(msgs)
+
 
 def prov_terrain_set(pid, terrain, root=None, adopt=False):
     """把某个省的地形改成指定类型。
@@ -88,6 +98,38 @@ def prov_terrain_set(pid, terrain, root=None, adopt=False):
         return {"ok": False, "msg": "参数不完整"}
     root = _map_pick(root)
     layers = mod_layers(root)
+    t2i, idx2type = _terrain_type_to_index(root)
+    if terrain not in t2i:
+        return {"ok": False, "msg": "terrain.txt 里没有类型 %s（可选：%s）" % (
+            terrain, "、".join(sorted(t2i.keys())[:8]))}
+    new_idx = t2i[terrain]
+
+    csv_src, _ = _layers_find("map/definition.csv", layers)
+    if not csv_src:
+        return {"ok": False, "msg": "找不到 map/definition.csv"}
+    with io.open(_out_read_path(csv_src), encoding="utf-8-sig", errors="replace") as _f:
+        raw_pre = _f.read()
+    old_type = None
+    hit_pre = False
+    for ln in raw_pre.splitlines(True):
+        p = ln.rstrip("\r\n").split(";")
+        if len(p) >= 8 and p[0].isdigit() and int(p[0]) == pid:
+            old_type = p[6]
+            if old_type == terrain:
+                return {"ok": True, "changed": False,
+                        "msg": "省 %d 已经是 %s，无需改动" % (pid, terrain)}
+            hit_pre = True
+            break
+    if not hit_pre:
+        return {"ok": False, "msg": "definition.csv 里没有省 %d" % pid}
+
+    ids, w, h = _refine_load_ids(root)
+    if not ids:
+        return {"ok": False, "msg": "读不到省号数组"}
+    px = [i for i in range(len(ids)) if ids[i] == pid]
+    if not px:
+        return {"ok": False, "msg": "省 %d 在地图上没有像素" % pid}
+
     pbmp, pbase = _layers_find("map/provinces.bmp", layers)
     csvp, _cbase, cerr = _ensure_map_writable("definition.csv", root=root, adopt=adopt)
     if not csvp:
@@ -100,48 +142,35 @@ def prov_terrain_set(pid, terrain, root=None, adopt=False):
         return {"ok": False,
                 "msg": "terrain.bmp 与 provinces.bmp 尺寸或层级不匹配（mod 换了地图没换地形图），改地形会错位"}
 
-    t2i, idx2type = _terrain_type_to_index(root)
-    if terrain not in t2i:
-        return {"ok": False, "msg": "terrain.txt 里没有类型 %s（可选：%s）" % (
-            terrain, "、".join(sorted(t2i.keys())[:8]))}
-    new_idx = t2i[terrain]
-
-    # 1) 改 definition.csv
-    with io.open(csvp, encoding="utf-8", errors="replace") as _f:
+    # 1) 准备 definition.csv 新内容（暂不写盘，等 bmp 写成功后再写）
+    with io.open(_out_read_path(csvp), encoding="utf-8-sig", errors="replace", newline="") as _f:
         raw = _f.read()
     lines = raw.splitlines(True)
-    old_type = None
     hit = False
     for i, ln in enumerate(lines):
-        p = ln.rstrip("\r\n").split(";")
+        stripped = ln.rstrip("\r\n")
+        tail = ln[len(stripped):]
+        p = stripped.split(";")
         if len(p) >= 8 and p[0].isdigit() and int(p[0]) == pid:
             old_type = p[6]
             if old_type == terrain:
                 return {"ok": True, "changed": False,
                         "msg": "省 %d 已经是 %s，无需改动" % (pid, terrain)}
             p[6] = terrain
-            tail = chr(10) if ln.endswith(chr(10)) else ""
             lines[i] = ";".join(p) + tail
             hit = True
             break
     if not hit:
         return {"ok": False, "msg": "definition.csv 里没有省 %d" % pid}
 
-    # 2) 改 terrain.bmp 里该省的像素
-    ids, w, h = _refine_load_ids(root)
-    if not ids:
-        return {"ok": False, "msg": "读不到省号数组"}
-    px = [i for i in range(len(ids)) if ids[i] == pid]
-    if not px:
-        return {"ok": False, "msg": "省 %d 在地图上没有像素" % pid}
+    # 2) 先改 terrain.bmp 里该省的像素，确认成功再写 definition.csv
     xs = [p % w for p in px]
     ys = [p // w for p in px]
     bx, by = min(xs), min(ys)
     bw, bh = max(xs) - bx + 1, max(ys) - by + 1
-    # 读原索引（用 Pillow 读整块更稳）
     from PIL import Image
     Image.MAX_IMAGE_PIXELS = None
-    with Image.open(tbmp) as im:
+    with Image.open(_out_read_path(tbmp)) as im:
         if im.size != (w, h):
             return {"ok": False, "msg": "terrain.bmp 尺寸与地图不符"}
         crop = im.crop((bx, by, bx + bw, by + bh))
@@ -151,45 +180,64 @@ def prov_terrain_set(pid, terrain, root=None, adopt=False):
         if 0 <= o < len(buf):
             buf[o] = new_idx
 
-    snapshot(csvp)
     snapshot(tbmp)
-    _atomic_write(csvp, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
     if not bmp_write_rect_8(tbmp, bx, by, bw, bh, buf):
-        return {"ok": False, "msg": "terrain.bmp 写入失败（不是 8 位索引图）"}
+        return {"ok": False, "msg": "terrain.bmp 写入失败（不是 8 位无压缩索引图）"}
+    snapshot(csvp)
+    _atomic_write(_out_path(csvp), "".join(lines).encode("utf-8"))
 
     # 地形变了，缓存与图层都要失效
     try:
         state.map_var("_REFINE_IDS_CACHE").pop("cur", None)
     except Exception:
         pass
-    return {"ok": True, "changed": True, "pid": pid,
-            "from": old_type, "to": terrain, "index": new_idx,
-            "pixels": len(px), "rect": [bx, by, bw, bh],
-            "msg": "省 %d 地形 %s → %s（%d 像素，索引 %d），需重建图层" % (
-                pid, old_type, terrain, len(px), new_idx)}
+    msg = "省 %d 地形 %s → %s（%d 像素，索引 %d），需重建图层" % (
+        pid, old_type, terrain, len(px), new_idx)
+    adopted, adopt_msg = _collect_adopt_info(cerr, terr)
+    if adopted:
+        msg = adopt_msg + "；" + msg
+    out = {"ok": True, "changed": True, "pid": pid,
+           "from": old_type, "to": terrain, "index": new_idx,
+           "pixels": len(px), "rect": [bx, by, bw, bh],
+           "msg": msg}
+    if adopted:
+        out["adopted"] = True
+        out["adopt_msg"] = adopt_msg
+    return out
 
-def _terrain_common(root, terrain, adopt=False):
+
+def _terrain_prepare(root, terrain, adopt=False):
     """批量改地形的公共准备：找文件、校验可写、查索引、验兼容。
-    返回 (csvp, tbmp, new_idx, ids, w, h, err_dict_or_str)"""
+    返回 (csvp, tbmp, new_idx, ids, w, h, adopt_info, err_dict_or_str)"""
     root = _map_pick(root)
     layers = mod_layers(root)
     pbmp, pbase = _layers_find("map/provinces.bmp", layers)
     csvp, _cbase, cerr = _ensure_map_writable("definition.csv", root=root, adopt=adopt)
     if not csvp:
-        return None, None, None, None, 0, 0, cerr
+        return None, None, None, None, 0, 0, None, cerr
     tbmp, tbase, terr = _ensure_map_writable("terrain.bmp", root=root, adopt=adopt)
     if not tbmp:
-        return None, None, None, None, 0, 0, terr
+        return None, None, None, None, 0, 0, None, terr
     layers = mod_layers(root)
     if pbmp and not _map_pair_compatible(tbmp, tbase, pbmp, pbase, layers):
-        return None, None, None, None, 0, 0, "terrain.bmp 与 provinces.bmp 尺寸或层级不匹配，改地形会错位"
+        return None, None, None, None, 0, 0, None, "terrain.bmp 与 provinces.bmp 尺寸或层级不匹配，改地形会错位"
     t2i, _idx2type = _terrain_type_to_index(root)
     if terrain not in t2i:
-        return None, None, None, None, 0, 0, "terrain.txt 里没有类型 %s" % terrain
+        return None, None, None, None, 0, 0, None, "terrain.txt 里没有类型 %s" % terrain
     ids, w, h = _refine_load_ids(root)
     if not ids:
-        return None, None, None, None, 0, 0, "读不到省号数组"
-    return csvp, tbmp, t2i[terrain], ids, w, h, None
+        return None, None, None, None, 0, 0, None, "读不到省号数组"
+    adopted, adopt_msg = _collect_adopt_info(cerr, terr)
+    adopt_info = {"adopted": True, "adopt_msg": adopt_msg} if adopted else None
+    return csvp, tbmp, t2i[terrain], ids, w, h, adopt_info, None
+
+
+def _terrain_common(root, terrain, adopt=False):
+    """批量改地形的公共准备：找文件、校验可写、查索引、验兼容。
+    返回 (csvp, tbmp, new_idx, ids, w, h, err_dict_or_str)"""
+    csvp, tbmp, new_idx, ids, w, h, _ai, err = _terrain_prepare(root, terrain, adopt=adopt)
+    return csvp, tbmp, new_idx, ids, w, h, err
+
 
 def _terrain_apply(csvp, tbmp, ids, w, h, pid_set, new_idx, renumber_from=None):
     """把 pid_set 里所有省在 terrain.bmp 里改成 new_idx，同时改 definition.csv。
@@ -198,21 +246,23 @@ def _terrain_apply(csvp, tbmp, ids, w, h, pid_set, new_idx, renumber_from=None):
     from PIL import Image
     Image.MAX_IMAGE_PIXELS = None
 
-    with io.open(csvp, encoding="utf-8", errors="replace") as _f:
+    with io.open(_out_read_path(csvp), encoding="utf-8-sig", errors="replace", newline="") as _f:
         raw = _f.read()
     lines = raw.splitlines(True)
     old_types = {}
     changed_pids = set()
     for i, ln in enumerate(lines):
-        p = ln.rstrip("\r\n").split(";")
+        stripped = ln.rstrip("\r\n")
+        tail = ln[len(stripped):]
+        p = stripped.split(";")
         if len(p) >= 8 and p[0].isdigit():
             pid = int(p[0])
             if pid in pid_set:
                 old_types[p[6]] = old_types.get(p[6], 0) + 1
-                if p[6] != renumber_from:
-                    p[6] = renumber_from if renumber_from else p[6]
+                if renumber_from and p[6] != renumber_from:
+                    p[6] = renumber_from
+                    lines[i] = ";".join(p) + tail
                 changed_pids.add(pid)
-    # 上面只是统计；真正写入在下面统一做
     if not changed_pids:
         return 0, 0, {}
 
@@ -226,7 +276,7 @@ def _terrain_apply(csvp, tbmp, ids, w, h, pid_set, new_idx, renumber_from=None):
     bx, by = min(xs), min(ys)
     bw, bh = max(xs) - bx + 1, max(ys) - by + 1
 
-    with Image.open(tbmp) as im:
+    with Image.open(_out_read_path(tbmp)) as im:
         if im.size != (w, h):
             return 0, 0, old_types
         crop = im.crop((bx, by, bx + bw, by + bh))
@@ -236,16 +286,17 @@ def _terrain_apply(csvp, tbmp, ids, w, h, pid_set, new_idx, renumber_from=None):
         if 0 <= o < len(buf):
             buf[o] = new_idx
 
-    snapshot(csvp)
     snapshot(tbmp)
-    _atomic_write(csvp, b"\xef\xbb\xbf" + "".join(lines).encode("utf-8"))
     if not bmp_write_rect_8(tbmp, bx, by, bw, bh, buf):
         return 0, 0, old_types
+    snapshot(csvp)
+    _atomic_write(_out_path(csvp), "".join(lines).encode("utf-8"))
     try:
         state.map_var("_REFINE_IDS_CACHE").pop("cur", None)
     except Exception:
         pass
     return len(changed_pids), len(pxmap), old_types
+
 
 def prov_terrain_batch(pids, terrain, root=None, adopt=False):
     """批量改多个省的地形（一次读写）"""
@@ -259,17 +310,21 @@ def prov_terrain_batch(pids, terrain, root=None, adopt=False):
     if not want:
         return {"ok": False, "msg": "没有有效的省号"}
 
-    csvp, tbmp, new_idx, ids, w, h, err = _terrain_common(root, terrain, adopt=adopt)
-    if err:
-        return err if isinstance(err, dict) else {"ok": False, "msg": err}
+    root = _map_pick(root)
+    layers = mod_layers(root)
+    t2i, _ = _terrain_type_to_index(root)
+    if terrain not in t2i:
+        return {"ok": False, "msg": "terrain.txt 里没有类型 %s" % terrain}
+    csv_src, _ = _layers_find("map/definition.csv", layers)
+    if not csv_src:
+        return {"ok": False, "msg": "找不到 map/definition.csv"}
 
-    # 找出真正要改的（已经是指定类型的跳过）
-    with io.open(csvp, encoding="utf-8", errors="replace") as _f:
+    # 先校验是否有实际需要修改的省，避免无需改动时白接管文件
+    with io.open(_out_read_path(csv_src), encoding="utf-8-sig", errors="replace") as _f:
         raw = _f.read()
-    lines = raw.splitlines(True)
     todo = set()
     old_types = {}
-    for ln in lines:
+    for ln in raw.splitlines(True):
         p = ln.rstrip("\r\n").split(";")
         if len(p) >= 8 and p[0].isdigit() and int(p[0]) in want:
             if p[6] != terrain:
@@ -278,11 +333,23 @@ def prov_terrain_batch(pids, terrain, root=None, adopt=False):
     if not todo:
         return {"ok": True, "changed": 0, "msg": "这 %d 个省已经是 %s" % (len(want), terrain)}
 
+    csvp, tbmp, new_idx, ids, w, h, adopt_info, err = _terrain_prepare(root, terrain, adopt=adopt)
+    if err:
+        return err if isinstance(err, dict) else {"ok": False, "msg": err}
+
     n_pid, n_px, _ = _terrain_apply(csvp, tbmp, ids, w, h, todo, new_idx, terrain)
-    return {"ok": True, "changed": n_pid, "pixels": n_px, "to": terrain,
-            "from": old_types, "skipped": len(want) - n_pid,
-            "msg": "%d 个省改成 %s（%d 像素），%d 个已是该类型跳过 · 需重建图层" % (
-                n_pid, terrain, n_px, len(want) - n_pid)}
+    if not n_pid:
+        return {"ok": False, "msg": "terrain.bmp 写入失败（不是 8 位无压缩索引图或省无像素）"}
+    msg = "%d 个省改成 %s（%d 像素），%d 个已是该类型跳过 · 需重建图层" % (
+        n_pid, terrain, n_px, len(want) - n_pid)
+    out = {"ok": True, "changed": n_pid, "pixels": n_px, "to": terrain,
+           "from": old_types, "skipped": len(want) - n_pid, "msg": msg}
+    if adopt_info and adopt_info.get("adopted"):
+        out["adopted"] = True
+        out["adopt_msg"] = adopt_info.get("adopt_msg") or ""
+        out["msg"] = (out["adopt_msg"] + "；" if out["adopt_msg"] else "") + msg
+    return out
+
 
 def prov_terrain_by_type(from_type, to_type, root=None, adopt=False):
     """把某一地形的所有省改成另一种（先从 csv 查，再批量改）"""
@@ -296,7 +363,7 @@ def prov_terrain_by_type(from_type, to_type, root=None, adopt=False):
     if not csvp:
         return {"ok": False, "msg": "找不到 definition.csv"}
     pids = []
-    with io.open(csvp, encoding="utf-8", errors="replace") as _f:
+    with io.open(_out_read_path(csvp), encoding="utf-8-sig", errors="replace") as _f:
         for ln in _f:
             p = ln.rstrip("\r\n").split(";")
             if len(p) >= 8 and p[0].isdigit() and p[6] == from_type:
@@ -305,8 +372,11 @@ def prov_terrain_by_type(from_type, to_type, root=None, adopt=False):
         return {"ok": False, "msg": "没有地形为 %s 的省" % from_type}
     r = prov_terrain_batch(pids, to_type, root, adopt=adopt)
     if r.get("ok"):
-        r["msg"] = "把 %d 个 %s 改成了 %s · 需重建图层" % (
+        msg = "把 %d 个 %s 改成了 %s · 需重建图层" % (
             r.get("changed", 0), from_type, to_type)
+        if r.get("adopted") and r.get("adopt_msg"):
+            msg = r["adopt_msg"] + "；" + msg
+        r["msg"] = msg
     return r
 
 def _invalidate_height_preview_cache():
@@ -349,14 +419,14 @@ def height_paint(points, height, brush=8, feather=True, root=None, adopt=False):
     if pbmp and not _map_pair_compatible(hbmp, hbase, pbmp, pbase, layers):
         return {"ok": False, "msg": "heightmap.bmp 与 provinces.bmp 尺寸或层级不匹配，刷高程会错位"}
 
-    info = bmp_info(hbmp)
-    if not info or info.get("bpp") != 8:
-        return {"ok": False, "msg": "heightmap.bmp 不是 8 位图，无法按像素刷"}
+    info = bmp_info(_out_read_path(hbmp))
+    if not info or info.get("bpp") != 8 or info.get("compression", 0) != 0:
+        return {"ok": False, "msg": "heightmap.bmp 不是 8 位无压缩位图，无法按像素刷"}
     W, H = info["w"], info["h"]
     off0, rowb = info["offset"], info["row"]
     top_down = bool(info.get("top_down"))
 
-    # 收集要刷的像素 + 目标值（羽化时按距离插值）
+    # 收集要刷的像素 + 目标值（羽化时按距离插值；多点重叠取最大权重）
     hit = {}
     for pt in points:
         try:
@@ -374,17 +444,18 @@ def height_paint(points, height, brush=8, feather=True, root=None, adopt=False):
                 if feather:
                     t = 1.0 - (d2 ** 0.5) / float(brush)   # 中心 1 → 边缘 0
                     t = max(0.0, min(1.0, t))
-                    v = int(round(255 * t + hv * (1 - t))) if False else hv
-                    # 羽化：新值和旧值按 t 混合，t 在中心接近 1
-                    hit[(x, y)] = (hv, t)
+                    prev = hit.get((x, y))
+                    if prev is None or t > prev[1]:
+                        hit[(x, y)] = (hv, t)
                 else:
                     hit[(x, y)] = (hv, 1.0)
     if not hit:
         return {"ok": False, "msg": "笔刷没落在图内"}
 
     snapshot(hbmp)
+    target_hbmp = _out_bmp_path(hbmp)
     n = 0
-    with open(hbmp, "r+b") as f:
+    with open(target_hbmp, "r+b") as f:
         for (x, y), (target, t) in hit.items():
             fy = y if top_down else (H - 1 - y)
             f.seek(off0 + fy * rowb + x)
@@ -404,11 +475,13 @@ def height_paint(points, height, brush=8, feather=True, root=None, adopt=False):
         pass
     _invalidate_height_preview_cache()
     msg = "刷了 %d 个像素，高度 %d%s" % (n, hv, "（羽化）" if feather else "")
-    if herr and herr.get("adopted"):
-        msg = (herr.get("adopt_msg") or "已单文件接管 map/heightmap.bmp") + "；" + msg
+    adopted, adopt_msg = _collect_adopt_info(herr)
+    if adopted:
+        msg = (adopt_msg or "已单文件接管 map/heightmap.bmp") + "；" + msg
     out = {"ok": True, "painted": n, "to": hv, "msg": msg}
-    if herr and herr.get("adopted"):
+    if adopted:
         out["adopted"] = True
+        out["adopt_msg"] = adopt_msg
     return out
 
 
@@ -532,9 +605,9 @@ def terrain_paint(points, terrain, brush=3, root=None, adopt=False):
         return {"ok": False, "msg": "terrain.txt 里没有类型 %s" % terrain}
     new_idx = t2i[terrain]
 
-    info = bmp_info(tbmp)
-    if not info or info.get("bpp") != 8:
-        return {"ok": False, "msg": "terrain.bmp 不是 8 位索引图，无法按像素刷"}
+    info = bmp_info(_out_read_path(tbmp))
+    if not info or info.get("bpp") != 8 or info.get("compression", 0) != 0:
+        return {"ok": False, "msg": "terrain.bmp 不是 8 位无压缩索引图，无法按像素刷"}
     W, H = info["w"], info["h"]
     off0, rowb = info["offset"], info["row"]
     top_down = bool(info.get("top_down"))
@@ -558,7 +631,8 @@ def terrain_paint(points, terrain, brush=3, root=None, adopt=False):
 
     # 原地 seek 写单字节：Image.save 会用 "w+b" 重开文件，在某些路径上直接 EINVAL
     snapshot(tbmp)
-    with open(tbmp, "r+b") as f:
+    target_tbmp = _out_bmp_path(tbmp)
+    with open(target_tbmp, "r+b") as f:
         for (x, y) in hit:
             fy = y if top_down else (H - 1 - y)
             f.seek(off0 + fy * rowb + x)
@@ -569,9 +643,11 @@ def terrain_paint(points, terrain, brush=3, root=None, adopt=False):
     except Exception:
         pass
     msg = "刷了 %d 个像素为 %s" % (n, terrain)
-    if terr and terr.get("adopted"):
-        msg = (terr.get("adopt_msg") or "已单文件接管 map/terrain.bmp") + "；" + msg
+    adopted, adopt_msg = _collect_adopt_info(terr)
+    if adopted:
+        msg = (adopt_msg or "已单文件接管 map/terrain.bmp") + "；" + msg
     out = {"ok": True, "painted": n, "to": terrain, "msg": msg}
-    if terr and terr.get("adopted"):
+    if adopted:
         out["adopted"] = True
+        out["adopt_msg"] = adopt_msg
     return out

@@ -55,7 +55,8 @@ def load_decisions(root=None):
     root = _pick_root(root)
     files, _rep = _layer_files("common/decisions", mod_layers(root))
     cats, decisions = [], []
-    seen_cat = set()
+    cat_map = {}
+    seen_dec = set()
     for p in (files or []):
         try:
             with io.open(p, encoding="utf-8-sig", errors="replace") as f:
@@ -83,13 +84,12 @@ def load_decisions(root=None):
                 continue
             cbody = text[cb + 1:ce - 1]
             cid = cname
-            if cid in seen_cat:
-                continue
-            seen_cat.add(cid)
             dlist = []
             for dm in re.finditer(r'(?m)^[ \t]*([A-Za-z][A-Za-z0-9_\-\.]*)[ \t]*=\s*\{', cbody):
                 dname = dm.group(1)
                 if dname in DECISION_SCALARS or dname in DECISION_SKIP:
+                    continue
+                if (cid, dname) in seen_dec:
                     continue
                 db = cbody.find("{", dm.end() - 1)
                 de = brace_match(cbody, db)
@@ -107,12 +107,18 @@ def load_decisions(root=None):
                         scal[k] = v
                 if not scal:
                     continue
+                seen_dec.add((cid, dname))
                 dline = cbody.rfind("\n", 0, dm.start()) + 1
                 dlist.append({"id": dname, "cat": cid, "fields": scal,
                               "file": rel, "source": src,
                               "start": cb + 1 + dline,
                               "end": cb + 1 + de})
-            cats.append({"id": cid, "count": len(dlist), "file": rel})
+            if cid not in cat_map:
+                cat_obj = {"id": cid, "count": len(dlist), "file": rel}
+                cat_map[cid] = cat_obj
+                cats.append(cat_obj)
+            else:
+                cat_map[cid]["count"] += len(dlist)
             decisions.extend(dlist)
     return {"ok": True, "categories": cats, "decisions": decisions,
             "cat_count": len(cats), "count": len(decisions),
@@ -383,12 +389,26 @@ def decision_set(root, did, fields):
         if v in (None, ""):
             continue
         sv = str(v).strip()
-        pat = re.compile(r'(?m)^([ \t]*)' + k + r'\s*=\s*[^\s#\r\n]+')
+        quoted = k in ("icon", "activation", "news_event")
+        sv_clean = sv.strip('"') if quoted else sv
+        val = ('"%s"' % sv_clean) if quoted else sv_clean
+        pat = re.compile(r'(?m)^([ \t]*)' + re.escape(k) + r'\s*=\s*(?!\{)[^\s#\r\n]+')
         if pat.search(new_seg):
-            quoted = k in ("icon", "activation", "news_event")
-            val = ('"%s"' % sv) if quoted else sv
-            new_seg = pat.sub(lambda m: (m.group(1) or "") + "%s = %s" % (k, val),
+            updated = pat.sub(lambda m: (m.group(1) or "") + "%s = %s" % (k, val),
                               new_seg, count=1)
+            if updated != new_seg:
+                new_seg = updated
+                changed.append(k)
+        elif not re.search(r'(?m)^[ \t]*' + re.escape(k) + r'[ \t]*=\s*\{', new_seg):
+            nl = new_seg.find("\n")
+            if nl >= 0:
+                m_ind = re.search(r'\n([ \t]+)\S', new_seg)
+                indent = m_ind.group(1) if m_ind else "\t\t"
+                new_seg = new_seg[:nl + 1] + "%s%s = %s\n" % (indent, k, val) + new_seg[nl + 1:]
+            elif new_seg.startswith("{"):
+                new_seg = "{ %s = %s%s" % (k, val, new_seg[1:])
+            else:
+                continue
             changed.append(k)
     if new_seg == seg:
         return {"ok": True, "msg": "没有改动（字段不存在或未变）"}

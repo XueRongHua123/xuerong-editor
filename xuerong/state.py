@@ -416,7 +416,7 @@ DECISION_SCALARS = ("icon", "priority", "cost", "fire_only_once", "days_remove",
 # 人物类型 → 块名；头像尺寸任务书写了「小头像 64x64」，实际大图是 156x210（不是正方形），
 # portrait_import 按这四个值算画布，别顺手「修正」成正方形。
 CHAR_TYPES = ("field_marshal", "corps_commander", "country_leader", "operative",
-              "advisor", "scientist")
+              "navy_leader", "advisor", "scientist")
 
 PORTRAIT_W, PORTRAIT_H = 156, 210
 PORTRAIT_SMALL = 64

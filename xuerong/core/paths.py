@@ -1107,12 +1107,14 @@ def _build_chain_index(layers):
                     "_blocked_rels": set(),
                 })
         files = _walk_layer_files(ab)
+        _game_ab = os.path.abspath(state.game()) if state.game() else ""
         layer_meta.append({
             "index": idx,
             "order": idx + 1,
             "name": _mod_display_name(ab),
             "folder": os.path.basename(ab.rstrip("\\/")) or ab,
             "path": ab,
+            "is_game": bool(_game_ab and ab == _game_ab),
             "deps": list(desc.get("deps") or []),
             "replace_paths": rpaths,
             "file_count": len(files),
@@ -1339,6 +1341,7 @@ def analyze_layer_chain(layers=None, query="", kind="interacted", dir_filter="",
 
 def ensure_writable_file(root, sub, basename):
     """确保某子目录下的目标文件落入可写顶层（不存在时从叠加链自动单文件接管）。"""
+    explicit_root = root
     root = _pick(root)
     sub = (sub or "").replace("\\", "/").strip("/")
     basename = os.path.basename(basename or "")
@@ -1346,11 +1349,35 @@ def ensure_writable_file(root, sub, basename):
         return None, "参数不完整"
 
     top = None
-    for r in (state.roots() or []):
-        lay = mod_layers(r) or [r]
-        cand = lay[-1] if lay else r
-        if cand and not is_readonly_mod(cand):
-            top = cand
+    if explicit_root:
+        ab_exp = os.path.abspath(explicit_root)
+        # 若已加载的 ROOTS 中存在覆盖 explicit_root 的上层可写 submod（如传父层目录编辑），
+        # 必须接管到该上层 submod（写时接管，绝不写穿父层）；
+        # 若只是多个互不依赖的平行 mod，则留在 explicit_root 自身叠加链内选顶层可写层。
+        for r in reversed(state.roots() or []):
+            lay = mod_layers(r) or [r]
+            ab_lay = [os.path.abspath(x) for x in lay if x]
+            if ab_exp in ab_lay:
+                for cand in reversed(lay):
+                    if cand and not is_readonly_mod(cand):
+                        top = cand
+                        break
+                if top:
+                    break
+        if not top:
+            for cand in reversed(mod_layers(explicit_root) or [explicit_root]):
+                if cand and not is_readonly_mod(cand):
+                    top = cand
+                    break
+    if not top:
+        for r in reversed(state.roots() or []):
+            lay = mod_layers(r) or [r]
+            for cand in reversed(lay):
+                if cand and not is_readonly_mod(cand):
+                    top = cand
+                    break
+            if top:
+                break
     if not top and root:
         cand = _top_mod(root)
         if cand and not is_readonly_mod(cand):
@@ -1358,9 +1385,10 @@ def ensure_writable_file(root, sub, basename):
     if not top:
         return None, "找不到可写的 mod 目录"
 
-    owner = _replace_owner(root, sub)
+    chain_root = top if (explicit_root and os.path.abspath(top) != os.path.abspath(explicit_root)) else root
+    owner = _replace_owner(chain_root, sub)
     if owner and os.path.abspath(owner) != os.path.abspath(top):
-        chain = [os.path.abspath(x) for x in (mod_layers(root) or []) if x]
+        chain = [os.path.abspath(x) for x in (mod_layers(chain_root) or []) if x]
         ab_top = os.path.abspath(top)
         ab_own = os.path.abspath(owner)
         if ab_own in chain and ab_top in chain and chain.index(ab_own) > chain.index(ab_top):
@@ -1374,11 +1402,17 @@ def ensure_writable_file(root, sub, basename):
         return dst, "已存在"
 
     src = None
-    for _b, d in (_layer_dirs(sub, root) or []):
+    for _b, d in (_layer_dirs(sub, chain_root) or []):
         cand = os.path.join(d, basename)
         if os.path.isfile(cand):
             src = cand
             break
+    if not src and chain_root != root:
+        for _b, d in (_layer_dirs(sub, root) or []):
+            cand = os.path.join(d, basename)
+            if os.path.isfile(cand):
+                src = cand
+                break
     if not src:
         return None, "叠加链里找不到 %s/%s" % (sub, basename)
 
